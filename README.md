@@ -2,7 +2,7 @@
 
 This is the standalone Public Plugin repository for Codex Skin. The installable Plugin root is `plugins/codex-skin/`; the repository root will later contain Git-backed Marketplace and release metadata.
 
-Current status: the minimal Public repository baseline is prepared for its first GitHub publication. It has not yet been installed into a Marketplace or verified on macOS/Windows Codex Desktop.
+Current status: the minimal Public repository baseline is published at [yuanjohn01-byte/codex-skin-plugin](https://github.com/yuanjohn01-byte/codex-skin-plugin). It has not yet been installed into a Marketplace or verified on macOS/Windows Codex Desktop.
 
 The repository uses the MIT license. Its tracked-file allowlist, secret/Private-path checks and negative fixtures must pass before every remote push. Founder approval to create the Public repository has been recorded.
 
