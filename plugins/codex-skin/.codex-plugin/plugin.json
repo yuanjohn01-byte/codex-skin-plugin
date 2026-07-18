@@ -1,0 +1,21 @@
+{
+  "name": "codex-skin",
+  "version": "0.0.1",
+  "description": "Install, switch, customize, and safely restore Codex themes.",
+  "author": {
+    "name": "Codex Skin"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Codex Skin",
+    "shortDescription": "Install and safely restore Codex themes",
+    "longDescription": "Codex Skin helps users install, switch, customize, and safely restore themes in Codex Desktop.",
+    "developerName": "Codex Skin",
+    "category": "Developer Tools",
+    "capabilities": ["Local theme management"],
+    "defaultPrompt": [
+      "Install Codex Skin theme 100001.",
+      "Restore the official Codex appearance."
+    ]
+  }
+}

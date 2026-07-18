@@ -1,0 +1,77 @@
+# Dependencies, build products, and generated evidence
+/node_modules/
+/dist/
+/build/
+/coverage/
+__pycache__/
+*.py[cod]
+/artifacts/
+/.wrangler/
+/.vercel/
+*.tsbuildinfo
+
+# No environment or credential file belongs in the Public repository
+.env
+.env.*
+.dev.vars
+.dev.vars.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.db
+*.sqlite
+*.sqlite3
+
+# Local editor, assistant, and auth state
+/.vscode/
+/.idea/
+/.history/
+/.claude/
+/.codex/
+/.chats/
+/.codex-skin-local/
+
+# Personal notes, discussions, drafts, and Private-only material
+/notes/
+/personal/
+/scratch/
+/drafts/
+/discussion/
+/discussions/
+/transcripts/
+/prompts/
+/outputs/
+/tmp/
+/temp/
+/private/
+/source-art/
+/themes/
+/docs/archive/
+/docs/evidence/
+/docs/handoff/
+/docs/internal/
+/docs/planning/
+*.local.md
+*.notes.md
+*.draft.md
+
+# Release binaries and packages are published as immutable GitHub Release assets
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.dmg
+*.pkg
+*.exe
+*.msi
+*.cskin
+
+# Logs and OS noise
+*.log
+*.tmp
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+.DS_Store

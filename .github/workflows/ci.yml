@@ -1,0 +1,20 @@
+name: Public Plugin Baseline
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - 'codex/**'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  repository-boundary:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test manifest, license, and Public upload boundary
+        run: python3 tools/test_public_repository.py
