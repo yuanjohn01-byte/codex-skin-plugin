@@ -129,6 +129,8 @@ SECRET_PATTERNS = {
     ),
 }
 SELF = Path("tools/validate_public_repo.py")
+PLUGIN_ROOT = Path("plugins/codex-skin")
+MANIFEST_RELATIVE = PLUGIN_ROOT / ".codex-plugin/plugin.json"
 
 
 def parse_args() -> argparse.Namespace:
@@ -168,11 +170,36 @@ def forbidden_path_reason(relative: Path) -> str | None:
     return None
 
 
+def non_empty_string(value: object) -> bool:
+    return isinstance(value, str) and bool(value.strip())
+
+
+def validate_component_path(
+    root: Path, payload: dict[str, object], key: str, errors: list[str]
+) -> None:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value.startswith("./"):
+        errors.append(f"plugin manifest {key} must be a ./-prefixed path")
+        return
+    relative = Path(value)
+    if relative.is_absolute() or ".." in relative.parts:
+        errors.append(f"plugin manifest {key} must stay inside the plugin root")
+        return
+    plugin_root = (root / PLUGIN_ROOT).resolve()
+    target = (plugin_root / relative).resolve()
+    try:
+        target.relative_to(plugin_root)
+    except ValueError:
+        errors.append(f"plugin manifest {key} resolves outside the plugin root")
+        return
+    if not target.is_dir():
+        errors.append(f"plugin manifest {key} target is missing: {value}")
+
+
 def validate_manifest(root: Path, candidates: set[Path], errors: list[str]) -> None:
-    manifest_relative = Path("plugins/codex-skin/.codex-plugin/plugin.json")
-    manifest = root / manifest_relative
-    if manifest_relative not in candidates or not manifest.is_file():
-        errors.append(f"missing {manifest_relative}")
+    manifest = root / MANIFEST_RELATIVE
+    if MANIFEST_RELATIVE not in candidates or not manifest.is_file():
+        errors.append(f"missing {MANIFEST_RELATIVE}")
         return
     try:
         payload = json.loads(manifest.read_text(encoding="utf-8"))
@@ -180,14 +207,56 @@ def validate_manifest(root: Path, candidates: set[Path], errors: list[str]) -> N
         errors.append(f"invalid plugin manifest: {exc}")
         return
 
+    if not isinstance(payload, dict):
+        errors.append("plugin manifest root must be an object")
+        return
     if payload.get("name") != "codex-skin":
         errors.append("plugin manifest name must be codex-skin")
+    elif re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", payload["name"]) is None:
+        errors.append("plugin manifest name must use kebab-case")
     version = payload.get("version")
     if not isinstance(version, str) or re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", version) is None:
         errors.append("plugin manifest version must be semver")
-    for key in ("description", "author", "interface"):
-        if key not in payload:
-            errors.append(f"plugin manifest missing {key}")
+    if not non_empty_string(payload.get("description")):
+        errors.append("plugin manifest description must be a non-empty string")
+
+    author = payload.get("author")
+    if not isinstance(author, dict) or not non_empty_string(author.get("name")):
+        errors.append("plugin manifest author.name must be a non-empty string")
+
+    interface = payload.get("interface")
+    if not isinstance(interface, dict):
+        errors.append("plugin manifest interface must be an object")
+    else:
+        for key in (
+            "displayName",
+            "shortDescription",
+            "longDescription",
+            "developerName",
+            "category",
+        ):
+            if not non_empty_string(interface.get(key)):
+                errors.append(f"plugin manifest interface.{key} must be a non-empty string")
+        for key in ("capabilities", "defaultPrompt"):
+            value = interface.get(key)
+            if value is not None and (
+                not isinstance(value, list)
+                or not value
+                or any(not non_empty_string(item) for item in value)
+            ):
+                errors.append(f"plugin manifest interface.{key} must be a non-empty string array")
+
+    if payload.get("license") != "MIT":
+        errors.append("plugin manifest license must match the approved MIT license")
+    if payload.get("repository") != "https://github.com/yuanjohn01-byte/codex-skin-plugin":
+        errors.append("plugin manifest repository must point to the Public GitHub repository")
+
+    validate_component_path(root, payload, "skills", errors)
+
+    manifest_directory = MANIFEST_RELATIVE.parent
+    for relative in candidates:
+        if relative.parent == manifest_directory and relative != MANIFEST_RELATIVE:
+            errors.append(f"only plugin.json belongs in .codex-plugin: {relative}")
 
 
 def validate_license(root: Path, candidates: set[Path], errors: list[str]) -> None:
@@ -223,6 +292,9 @@ def validate(root: Path) -> list[str]:
             errors.append(f"forbidden {reason}: {relative}")
             continue
         if not path.is_file():
+            continue
+        if path.is_symlink():
+            errors.append(f"symbolic links are not allowed in Public source: {relative}")
             continue
         if path.stat().st_size > MAX_FILE_BYTES:
             errors.append(f"file exceeds 5 MiB Public source limit: {relative}")

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import tempfile
@@ -16,7 +17,16 @@ MINIMAL_MANIFEST = {
     "version": "0.0.0",
     "description": "fixture",
     "author": {"name": "fixture"},
-    "interface": "fixture",
+    "repository": "https://github.com/yuanjohn01-byte/codex-skin-plugin",
+    "license": "MIT",
+    "skills": "./skills/",
+    "interface": {
+        "displayName": "Fixture",
+        "shortDescription": "Fixture plugin",
+        "longDescription": "Fixture plugin for repository validation.",
+        "developerName": "Fixture",
+        "category": "Developer Tools",
+    },
 }
 
 
@@ -33,11 +43,10 @@ def assert_ignored(relative: str, expected: bool) -> None:
 
 
 def write_baseline(fixture: Path) -> None:
-    import json
-
     manifest = fixture / "plugins" / "codex-skin" / ".codex-plugin" / "plugin.json"
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(json.dumps(MINIMAL_MANIFEST), encoding="utf-8")
+    (fixture / "plugins" / "codex-skin" / "skills").mkdir(parents=True)
     (fixture / "LICENSE").write_text(
         "MIT License\nPermission is hereby granted\nTHE SOFTWARE IS PROVIDED \"AS IS\"\n",
         encoding="utf-8",
@@ -61,6 +70,24 @@ def negative_fixture(relative: str, content: bytes, expected_message: str) -> No
         combined = checked.stdout + checked.stderr
         if checked.returncode == 0 or expected_message not in combined:
             raise AssertionError(f"validator did not reject {relative}:\n{combined}")
+
+
+def negative_manifest(payload: dict[str, object], expected_message: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="codex-skin-public-manifest-") as directory:
+        fixture = Path(directory)
+        initialized = run(["git", "init", "--quiet"], fixture)
+        if initialized.returncode != 0:
+            raise AssertionError(initialized.stderr)
+        write_baseline(fixture)
+        manifest = fixture / "plugins" / "codex-skin" / ".codex-plugin" / "plugin.json"
+        manifest.write_text(json.dumps(payload), encoding="utf-8")
+        added = run(["git", "add", "--force", "."], fixture)
+        if added.returncode != 0:
+            raise AssertionError(added.stderr)
+        checked = run([sys.executable, str(VALIDATOR), "--root", str(fixture)], fixture)
+        combined = checked.stdout + checked.stderr
+        if checked.returncode == 0 or expected_message not in combined:
+            raise AssertionError(f"validator accepted an invalid manifest:\n{combined}")
 
 
 def main() -> int:
@@ -99,8 +126,25 @@ def main() -> int:
     negative_fixture("src/config.txt", secret, "generic-secret-assignment")
     negative_fixture("artifacts/helper.zip", b"binary", "outside the Public allowlist")
     negative_fixture("src/oversized.bin", b"0" * (5 * 1024 * 1024 + 1), "exceeds 5 MiB")
+    negative_fixture(
+        "plugins/codex-skin/.codex-plugin/notes.md",
+        b"not a manifest\n",
+        "only plugin.json belongs",
+    )
 
-    print("Public repository boundary tests passed (positive scan + 7 negative fixtures).")
+    invalid_name = dict(MINIMAL_MANIFEST)
+    invalid_name["name"] = "Codex Skin"
+    negative_manifest(invalid_name, "name must be codex-skin")
+
+    invalid_skills = dict(MINIMAL_MANIFEST)
+    invalid_skills["skills"] = "../private-skills"
+    negative_manifest(invalid_skills, "skills must be a ./-prefixed path")
+
+    invalid_interface = dict(MINIMAL_MANIFEST)
+    invalid_interface["interface"] = "fixture"
+    negative_manifest(invalid_interface, "interface must be an object")
+
+    print("Public repository tests passed (positive scan + 11 negative fixtures).")
     return 0
 
 

@@ -5,6 +5,8 @@
   "author": {
     "name": "Codex Skin"
   },
+  "repository": "https://github.com/yuanjohn01-byte/codex-skin-plugin",
+  "license": "MIT",
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex Skin",
