@@ -43,7 +43,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.5"
-          cache: true
+          cache: false
       - name: Build all targets twice and compare
         run: python3 tools/test_guardian_builds.py
       - name: Test lifecycle manager with race detector
@@ -63,7 +63,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.5"
-          cache: true
+          cache: false
       - name: Select native macOS architecture
         id: native
         run: |
@@ -99,7 +99,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: "1.26.5"
-          cache: true
+          cache: false
       - name: Build two native Guardian versions
         shell: pwsh
         run: |
