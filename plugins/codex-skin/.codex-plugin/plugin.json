@@ -1,23 +1,26 @@
 {
   "name": "codex-skin",
-  "version": "0.0.1",
-  "description": "Install, switch, customize, and safely restore Codex themes.",
+  "version": "0.0.2",
+  "description": "Verify the Codex Skin pre-release Plugin installation and version.",
   "author": {
-    "name": "Codex Skin"
+    "name": "Codex Skin",
+    "url": "https://github.com/yuanjohn01-byte/codex-skin-plugin"
   },
+  "homepage": "https://github.com/yuanjohn01-byte/codex-skin-plugin#readme",
   "repository": "https://github.com/yuanjohn01-byte/codex-skin-plugin",
   "license": "MIT",
+  "keywords": ["codex", "theme", "skin"],
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex Skin",
-    "shortDescription": "Install and safely restore Codex themes",
-    "longDescription": "Codex Skin helps users install, switch, customize, and safely restore themes in Codex Desktop.",
+    "shortDescription": "Verify the pre-release Plugin installation",
+    "longDescription": "Codex Skin v0.0.2 provides a read-only installation and upgrade check before theme features ship.",
     "developerName": "Codex Skin",
     "category": "Developer Tools",
-    "capabilities": ["Local theme management"],
+    "capabilities": ["Read-only installation check"],
+    "websiteURL": "https://github.com/yuanjohn01-byte/codex-skin-plugin",
     "defaultPrompt": [
-      "Install Codex Skin theme 100001.",
-      "Restore the official Codex appearance."
+      "Check the installed Codex Skin test version."
     ]
   }
 }
