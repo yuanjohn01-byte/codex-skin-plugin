@@ -16,9 +16,8 @@ function Resolve-SignTool {
   }
 
   $kitsRoot = Join-Path ${env:ProgramFiles(x86)} "Windows Kits\10\bin"
-  $candidates = Get-ChildItem -Path $kitsRoot -Filter "signtool.exe" -Recurse -ErrorAction SilentlyContinue |
-    Where-Object { $_.FullName -match "\\x64\\signtool\.exe$" } |
-    Sort-Object FullName -Descending
+  $signToolPattern = Join-Path $kitsRoot "*\x64\signtool.exe"
+  $candidates = Get-ChildItem -Path $signToolPattern -File -ErrorAction SilentlyContinue | Sort-Object FullName -Descending
   if (-not $candidates) {
     throw "SignTool was not found in PATH or the Windows 10 SDK"
   }
