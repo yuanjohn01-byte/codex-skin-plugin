@@ -14,6 +14,7 @@ from urllib.parse import urlparse
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
 ALLOWED_TOP_LEVEL = {
+    ".agents",
     ".editorconfig",
     ".gitattributes",
     ".github",
@@ -132,6 +133,7 @@ SECRET_PATTERNS = {
 SELF = Path("tools/validate_public_repo.py")
 PLUGIN_ROOT = Path("plugins/codex-skin")
 MANIFEST_RELATIVE = PLUGIN_ROOT / ".codex-plugin/plugin.json"
+MARKETPLACE_RELATIVE = Path(".agents/plugins/marketplace.json")
 STRICT_SEMVER = re.compile(
     r"^(0|[1-9]\d*)\."
     r"(0|[1-9]\d*)\."
@@ -335,6 +337,66 @@ def validate_manifest(root: Path, candidates: set[Path], errors: list[str]) -> N
             errors.append(f"only plugin.json belongs in .codex-plugin: {relative}")
 
 
+def validate_marketplace(root: Path, candidates: set[Path], errors: list[str]) -> None:
+    marketplace = root / MARKETPLACE_RELATIVE
+    if MARKETPLACE_RELATIVE not in candidates or not marketplace.is_file():
+        errors.append(f"missing {MARKETPLACE_RELATIVE}")
+        return
+    try:
+        payload = json.loads(marketplace.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"invalid marketplace metadata: {exc}")
+        return
+    if not isinstance(payload, dict):
+        errors.append("marketplace root must be an object")
+        return
+    if set(payload) != {"name", "interface", "plugins"}:
+        errors.append("marketplace root fields must be name, interface, and plugins")
+    if payload.get("name") != "codex-skin":
+        errors.append("marketplace name must be codex-skin")
+    interface = payload.get("interface")
+    if not isinstance(interface, dict) or interface.get("displayName") != "Codex Skin":
+        errors.append("marketplace interface.displayName must be Codex Skin")
+    elif set(interface) != {"displayName"}:
+        errors.append("marketplace interface only supports displayName")
+
+    plugins = payload.get("plugins")
+    if not isinstance(plugins, list) or len(plugins) != 1 or not isinstance(plugins[0], dict):
+        errors.append("marketplace must expose exactly one plugin entry")
+        return
+    entry = plugins[0]
+    if set(entry) != {"name", "source", "policy", "category"}:
+        errors.append("marketplace plugin fields must be name, source, policy, and category")
+    if entry.get("name") != "codex-skin":
+        errors.append("marketplace plugin name must be codex-skin")
+    if entry.get("category") != "Developer Tools":
+        errors.append("marketplace plugin category must be Developer Tools")
+
+    source = entry.get("source")
+    if not isinstance(source, dict) or set(source) != {"source", "path"}:
+        errors.append("marketplace source must contain only source and path")
+    elif source.get("source") != "local" or source.get("path") != "./plugins/codex-skin":
+        errors.append("marketplace source must be local ./plugins/codex-skin")
+    else:
+        target = (root / source["path"]).resolve()
+        try:
+            target.relative_to(root.resolve())
+        except ValueError:
+            errors.append("marketplace source resolves outside the repository")
+        if not target.is_dir():
+            errors.append("marketplace source target is missing")
+
+    policy = entry.get("policy")
+    expected_policy = {"installation": "AVAILABLE", "authentication": "ON_INSTALL"}
+    if policy != expected_policy:
+        errors.append("marketplace policy must be AVAILABLE with ON_INSTALL authentication")
+
+    marketplace_directory = MARKETPLACE_RELATIVE.parent
+    for relative in candidates:
+        if relative.parent == marketplace_directory and relative != MARKETPLACE_RELATIVE:
+            errors.append(f"only marketplace.json belongs in .agents/plugins: {relative}")
+
+
 def validate_license(root: Path, candidates: set[Path], errors: list[str]) -> None:
     license_relative = Path("LICENSE")
     license_path = root / license_relative
@@ -358,6 +420,7 @@ def validate(root: Path) -> list[str]:
         return [enumeration_error]
     candidates = set(candidate_list)
     validate_manifest(root, candidates, errors)
+    validate_marketplace(root, candidates, errors)
     validate_license(root, candidates, errors)
     proprietary_marker = "ship" + "any"
 

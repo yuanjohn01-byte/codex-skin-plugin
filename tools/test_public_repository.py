@@ -33,6 +33,18 @@ MINIMAL_MANIFEST = {
         "defaultPrompt": ["Run the fixture."],
     },
 }
+MINIMAL_MARKETPLACE = {
+    "name": "codex-skin",
+    "interface": {"displayName": "Codex Skin"},
+    "plugins": [
+        {
+            "name": "codex-skin",
+            "source": {"source": "local", "path": "./plugins/codex-skin"},
+            "policy": {"installation": "AVAILABLE", "authentication": "ON_INSTALL"},
+            "category": "Developer Tools",
+        }
+    ],
+}
 
 
 def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -52,6 +64,9 @@ def write_baseline(fixture: Path) -> None:
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(json.dumps(MINIMAL_MANIFEST), encoding="utf-8")
     (fixture / "plugins" / "codex-skin" / "skills").mkdir(parents=True)
+    marketplace = fixture / ".agents" / "plugins" / "marketplace.json"
+    marketplace.parent.mkdir(parents=True)
+    marketplace.write_text(json.dumps(MINIMAL_MARKETPLACE), encoding="utf-8")
     (fixture / "LICENSE").write_text(
         "MIT License\nPermission is hereby granted\nTHE SOFTWARE IS PROVIDED \"AS IS\"\n",
         encoding="utf-8",
@@ -93,6 +108,24 @@ def negative_manifest(payload: dict[str, object], expected_message: str) -> None
         combined = checked.stdout + checked.stderr
         if checked.returncode == 0 or expected_message not in combined:
             raise AssertionError(f"validator accepted an invalid manifest:\n{combined}")
+
+
+def negative_marketplace(payload: dict[str, object], expected_message: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="codex-skin-public-marketplace-") as directory:
+        fixture = Path(directory)
+        initialized = run(["git", "init", "--quiet"], fixture)
+        if initialized.returncode != 0:
+            raise AssertionError(initialized.stderr)
+        write_baseline(fixture)
+        marketplace = fixture / ".agents" / "plugins" / "marketplace.json"
+        marketplace.write_text(json.dumps(payload), encoding="utf-8")
+        added = run(["git", "add", "--force", "."], fixture)
+        if added.returncode != 0:
+            raise AssertionError(added.stderr)
+        checked = run([sys.executable, str(VALIDATOR), "--root", str(fixture)], fixture)
+        combined = checked.stdout + checked.stderr
+        if checked.returncode == 0 or expected_message not in combined:
+            raise AssertionError(f"validator accepted invalid marketplace metadata:\n{combined}")
 
 
 def main() -> int:
@@ -161,7 +194,19 @@ def main() -> int:
     unsupported_component["mcpServers"] = "./.mcp.json"
     negative_manifest(unsupported_component, "field is not approved for the MVP")
 
-    print("Public repository tests passed (positive scan + 14 negative fixtures).")
+    invalid_source = json.loads(json.dumps(MINIMAL_MARKETPLACE))
+    invalid_source["plugins"][0]["source"]["path"] = "../private/codex-skin"
+    negative_marketplace(invalid_source, "source must be local ./plugins/codex-skin")
+
+    invalid_policy = json.loads(json.dumps(MINIMAL_MARKETPLACE))
+    invalid_policy["plugins"][0]["policy"]["authentication"] = "ON_USE"
+    negative_marketplace(invalid_policy, "policy must be AVAILABLE with ON_INSTALL")
+
+    invalid_plugins = json.loads(json.dumps(MINIMAL_MARKETPLACE))
+    invalid_plugins["plugins"] = []
+    negative_marketplace(invalid_plugins, "must expose exactly one plugin entry")
+
+    print("Public repository tests passed (positive scan + 17 negative fixtures).")
     return 0
 
 
