@@ -45,6 +45,16 @@ MINIMAL_MARKETPLACE = {
         }
     ],
 }
+VERSION_SKILL = """---
+name: codex-skin-version
+description: Report the installed Codex Skin v0.0.1 pre-release Plugin version and verify that its read-only test Skill loaded. Use for Codex Skin installation checks only; this build cannot apply themes.
+---
+
+Do not call tools, execute commands, access the network, or modify files or settings.
+Plugin version: `0.0.1`.
+Skill: `codex-skin-version`.
+Theme operations are not available in this test build.
+"""
 
 
 def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -63,7 +73,9 @@ def write_baseline(fixture: Path) -> None:
     manifest = fixture / "plugins" / "codex-skin" / ".codex-plugin" / "plugin.json"
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(json.dumps(MINIMAL_MANIFEST), encoding="utf-8")
-    (fixture / "plugins" / "codex-skin" / "skills").mkdir(parents=True)
+    skill = fixture / "plugins" / "codex-skin" / "skills" / "codex-skin-version" / "SKILL.md"
+    skill.parent.mkdir(parents=True)
+    skill.write_text(VERSION_SKILL, encoding="utf-8")
     marketplace = fixture / ".agents" / "plugins" / "marketplace.json"
     marketplace.parent.mkdir(parents=True)
     marketplace.write_text(json.dumps(MINIMAL_MARKETPLACE), encoding="utf-8")
@@ -126,6 +138,24 @@ def negative_marketplace(payload: dict[str, object], expected_message: str) -> N
         combined = checked.stdout + checked.stderr
         if checked.returncode == 0 or expected_message not in combined:
             raise AssertionError(f"validator accepted invalid marketplace metadata:\n{combined}")
+
+
+def negative_skill(content: str, expected_message: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="codex-skin-public-skill-") as directory:
+        fixture = Path(directory)
+        initialized = run(["git", "init", "--quiet"], fixture)
+        if initialized.returncode != 0:
+            raise AssertionError(initialized.stderr)
+        write_baseline(fixture)
+        skill = fixture / "plugins" / "codex-skin" / "skills" / "codex-skin-version" / "SKILL.md"
+        skill.write_text(content, encoding="utf-8")
+        added = run(["git", "add", "--force", "."], fixture)
+        if added.returncode != 0:
+            raise AssertionError(added.stderr)
+        checked = run([sys.executable, str(VALIDATOR), "--root", str(fixture)], fixture)
+        combined = checked.stdout + checked.stderr
+        if checked.returncode == 0 or expected_message not in combined:
+            raise AssertionError(f"validator accepted invalid version Skill:\n{combined}")
 
 
 def main() -> int:
@@ -206,7 +236,15 @@ def main() -> int:
     invalid_plugins["plugins"] = []
     negative_marketplace(invalid_plugins, "must expose exactly one plugin entry")
 
-    print("Public repository tests passed (positive scan + 17 negative fixtures).")
+    negative_skill(VERSION_SKILL.replace("name: codex-skin-version", "name: wrong-skill"), "frontmatter")
+    negative_skill(VERSION_SKILL.replace("Plugin version: `0.0.1`.", "Plugin version: `9.9.9`."), "missing required marker")
+    negative_fixture(
+        "plugins/codex-skin/skills/extra/SKILL.md",
+        b"---\nname: extra\ndescription: extra\n---\n",
+        "may contain only the version check Skill",
+    )
+
+    print("Public repository tests passed (positive scan + 20 negative fixtures).")
     return 0
 
 

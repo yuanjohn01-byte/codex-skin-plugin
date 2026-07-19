@@ -19,6 +19,7 @@ codex-skin-plugin/
     codex-skin/
       .codex-plugin/plugin.json
       skills/
+        codex-skin-version/SKILL.md
       scripts/
       assets/
   tools/
@@ -26,7 +27,7 @@ codex-skin-plugin/
     test_public_repository.py
 ```
 
-Production Skills, Helper, contracts, keys and platform adapters are intentionally deferred to the numbered M1/M4 tasks in the Private project plan.
+The bundled v0.0.1 Skill is a read-only installation check. Production theme Skills, Helper, contracts, keys and platform adapters are intentionally deferred to the numbered M1/M4 tasks in the Private project plan.
 
 ## License
 

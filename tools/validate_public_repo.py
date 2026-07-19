@@ -134,6 +134,7 @@ SELF = Path("tools/validate_public_repo.py")
 PLUGIN_ROOT = Path("plugins/codex-skin")
 MANIFEST_RELATIVE = PLUGIN_ROOT / ".codex-plugin/plugin.json"
 MARKETPLACE_RELATIVE = Path(".agents/plugins/marketplace.json")
+VERSION_SKILL_RELATIVE = PLUGIN_ROOT / "skills/codex-skin-version/SKILL.md"
 STRICT_SEMVER = re.compile(
     r"^(0|[1-9]\d*)\."
     r"(0|[1-9]\d*)\."
@@ -397,6 +398,45 @@ def validate_marketplace(root: Path, candidates: set[Path], errors: list[str]) -
             errors.append(f"only marketplace.json belongs in .agents/plugins: {relative}")
 
 
+def validate_version_skill(root: Path, candidates: set[Path], errors: list[str]) -> None:
+    skill = root / VERSION_SKILL_RELATIVE
+    if VERSION_SKILL_RELATIVE not in candidates or not skill.is_file():
+        errors.append(f"missing {VERSION_SKILL_RELATIVE}")
+        return
+    try:
+        content = skill.read_text(encoding="utf-8")
+    except OSError as exc:
+        errors.append(f"cannot read version Skill: {exc}")
+        return
+    expected_frontmatter = (
+        "---\n"
+        "name: codex-skin-version\n"
+        "description: Report the installed Codex Skin v0.0.1 pre-release Plugin version "
+        "and verify that its read-only test Skill loaded. Use for Codex Skin installation "
+        "checks only; this build cannot apply themes.\n"
+        "---\n"
+    )
+    if not content.startswith(expected_frontmatter):
+        errors.append("version Skill frontmatter must match the approved v0.0.1 contract")
+    for marker in (
+        "Plugin version: `0.0.1`.",
+        "Skill: `codex-skin-version`.",
+        "Theme operations are not available in this test build.",
+        "Do not call tools, execute commands, access the network, or modify files or settings.",
+    ):
+        if marker not in content:
+            errors.append(f"version Skill is missing required marker: {marker}")
+
+    skills_root = PLUGIN_ROOT / "skills"
+    for relative in candidates:
+        if (
+            (root / relative).is_file()
+            and relative.parts[: len(skills_root.parts)] == skills_root.parts
+            and relative != VERSION_SKILL_RELATIVE
+        ):
+            errors.append(f"v0.0.1 may contain only the version check Skill: {relative}")
+
+
 def validate_license(root: Path, candidates: set[Path], errors: list[str]) -> None:
     license_relative = Path("LICENSE")
     license_path = root / license_relative
@@ -421,6 +461,7 @@ def validate(root: Path) -> list[str]:
     candidates = set(candidate_list)
     validate_manifest(root, candidates, errors)
     validate_marketplace(root, candidates, errors)
+    validate_version_skill(root, candidates, errors)
     validate_license(root, candidates, errors)
     proprietary_marker = "ship" + "any"
 
