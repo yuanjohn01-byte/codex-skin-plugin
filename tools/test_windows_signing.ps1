@@ -31,8 +31,25 @@ function Invoke-SignTool {
     [bool]$ExpectSuccess = $true
   )
 
-  & $SignTool @Arguments *> $null
-  $succeeded = $LASTEXITCODE -eq 0
+  $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
+  $startInfo.FileName = $SignTool
+  $startInfo.UseShellExecute = $false
+  $startInfo.CreateNoWindow = $true
+  $startInfo.RedirectStandardOutput = $true
+  $startInfo.RedirectStandardError = $true
+  foreach ($argument in $Arguments) {
+    $null = $startInfo.ArgumentList.Add($argument)
+  }
+  $process = [System.Diagnostics.Process]::new()
+  $process.StartInfo = $startInfo
+  if (-not $process.Start()) {
+    throw "SignTool process did not start"
+  }
+  if (-not $process.WaitForExit(30000)) {
+    $process.Kill($true)
+    throw "SignTool command timed out"
+  }
+  $succeeded = $process.ExitCode -eq 0
   if ($ExpectSuccess -and -not $succeeded) {
     throw "SignTool command failed"
   }
@@ -51,6 +68,7 @@ $thumbprint = $null
 $summary = $null
 
 try {
+  Write-Host "phase=copy-and-unsigned-run"
   Copy-Item -LiteralPath $resolvedHelper -Destination $target
 
   $beforeVersion = (& $target version --json) | ConvertFrom-Json
@@ -62,6 +80,7 @@ try {
     throw "unsigned Helper doctor contract failed"
   }
 
+  Write-Host "phase=create-ephemeral-certificate"
   $certificate = New-SelfSignedCertificate `
     -Type CodeSigningCert `
     -Subject "CN=Codex Skin Internal Signing Spike" `
@@ -72,12 +91,15 @@ try {
     -KeyExportPolicy "NonExportable" `
     -NotAfter (Get-Date).AddDays(1)
   $thumbprint = $certificate.Thumbprint
+  Write-Host "phase=trust-public-certificate-current-user"
   $null = Export-Certificate -Cert $certificate -FilePath $publicCertificate
   $null = Import-Certificate -FilePath $publicCertificate -CertStoreLocation "Cert:\CurrentUser\Root"
 
+  Write-Host "phase=authenticode-sign"
   if (-not (Invoke-SignTool -SignTool $signTool -Arguments @("sign", "/fd", "SHA256", "/sha1", $thumbprint, "/s", "My", $target))) {
     throw "self-signed Authenticode signing failed"
   }
+  Write-Host "phase=authenticode-verify"
   if (-not (Invoke-SignTool -SignTool $signTool -Arguments @("verify", "/pa", "/all", $target))) {
     throw "locally trusted Authenticode verification failed"
   }
@@ -86,6 +108,7 @@ try {
     throw "Get-AuthenticodeSignature did not report Valid"
   }
 
+  Write-Host "phase=signed-helper-run"
   $originalPath = $env:PATH
   try {
     $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
@@ -105,6 +128,7 @@ try {
     throw "signed Helper doctor contract failed"
   }
 
+  Write-Host "phase=tamper-rejection"
   Copy-Item -LiteralPath $target -Destination $tampered
   [byte[]]$tamperedBytes = [System.IO.File]::ReadAllBytes($tampered)
   if ($tamperedBytes.Length -le 1024) {
@@ -152,6 +176,7 @@ try {
   }
 }
 finally {
+  Write-Host "phase=certificate-cleanup"
   if ($thumbprint) {
     Remove-Item -LiteralPath "Cert:\CurrentUser\Root\$thumbprint" -Force -ErrorAction SilentlyContinue
     Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
