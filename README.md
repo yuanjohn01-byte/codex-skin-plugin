@@ -4,6 +4,8 @@ This is the standalone Public Plugin repository for Codex Skin. The installable 
 
 Current status: the pre-release Marketplace exposes Codex Skin v0.0.1 from this repository. Local and Git snapshot ingestion are tested in isolated Codex CLI profiles; clean-profile macOS/Windows Desktop verification is still pending and no public compatibility claim is attached.
 
+The Windows distribution spike runs on a clean GitHub-hosted Windows runner and validates the pinned CLI, Git Marketplace, installation idempotency, and cached Skill hash. It deliberately reports Windows Store Codex Desktop UI, restart, authenticated new-task, and video coverage as not tested.
+
 The repository uses the MIT license. Its tracked-file allowlist, secret/Private-path checks and negative fixtures must pass before every remote push. Founder approval to create the Public repository has been recorded.
 
 ## Current structure

@@ -1,0 +1,131 @@
+name: Windows Plugin Distribution Spike
+
+on:
+  pull_request:
+    paths:
+      - '.agents/plugins/marketplace.json'
+      - 'plugins/codex-skin/**'
+      - 'tools/**'
+      - '.github/workflows/windows-plugin-spike.yml'
+  push:
+    branches:
+      - 'codex/**'
+    paths:
+      - '.agents/plugins/marketplace.json'
+      - 'plugins/codex-skin/**'
+      - 'tools/**'
+      - '.github/workflows/windows-plugin-spike.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  windows-marketplace-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    env:
+      CODEX_CLI_VERSION: 0.145.0-alpha.18
+      PLUGIN_REF: ${{ github.head_ref || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install the pinned Codex CLI
+        shell: pwsh
+        run: npm install --global "@openai/codex@$env:CODEX_CLI_VERSION"
+
+      - name: Validate the Public repository
+        shell: pwsh
+        run: |
+          python -m compileall -q tools
+          python tools/test_public_repository.py
+
+      - name: Test Git marketplace and Plugin installation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $env:CODEX_HOME = Join-Path $env:RUNNER_TEMP 'codex-skin-clean-profile'
+          $evidence = Join-Path $env:RUNNER_TEMP 'codex-skin-windows-evidence'
+          New-Item -ItemType Directory -Force -Path $env:CODEX_HOME, $evidence | Out-Null
+
+          $cliVersion = (codex --version).Trim()
+          if ($cliVersion -ne "codex-cli $env:CODEX_CLI_VERSION") {
+            throw "unexpected Codex CLI version: $cliVersion"
+          }
+
+          $marketplaceAdd = codex plugin marketplace add yuanjohn01-byte/codex-skin-plugin --ref $env:PLUGIN_REF --json | ConvertFrom-Json
+          if ($marketplaceAdd.marketplaceName -ne 'codex-skin' -or $marketplaceAdd.alreadyAdded) {
+            throw 'first marketplace add did not create codex-skin'
+          }
+
+          $available = codex plugin list --available --json | ConvertFrom-Json
+          if ($available.available.Count -ne 1) {
+            throw 'clean profile did not expose exactly one available Plugin'
+          }
+          $entry = $available.available[0]
+          if ($entry.pluginId -ne 'codex-skin@codex-skin' -or $entry.version -ne '0.0.1') {
+            throw 'available Plugin identity or version is incorrect'
+          }
+
+          $install = codex plugin add codex-skin@codex-skin --json | ConvertFrom-Json
+          if ($install.version -ne '0.0.1') {
+            throw 'installed Plugin version is incorrect'
+          }
+
+          $repeatMarketplace = codex plugin marketplace add yuanjohn01-byte/codex-skin-plugin --ref $env:PLUGIN_REF --json | ConvertFrom-Json
+          if (-not $repeatMarketplace.alreadyAdded) {
+            throw 'repeated marketplace add was not idempotent'
+          }
+          $repeatInstall = codex plugin add codex-skin@codex-skin --json | ConvertFrom-Json
+
+          $installed = codex plugin list --json | ConvertFrom-Json
+          if ($installed.installed.Count -ne 1 -or -not $installed.installed[0].enabled) {
+            throw 'installed Plugin was duplicated or disabled'
+          }
+
+          $sourceSkill = Join-Path $env:GITHUB_WORKSPACE 'plugins/codex-skin/skills/codex-skin-version/SKILL.md'
+          $cachedSkill = Join-Path $install.installedPath 'skills/codex-skin-version/SKILL.md'
+          $sourceHash = (Get-FileHash -Algorithm SHA256 $sourceSkill).Hash.ToLowerInvariant()
+          $cachedHash = (Get-FileHash -Algorithm SHA256 $cachedSkill).Hash.ToLowerInvariant()
+          if ($sourceHash -ne $cachedHash) {
+            throw 'installed Skill hash does not match source'
+          }
+
+          $environment = [ordered]@{
+            runId = "QA-$env:GITHUB_RUN_ID-$env:GITHUB_RUN_ATTEMPT"
+            repositoryCommits = @{ private = $null; plugin = $env:GITHUB_SHA }
+            os = @{ name = 'Windows'; version = [System.Environment]::OSVersion.VersionString; arch = $env:PROCESSOR_ARCHITECTURE }
+            runner = @{ image = $env:ImageOS; name = $env:RUNNER_NAME }
+            codexCliVersion = $env:CODEX_CLI_VERSION
+            pluginVersion = $install.version
+            pluginRef = $env:PLUGIN_REF
+            marketplace = $marketplaceAdd.marketplaceName
+            skillSha256 = $sourceHash
+            desktopTested = $false
+            sensitiveDataRecorded = $false
+          }
+          $environment | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $evidence 'environment.json')
+
+          @(
+            '# Windows Plugin distribution spike'
+            ''
+            '- PASS: pinned Codex CLI installed on a clean windows-latest runner.'
+            '- PASS: Git marketplace feature ref added and exposed exactly one v0.0.1 Plugin.'
+            '- PASS: Plugin installed and enabled; repeated add/install remained single and idempotent.'
+            "- PASS: installed Skill SHA-256 matched source: $sourceHash."
+            '- NOT TESTED: Windows Store Codex Desktop UI, app restart, authenticated new task, and video recording.'
+          ) | Set-Content -Encoding utf8 (Join-Path $evidence 'summary.md')
+
+          $repeatInstall | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 (Join-Path $evidence 'repeat-install.json')
+
+      - name: Upload redacted Windows evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-plugin-spike-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/codex-skin-windows-evidence
+          if-no-files-found: error
+          retention-days: 14
