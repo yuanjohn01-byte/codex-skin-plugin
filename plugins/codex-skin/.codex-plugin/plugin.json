@@ -1,6 +1,6 @@
 {
   "name": "codex-skin",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Verify the Codex Skin pre-release Plugin installation and version.",
   "author": {
     "name": "Codex Skin",
@@ -14,7 +14,7 @@
   "interface": {
     "displayName": "Codex Skin",
     "shortDescription": "Verify the pre-release Plugin installation",
-    "longDescription": "Codex Skin v0.0.1 provides a read-only installation and version check before theme features ship.",
+    "longDescription": "Codex Skin v0.0.2 provides a read-only installation and upgrade check before theme features ship.",
     "developerName": "Codex Skin",
     "category": "Developer Tools",
     "capabilities": ["Read-only installation check"],

@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = ROOT / "tools" / "validate_public_repo.py"
 MINIMAL_MANIFEST = {
     "name": "codex-skin",
-    "version": "0.0.0",
+    "version": "0.0.2",
     "description": "fixture",
     "author": {"name": "fixture", "url": "https://example.invalid/author"},
     "homepage": "https://example.invalid/plugin",
@@ -47,12 +47,13 @@ MINIMAL_MARKETPLACE = {
 }
 VERSION_SKILL = """---
 name: codex-skin-version
-description: Report the installed Codex Skin v0.0.1 pre-release Plugin version and verify that its read-only test Skill loaded. Use for Codex Skin installation checks only; this build cannot apply themes.
+description: Report the installed Codex Skin v0.0.2 pre-release Plugin version and verify that its read-only test Skill loaded after installation or upgrade. Use for Codex Skin distribution checks only; this build cannot apply themes.
 ---
 
-Do not call tools, execute commands, access the network, or modify files or settings.
-Plugin version: `0.0.1`.
+After the host loads this `SKILL.md`, do not call any additional tools, execute commands, access the network, or modify files or settings.
+Plugin version: `0.0.2`.
 Skill: `codex-skin-version`.
+Upgrade target: replaces the v0.0.1 distribution-spike bundle.
 Theme operations are not available in this test build.
 """
 
@@ -216,6 +217,10 @@ def main() -> int:
     invalid_version["version"] = "00.1.0"
     negative_manifest(invalid_version, "version must be strict semver")
 
+    stale_version = dict(MINIMAL_MANIFEST)
+    stale_version["version"] = "0.0.1"
+    negative_manifest(stale_version, "version must be 0.0.2")
+
     invalid_homepage = dict(MINIMAL_MANIFEST)
     invalid_homepage["homepage"] = "http://example.invalid/plugin"
     negative_manifest(invalid_homepage, "homepage must be an absolute HTTPS URL")
@@ -237,14 +242,14 @@ def main() -> int:
     negative_marketplace(invalid_plugins, "must expose exactly one plugin entry")
 
     negative_skill(VERSION_SKILL.replace("name: codex-skin-version", "name: wrong-skill"), "frontmatter")
-    negative_skill(VERSION_SKILL.replace("Plugin version: `0.0.1`.", "Plugin version: `9.9.9`."), "missing required marker")
+    negative_skill(VERSION_SKILL.replace("Plugin version: `0.0.2`.", "Plugin version: `9.9.9`."), "missing required marker")
     negative_fixture(
         "plugins/codex-skin/skills/extra/SKILL.md",
         b"---\nname: extra\ndescription: extra\n---\n",
         "may contain only the version check Skill",
     )
 
-    print("Public repository tests passed (positive scan + 20 negative fixtures).")
+    print("Public repository tests passed (positive scan + 21 negative fixtures).")
     return 0
 
 

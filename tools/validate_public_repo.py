@@ -135,6 +135,7 @@ PLUGIN_ROOT = Path("plugins/codex-skin")
 MANIFEST_RELATIVE = PLUGIN_ROOT / ".codex-plugin/plugin.json"
 MARKETPLACE_RELATIVE = Path(".agents/plugins/marketplace.json")
 VERSION_SKILL_RELATIVE = PLUGIN_ROOT / "skills/codex-skin-version/SKILL.md"
+EXPECTED_PLUGIN_VERSION = "0.0.2"
 STRICT_SEMVER = re.compile(
     r"^(0|[1-9]\d*)\."
     r"(0|[1-9]\d*)\."
@@ -265,6 +266,8 @@ def validate_manifest(root: Path, candidates: set[Path], errors: list[str]) -> N
     version = payload.get("version")
     if not isinstance(version, str) or STRICT_SEMVER.fullmatch(version) is None:
         errors.append("plugin manifest version must be strict semver")
+    elif version != EXPECTED_PLUGIN_VERSION:
+        errors.append(f"plugin manifest version must be {EXPECTED_PLUGIN_VERSION}")
     if not non_empty_string(payload.get("description")):
         errors.append("plugin manifest description must be a non-empty string")
 
@@ -411,18 +414,20 @@ def validate_version_skill(root: Path, candidates: set[Path], errors: list[str])
     expected_frontmatter = (
         "---\n"
         "name: codex-skin-version\n"
-        "description: Report the installed Codex Skin v0.0.1 pre-release Plugin version "
-        "and verify that its read-only test Skill loaded. Use for Codex Skin installation "
-        "checks only; this build cannot apply themes.\n"
+        "description: Report the installed Codex Skin v0.0.2 pre-release Plugin version "
+        "and verify that its read-only test Skill loaded after installation or upgrade. Use "
+        "for Codex Skin distribution checks only; this build cannot apply themes.\n"
         "---\n"
     )
     if not content.startswith(expected_frontmatter):
-        errors.append("version Skill frontmatter must match the approved v0.0.1 contract")
+        errors.append("version Skill frontmatter must match the approved v0.0.2 contract")
     for marker in (
-        "Plugin version: `0.0.1`.",
+        "Plugin version: `0.0.2`.",
         "Skill: `codex-skin-version`.",
+        "Upgrade target: replaces the v0.0.1 distribution-spike bundle.",
         "Theme operations are not available in this test build.",
-        "Do not call tools, execute commands, access the network, or modify files or settings.",
+        "After the host loads this `SKILL.md`, do not call any additional tools, execute "
+        "commands, access the network, or modify files or settings.",
     ):
         if marker not in content:
             errors.append(f"version Skill is missing required marker: {marker}")
@@ -434,7 +439,7 @@ def validate_version_skill(root: Path, candidates: set[Path], errors: list[str])
             and relative.parts[: len(skills_root.parts)] == skills_root.parts
             and relative != VERSION_SKILL_RELATIVE
         ):
-            errors.append(f"v0.0.1 may contain only the version check Skill: {relative}")
+            errors.append(f"v0.0.2 may contain only the version check Skill: {relative}")
 
 
 def validate_license(root: Path, candidates: set[Path], errors: list[str]) -> None:
