@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuanjohn01-byte/codex-skin-plugin/blob/main/contracts/helper-release-descriptor-v1.schema.json",
+  "title": "Codex Skin Helper release descriptor v1",
+  "description": "Canonical metadata for one signed, immutable, three-platform Helper release.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "helperVersion",
+    "releaseTag",
+    "publishedAt",
+    "signingKeyId",
+    "artifacts"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "helperVersion": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$",
+      "maxLength": 64
+    },
+    "releaseTag": {
+      "type": "string",
+      "pattern": "^helper-v[0-9A-Za-z.-]+$",
+      "maxLength": 72
+    },
+    "publishedAt": {
+      "type": "string",
+      "format": "date-time",
+      "pattern": "Z$",
+      "maxLength": 32
+    },
+    "signingKeyId": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{2,63}$"
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "prefixItems": [
+        {
+          "$ref": "#/$defs/macosArm64Artifact"
+        },
+        {
+          "$ref": "#/$defs/macosX64Artifact"
+        },
+        {
+          "$ref": "#/$defs/windowsX64Artifact"
+        }
+      ],
+      "items": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "required": ["platform", "filename", "sha256", "size"],
+      "properties": {
+        "platform": {
+          "enum": ["macos-arm64", "macos-x64", "windows-x64"]
+        },
+        "filename": {
+          "type": "string",
+          "pattern": "^codex-skin-helper_[0-9A-Za-z.-]+_(?:macos_arm64|macos_x64|windows_x64\\.exe)$",
+          "maxLength": 160
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "size": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 52428800
+        }
+      },
+      "additionalProperties": false
+    },
+    "macosArm64Artifact": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/artifact"
+        },
+        {
+          "properties": {
+            "platform": {
+              "const": "macos-arm64"
+            },
+            "filename": {
+              "pattern": "^codex-skin-helper_[0-9A-Za-z.-]+_macos_arm64$"
+            }
+          }
+        }
+      ]
+    },
+    "macosX64Artifact": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/artifact"
+        },
+        {
+          "properties": {
+            "platform": {
+              "const": "macos-x64"
+            },
+            "filename": {
+              "pattern": "^codex-skin-helper_[0-9A-Za-z.-]+_macos_x64$"
+            }
+          }
+        }
+      ]
+    },
+    "windowsX64Artifact": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/artifact"
+        },
+        {
+          "properties": {
+            "platform": {
+              "const": "windows-x64"
+            },
+            "filename": {
+              "pattern": "^codex-skin-helper_[0-9A-Za-z.-]+_windows_x64\\.exe$"
+            }
+          }
+        }
+      ]
+    }
+  }
+}

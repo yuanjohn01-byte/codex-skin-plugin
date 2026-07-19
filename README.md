@@ -27,7 +27,7 @@ codex-skin-plugin/
       scripts/
       assets/
   cmd/codex-skin/              # self-contained Helper entrypoint
-  internal/                    # Helper CLI/protocol implementation
+  internal/                    # Helper CLI/protocol/release verification
   contracts/                   # generated public contracts only
   tools/
     validate_public_repo.py
@@ -46,11 +46,14 @@ go vet ./...
 go run ./cmd/codex-skin version --json
 go run ./cmd/codex-skin doctor --json
 python3 tools/test_helper_builds.py
+python3 tools/test_release_descriptor.py
 ```
 
-The canonical Helper protocol Schema lives in the Private repository allowlist and is generated into `contracts/`. Direct edits to the Public Schema or its digest manifest fail the repository boundary check.
+The canonical Helper protocol and release descriptor Schemas live in the Private repository allowlist and are generated into `contracts/`. Direct edits to a Public Schema or its digest manifest fail the repository boundary check.
 
 The build test produces unsigned internal artifacts for `macos-arm64`, `macos-x64`, and `windows-x64` under ignored `dist/helper/`, validates Mach-O/PE architecture headers, and compares two clean builds byte-for-byte. Release assets are not committed to Git. Windows CI executes the native x64 Helper after removing Node, Python, and Go from `PATH`.
+
+`tools/create_release_descriptor.py` converts that trusted build summary into one canonical, fixed-order descriptor with the exact version, tag, UTC timestamp, platform filenames, sizes, and SHA-256 values. The Go release package rejects noncanonical JSON, unknown fields or signing key IDs, invalid detached Ed25519 signatures, missing/duplicate/mismatched platforms, unsupported runtimes, and downloaded bytes with the wrong size or digest. Tests generate ephemeral signing keys at runtime; this repository contains no release private key or Production trust-root claim. The S3 artifact remains an unsigned internal review artifact until the later signing and release gates are complete.
 
 ## Installation
 

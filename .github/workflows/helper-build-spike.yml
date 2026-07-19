@@ -3,24 +3,30 @@ name: Helper Cross-Platform Build Spike
 on:
   pull_request:
     paths:
-      - '.github/workflows/helper-build-spike.yml'
-      - 'cmd/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'internal/**'
-      - 'tools/build_helper.py'
-      - 'tools/test_helper_builds.py'
+      - ".github/workflows/helper-build-spike.yml"
+      - "cmd/**"
+      - "go.mod"
+      - "go.sum"
+      - "internal/**"
+      - "contracts/**"
+      - "tools/build_helper.py"
+      - "tools/create_release_descriptor.py"
+      - "tools/test_helper_builds.py"
+      - "tools/test_release_descriptor.py"
   push:
     branches:
-      - 'codex/**'
+      - "codex/**"
     paths:
-      - '.github/workflows/helper-build-spike.yml'
-      - 'cmd/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'internal/**'
-      - 'tools/build_helper.py'
-      - 'tools/test_helper_builds.py'
+      - ".github/workflows/helper-build-spike.yml"
+      - "cmd/**"
+      - "go.mod"
+      - "go.sum"
+      - "internal/**"
+      - "contracts/**"
+      - "tools/build_helper.py"
+      - "tools/create_release_descriptor.py"
+      - "tools/test_helper_builds.py"
+      - "tools/test_release_descriptor.py"
   workflow_dispatch:
 
 permissions:
@@ -34,12 +40,18 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.5'
+          go-version: "1.26.5"
           cache: true
       - name: Build twice and compare three targets
         run: python3 tools/test_helper_builds.py
+      - name: Test canonical release descriptor generation
+        run: python3 tools/test_release_descriptor.py
       - name: Build review artifacts
         run: python3 tools/build_helper.py
+      - name: Generate unsigned review descriptor
+        run: >-
+          python3 tools/create_release_descriptor.py
+          --key-id internal-spike-2026-01
       - name: Upload unsigned internal artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -55,7 +67,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.26.5'
+          go-version: "1.26.5"
           cache: true
       - name: Build the native Windows x64 Helper
         shell: pwsh
