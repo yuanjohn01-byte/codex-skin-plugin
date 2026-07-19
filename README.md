@@ -27,7 +27,8 @@ codex-skin-plugin/
       scripts/
       assets/
   cmd/codex-skin/              # self-contained Helper entrypoint
-  internal/                    # Helper CLI/protocol/release verification
+  cmd/codex-skin-guardian/     # fixed-surface internal Guardian spike
+  internal/                    # Helper and Guardian runtime/lifecycle packages
   contracts/                   # generated public contracts only
   tools/
     validate_public_repo.py
@@ -47,6 +48,7 @@ go run ./cmd/codex-skin version --json
 go run ./cmd/codex-skin doctor --json
 python3 tools/test_helper_builds.py
 python3 tools/test_release_descriptor.py
+python3 tools/test_guardian_builds.py
 ```
 
 The canonical Helper protocol and release descriptor Schemas live in the Private repository allowlist and are generated into `contracts/`. Direct edits to a Public Schema or its digest manifest fail the repository boundary check.
@@ -60,6 +62,8 @@ The bootstrap library uses the fixed Public GitHub Releases origin, accepts only
 The [macOS signing feasibility note](docs/macos-signing-feasibility.md) and its CI workflow test ad-hoc signing, strict verification, and post-signing tamper rejection without using secrets. Ad-hoc signatures are explicitly not Developer ID signatures or notarization; formal macOS distribution remains blocked on a protected Apple certificate, accepted notarization, the exact Gatekeeper download path, and a decision about a staplable release container.
 
 The [Windows signing feasibility note](docs/windows-signing-feasibility.md) uses a one-run, non-exportable self-signed certificate only inside the current-user CI stores to test Authenticode signing, local-policy verification, signed Helper execution, PE tamper rejection, and certificate cleanup. It uploads only a non-secret JSON summary. Self-signing does not provide public trust or SmartScreen reputation; formal Windows distribution remains blocked on a protected public code-signing identity, RFC 3161 timestamp, and clean-machine testing of the exact final download channel.
+
+The [per-user Guardian lifecycle note](docs/guardian-lifecycle-feasibility.md) describes the internal fixed-surface Guardian and its versioned install, signature gate, per-user registration, side-by-side upgrade, explicit rollback, and registration-first uninstall tests. Native macOS LaunchAgent and Windows Limited/Interactive Scheduled Task jobs create, run, inspect, and remove temporary registrations without adding a service, network listener, or general command surface. The trigger remains a packaging-only Spike; actual lifecycle reconciliation is a later numbered task, and formal Guardian distribution remains blocked on the same platform signing gates.
 
 ## Installation
 
