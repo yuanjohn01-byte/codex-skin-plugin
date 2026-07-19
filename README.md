@@ -45,9 +45,12 @@ go test ./...
 go vet ./...
 go run ./cmd/codex-skin version --json
 go run ./cmd/codex-skin doctor --json
+python3 tools/test_helper_builds.py
 ```
 
 The canonical Helper protocol Schema lives in the Private repository allowlist and is generated into `contracts/`. Direct edits to the Public Schema or its digest manifest fail the repository boundary check.
+
+The build test produces unsigned internal artifacts for `macos-arm64`, `macos-x64`, and `windows-x64` under ignored `dist/helper/`, validates Mach-O/PE architecture headers, and compares two clean builds byte-for-byte. Release assets are not committed to Git. Windows CI executes the native x64 Helper after removing Node, Python, and Go from `PATH`.
 
 ## Installation
 

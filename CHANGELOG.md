@@ -10,6 +10,8 @@
 - Enforce the canonical README commands and safety markers with positive and negative repository fixtures.
 - Add the self-contained Go Helper source with minimal `version` and runtime-only `doctor` JSONL commands.
 - Add the generated Helper protocol v1 Schema and Private-to-Public export digest gate.
+- Add reproducible, CGO-free macOS arm64/x64 and Windows x64 Helper test builds.
+- Run the Windows x64 Helper with Node, Python, and Go removed from `PATH`.
 
 No theme operation or public compatibility claim is attached to this version.
 
