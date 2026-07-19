@@ -4,7 +4,7 @@ This is the standalone Public Plugin repository for Codex Skin. The installable 
 
 Current status: the pre-release Marketplace exposes the Codex Skin v0.0.2 upgrade candidate from this repository. The distribution spike remains a read-only version check; no theme capability or public compatibility claim is attached.
 
-S3 now includes the source for a self-contained Go Helper prototype. Its `version` and runtime-only `doctor` commands emit the generated public JSON Lines v1 contract, but the Helper is not yet bootstrapped by the installed Plugin and does not perform theme, Codex, network, or recovery operations.
+S3 now includes the source for a self-contained Go Helper prototype. Its `version` and runtime-only `doctor` commands emit the generated public JSON Lines v1 contract. The internal bootstrap can verify and stage a Helper outside the Plugin cache, but it is not yet exposed by the installed Plugin and does not perform theme, Codex, account, or recovery operations.
 
 The v0.0.1-to-v0.0.2 upgrade spike has passed macOS and Windows Desktop/CLI checks against the reviewed feature refs. The Windows distribution workflow also performs the equivalent CLI/cache upgrade on a clean GitHub-hosted runner. Every release still requires a post-merge two-platform check of the exact `main` form before its commands are published.
 
@@ -54,6 +54,8 @@ The canonical Helper protocol and release descriptor Schemas live in the Private
 The build test produces unsigned internal artifacts for `macos-arm64`, `macos-x64`, and `windows-x64` under ignored `dist/helper/`, validates Mach-O/PE architecture headers, and compares two clean builds byte-for-byte. Release assets are not committed to Git. Windows CI executes the native x64 Helper after removing Node, Python, and Go from `PATH`.
 
 `tools/create_release_descriptor.py` converts that trusted build summary into one canonical, fixed-order descriptor with the exact version, tag, UTC timestamp, platform filenames, sizes, and SHA-256 values. The Go release package rejects noncanonical JSON, unknown fields or signing key IDs, invalid detached Ed25519 signatures, missing/duplicate/mismatched platforms, unsupported runtimes, and downloaded bytes with the wrong size or digest. Tests generate ephemeral signing keys at runtime; this repository contains no release private key or Production trust-root claim. The S3 artifact remains an unsigned internal review artifact until the later signing and release gates are complete.
+
+The bootstrap library uses the fixed Public GitHub Releases origin, accepts only the descriptor, raw detached signature, and strict Helper filenames, and allows HTTPS redirects only to GitHub release-asset hosts. After signature/platform/size/SHA-256 verification it writes a per-version executable in `~/Library/Application Support/CodexSkin/bin/` on macOS or `%LOCALAPPDATA%\CodexSkin\bin\` on Windows, runs only the fixed `version --json` and `doctor --json` self-tests with a minimal environment, then atomically replaces `current.json`. Staging failures leave the previous pointer and version intact. The application root must not overlap or resolve through the Plugin cache; tests replace that cache and confirm the Helper plus `state/` and `recovery/` sentinels remain. This is still internal bootstrap infrastructure: no unsigned artifact is authorized for user installation.
 
 ## Installation
 

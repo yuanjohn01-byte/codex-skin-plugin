@@ -14,6 +14,8 @@
 - Run the Windows x64 Helper with Node, Python, and Go removed from `PATH`.
 - Add the generated Helper release descriptor v1 Schema and deterministic unsigned descriptor generator.
 - Verify canonical descriptor bytes, detached Ed25519 signatures, strict SemVer/platform selection, and artifact size/SHA-256 before use.
+- Add an out-of-Plugin-cache per-user bootstrap with restricted GitHub Release downloads, staged self-test, version directories, and atomic `current.json` activation.
+- Preserve the previous Helper, state, and recovery files across failed bootstrap, Plugin cache replacement, and successful upgrade tests.
 
 No theme operation or public compatibility claim is attached to this version.
 
