@@ -16,7 +16,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.5'
+          cache: true
       - name: Compile repository validators
         run: python3 -m compileall -q tools
       - name: Test manifest, license, and Public upload boundary
         run: python3 tools/test_public_repository.py
+      - name: Check Go formatting
+        run: test -z "$(gofmt -l cmd internal)"
+      - name: Vet the Helper
+        run: go vet ./...
+      - name: Test the Helper and JSONL contract
+        run: go test ./...

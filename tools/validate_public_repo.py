@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import re
 import subprocess
@@ -136,6 +137,8 @@ MANIFEST_RELATIVE = PLUGIN_ROOT / ".codex-plugin/plugin.json"
 MARKETPLACE_RELATIVE = Path(".agents/plugins/marketplace.json")
 VERSION_SKILL_RELATIVE = PLUGIN_ROOT / "skills/codex-skin-version/SKILL.md"
 README_RELATIVE = Path("README.md")
+EXPORTED_CONTRACT_RELATIVE = Path("contracts/helper-protocol-v1.schema.json")
+EXPORT_MANIFEST_RELATIVE = Path("contracts/export-manifest.json")
 EXPECTED_PLUGIN_VERSION = "0.0.2"
 INSTALL_COMMANDS = (
     "codex plugin marketplace add yuanjohn01-byte/codex-skin-plugin --ref main",
@@ -466,6 +469,57 @@ def validate_license(root: Path, candidates: set[Path], errors: list[str]) -> No
             errors.append(f"Public LICENSE is not the approved MIT text (missing {marker!r})")
 
 
+def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[str]) -> None:
+    required = {EXPORTED_CONTRACT_RELATIVE, EXPORT_MANIFEST_RELATIVE}
+    missing = sorted(required - candidates, key=lambda item: item.as_posix())
+    if missing:
+        for relative in missing:
+            errors.append(f"missing exported public contract file: {relative}")
+        return
+
+    try:
+        manifest = json.loads((root / EXPORT_MANIFEST_RELATIVE).read_text(encoding="utf-8"))
+        schema_bytes = (root / EXPORTED_CONTRACT_RELATIVE).read_bytes()
+        schema = json.loads(schema_bytes)
+    except (OSError, json.JSONDecodeError) as exc:
+        errors.append(f"invalid exported public contract: {exc}")
+        return
+
+    expected_digest = hashlib.sha256(schema_bytes).hexdigest()
+    expected_manifest = {
+        "schemaVersion": 1,
+        "generatedFrom": "codex-skin/contracts/public/export-allowlist.json",
+        "artifacts": [
+            {
+                "destination": EXPORTED_CONTRACT_RELATIVE.as_posix(),
+                "sha256": expected_digest,
+                "source": "codex-skin/contracts/public/helper-protocol-v1.schema.json",
+            }
+        ],
+    }
+    if manifest != expected_manifest:
+        errors.append("public contract export manifest or SHA-256 does not match the generated schema")
+
+    if not isinstance(schema, dict):
+        errors.append("Helper protocol schema root must be an object")
+    else:
+        definitions = schema.get("$defs")
+        if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
+            errors.append("Helper protocol must use JSON Schema draft 2020-12")
+        if not isinstance(definitions, dict) or not {
+            "progressEvent",
+            "resultEvent",
+            "error",
+            "versionData",
+            "doctorData",
+        }.issubset(definitions):
+            errors.append("Helper protocol schema is missing required v1 definitions")
+
+    for relative in candidates:
+        if relative.parts and relative.parts[0] == "contracts" and relative not in required:
+            errors.append(f"contract file is not in the generated Public allowlist: {relative}")
+
+
 def validate_installation_instructions(
     root: Path, candidates: set[Path], errors: list[str]
 ) -> None:
@@ -513,6 +567,7 @@ def validate(root: Path) -> list[str]:
     validate_marketplace(root, candidates, errors)
     validate_version_skill(root, candidates, errors)
     validate_license(root, candidates, errors)
+    validate_exported_contracts(root, candidates, errors)
     validate_installation_instructions(root, candidates, errors)
     proprietary_marker = "ship" + "any"
 

@@ -1,0 +1,313 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuanjohn01-byte/codex-skin-plugin/blob/main/contracts/helper-protocol-v1.schema.json",
+  "title": "Codex Skin Helper JSON Lines protocol v1",
+  "description": "One JSON object per UTF-8 line. A command emits zero or more progress events and exactly one final result event.",
+  "oneOf": [
+    {
+      "$ref": "#/$defs/progressEvent"
+    },
+    {
+      "$ref": "#/$defs/resultEvent"
+    }
+  ],
+  "$defs": {
+    "progressEvent": {
+      "type": "object",
+      "required": [
+        "type",
+        "protocolVersion",
+        "operationId",
+        "stage",
+        "percent",
+        "messageKey"
+      ],
+      "properties": {
+        "type": {
+          "const": "progress"
+        },
+        "protocolVersion": {
+          "const": 1
+        },
+        "operationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "stage": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "percent": {
+          "oneOf": [
+            {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 100
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "messageKey": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        }
+      },
+      "additionalProperties": true
+    },
+    "resultEvent": {
+      "type": "object",
+      "required": [
+        "type",
+        "protocolVersion",
+        "operationId",
+        "ok",
+        "status",
+        "data",
+        "error"
+      ],
+      "properties": {
+        "type": {
+          "const": "result"
+        },
+        "protocolVersion": {
+          "const": 1
+        },
+        "operationId": {
+          "oneOf": [
+            {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 128
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "ok": {
+          "type": "boolean"
+        },
+        "status": {
+          "enum": [
+            "completed",
+            "failed"
+          ]
+        },
+        "data": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/versionData"
+            },
+            {
+              "$ref": "#/$defs/doctorData"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "error": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/error"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "ok": {
+                "const": true
+              }
+            },
+            "required": [
+              "ok"
+            ]
+          },
+          "then": {
+            "properties": {
+              "status": {
+                "const": "completed"
+              },
+              "data": {
+                "type": "object"
+              },
+              "error": {
+                "type": "null"
+              }
+            }
+          },
+          "else": {
+            "properties": {
+              "status": {
+                "const": "failed"
+              },
+              "data": {
+                "type": "null"
+              },
+              "error": {
+                "$ref": "#/$defs/error"
+              }
+            }
+          }
+        }
+      ],
+      "additionalProperties": true
+    },
+    "error": {
+      "type": "object",
+      "required": [
+        "code",
+        "incidentId",
+        "retryable",
+        "action"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^CS-[A-Z0-9]+(?:-[A-Z0-9]+)+$",
+          "maxLength": 64
+        },
+        "incidentId": {
+          "oneOf": [
+            {
+              "type": "string",
+              "pattern": "^INC-[A-Z0-9]+$",
+              "maxLength": 32
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "retryable": {
+          "type": "boolean"
+        },
+        "action": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "additionalProperties": true
+    },
+    "versionData": {
+      "type": "object",
+      "required": [
+        "command",
+        "helperVersion",
+        "protocolVersion",
+        "goVersion",
+        "buildCommit",
+        "builtAt"
+      ],
+      "properties": {
+        "command": {
+          "const": "version"
+        },
+        "helperVersion": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+        },
+        "protocolVersion": {
+          "const": 1
+        },
+        "goVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "buildCommit": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "builtAt": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        }
+      },
+      "additionalProperties": true
+    },
+    "doctorData": {
+      "type": "object",
+      "required": [
+        "command",
+        "helperVersion",
+        "platform",
+        "architecture",
+        "runtime",
+        "nodeRequired",
+        "checks"
+      ],
+      "properties": {
+        "command": {
+          "const": "doctor"
+        },
+        "helperVersion": {
+          "type": "string"
+        },
+        "platform": {
+          "enum": [
+            "macos",
+            "windows"
+          ]
+        },
+        "architecture": {
+          "enum": [
+            "arm64",
+            "x64"
+          ]
+        },
+        "runtime": {
+          "const": "self-contained-go"
+        },
+        "nodeRequired": {
+          "const": false
+        },
+        "checks": {
+          "type": "array",
+          "minItems": 2,
+          "maxItems": 16,
+          "items": {
+            "$ref": "#/$defs/doctorCheck"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    "doctorCheck": {
+      "type": "object",
+      "required": [
+        "name",
+        "status"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[a-z0-9_]+$",
+          "maxLength": 64
+        },
+        "status": {
+          "enum": [
+            "pass",
+            "fail",
+            "not_checked"
+          ]
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

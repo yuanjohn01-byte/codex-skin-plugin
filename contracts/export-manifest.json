@@ -1,0 +1,11 @@
+{
+  "artifacts": [
+    {
+      "destination": "contracts/helper-protocol-v1.schema.json",
+      "sha256": "f9ea47db262f88293eea5d86001b36d72a4cb28dfd0e84f764e2c5c0e2857b28",
+      "source": "codex-skin/contracts/public/helper-protocol-v1.schema.json"
+    }
+  ],
+  "generatedFrom": "codex-skin/contracts/public/export-allowlist.json",
+  "schemaVersion": 1
+}
