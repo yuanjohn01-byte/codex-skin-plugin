@@ -94,8 +94,8 @@ try {
   $thumbprint = $certificate.Thumbprint
   Write-Host "phase=trust-public-certificate-current-user"
   $null = Export-Certificate -Cert $certificate -FilePath $publicCertificate
-  if (-not (Invoke-BoundedCommand -Executable $certutil -Arguments @("-user", "-addstore", "-f", "Root", $publicCertificate))) {
-    throw "current-user test root import failed"
+  if (-not (Invoke-BoundedCommand -Executable $certutil -Arguments @("-user", "-addstore", "-f", "TrustedPeople", $publicCertificate))) {
+    throw "current-user peer trust import failed"
   }
 
   Write-Host "phase=authenticode-sign"
@@ -181,7 +181,7 @@ try {
 finally {
   Write-Host "phase=certificate-cleanup"
   if ($thumbprint) {
-    $null = Invoke-BoundedCommand -Executable $certutil -Arguments @("-user", "-delstore", "Root", $thumbprint) -ExpectSuccess $false
+    $null = Invoke-BoundedCommand -Executable $certutil -Arguments @("-user", "-delstore", "TrustedPeople", $thumbprint) -ExpectSuccess $false
     Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
   }
   Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
@@ -190,7 +190,7 @@ finally {
 if (-not $summary) {
   throw "Windows signing summary was not produced"
 }
-if ((Test-Path "Cert:\CurrentUser\Root\$thumbprint") -or (Test-Path "Cert:\CurrentUser\My\$thumbprint")) {
+if ((Test-Path "Cert:\CurrentUser\TrustedPeople\$thumbprint") -or (Test-Path "Cert:\CurrentUser\My\$thumbprint")) {
   throw "ephemeral code-signing certificate was not removed"
 }
 $summary.certificate["storeCleanupVerified"] = $true

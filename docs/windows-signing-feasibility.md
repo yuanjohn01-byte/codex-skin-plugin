@@ -4,7 +4,7 @@ Status: internal S3 feasibility evidence, not a public signing or reputation cla
 
 ## What the spike proves
 
-The Windows workflow creates a one-day, non-exportable, self-signed RSA code-signing certificate in the GitHub runner's `CurrentUser` store. It temporarily trusts only the public certificate in `CurrentUser\Root`, then:
+The Windows workflow creates a one-day, non-exportable, self-signed RSA code-signing certificate in the GitHub runner's `CurrentUser` store. It temporarily peer-trusts only the public certificate in `CurrentUser\TrustedPeople`, then:
 
 1. signs the native Windows x64 Helper with SignTool `/fd SHA256`;
 2. verifies it with the Authenticode `/pa` policy while that temporary local trust exists;
