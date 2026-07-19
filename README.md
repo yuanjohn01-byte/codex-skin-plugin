@@ -57,6 +57,8 @@ The build test produces unsigned internal artifacts for `macos-arm64`, `macos-x6
 
 The bootstrap library uses the fixed Public GitHub Releases origin, accepts only the descriptor, raw detached signature, and strict Helper filenames, and allows HTTPS redirects only to GitHub release-asset hosts. After signature/platform/size/SHA-256 verification it writes a per-version executable in `~/Library/Application Support/CodexSkin/bin/` on macOS or `%LOCALAPPDATA%\CodexSkin\bin\` on Windows, runs only the fixed `version --json` and `doctor --json` self-tests with a minimal environment, then atomically replaces `current.json`. Staging failures leave the previous pointer and version intact. The application root must not overlap or resolve through the Plugin cache; tests replace that cache and confirm the Helper plus `state/` and `recovery/` sentinels remain. This is still internal bootstrap infrastructure: no unsigned artifact is authorized for user installation.
 
+The [macOS signing feasibility note](docs/macos-signing-feasibility.md) and its CI workflow test ad-hoc signing, strict verification, and post-signing tamper rejection without using secrets. Ad-hoc signatures are explicitly not Developer ID signatures or notarization; formal macOS distribution remains blocked on a protected Apple certificate, accepted notarization, the exact Gatekeeper download path, and a decision about a staplable release container.
+
 ## Installation
 
 The following is the single installation flow for releases on `main`. A release is ready for website publication only after its documented gates pass. Users do not need to open or fill in the Marketplace form, edit Codex configuration, or delete cache files.
