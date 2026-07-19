@@ -3,10 +3,13 @@
   "version": "0.0.1",
   "description": "Install, switch, customize, and safely restore Codex themes.",
   "author": {
-    "name": "Codex Skin"
+    "name": "Codex Skin",
+    "url": "https://github.com/yuanjohn01-byte/codex-skin-plugin"
   },
+  "homepage": "https://github.com/yuanjohn01-byte/codex-skin-plugin#readme",
   "repository": "https://github.com/yuanjohn01-byte/codex-skin-plugin",
   "license": "MIT",
+  "keywords": ["codex", "theme", "skin"],
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex Skin",
@@ -15,6 +18,7 @@
     "developerName": "Codex Skin",
     "category": "Developer Tools",
     "capabilities": ["Local theme management"],
+    "websiteURL": "https://github.com/yuanjohn01-byte/codex-skin-plugin",
     "defaultPrompt": [
       "Install Codex Skin theme 100001.",
       "Restore the official Codex appearance."

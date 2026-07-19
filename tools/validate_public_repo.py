@@ -9,6 +9,7 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 
 DEFAULT_ROOT = Path(__file__).resolve().parents[1]
@@ -131,6 +132,43 @@ SECRET_PATTERNS = {
 SELF = Path("tools/validate_public_repo.py")
 PLUGIN_ROOT = Path("plugins/codex-skin")
 MANIFEST_RELATIVE = PLUGIN_ROOT / ".codex-plugin/plugin.json"
+STRICT_SEMVER = re.compile(
+    r"^(0|[1-9]\d*)\."
+    r"(0|[1-9]\d*)\."
+    r"(0|[1-9]\d*)"
+    r"(?:-(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\."
+    r"(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
+)
+ALLOWED_MANIFEST_FIELDS = {
+    "author",
+    "description",
+    "homepage",
+    "interface",
+    "keywords",
+    "license",
+    "name",
+    "repository",
+    "skills",
+    "version",
+}
+ALLOWED_INTERFACE_FIELDS = {
+    "brandColor",
+    "capabilities",
+    "category",
+    "composerIcon",
+    "defaultPrompt",
+    "developerName",
+    "displayName",
+    "logo",
+    "logoDark",
+    "longDescription",
+    "privacyPolicyURL",
+    "screenshots",
+    "shortDescription",
+    "termsOfServiceURL",
+    "websiteURL",
+}
 
 
 def parse_args() -> argparse.Namespace:
@@ -174,6 +212,13 @@ def non_empty_string(value: object) -> bool:
     return isinstance(value, str) and bool(value.strip())
 
 
+def absolute_https_url(value: object) -> bool:
+    if not non_empty_string(value):
+        return False
+    parsed = urlparse(value)
+    return parsed.scheme == "https" and bool(parsed.netloc)
+
+
 def validate_component_path(
     root: Path, payload: dict[str, object], key: str, errors: list[str]
 ) -> None:
@@ -215,19 +260,39 @@ def validate_manifest(root: Path, candidates: set[Path], errors: list[str]) -> N
     elif re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", payload["name"]) is None:
         errors.append("plugin manifest name must use kebab-case")
     version = payload.get("version")
-    if not isinstance(version, str) or re.fullmatch(r"\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?", version) is None:
-        errors.append("plugin manifest version must be semver")
+    if not isinstance(version, str) or STRICT_SEMVER.fullmatch(version) is None:
+        errors.append("plugin manifest version must be strict semver")
     if not non_empty_string(payload.get("description")):
         errors.append("plugin manifest description must be a non-empty string")
+
+    for key in sorted(set(payload) - ALLOWED_MANIFEST_FIELDS):
+        errors.append(f"plugin manifest field is not approved for the MVP: {key}")
 
     author = payload.get("author")
     if not isinstance(author, dict) or not non_empty_string(author.get("name")):
         errors.append("plugin manifest author.name must be a non-empty string")
+    else:
+        for key in sorted(set(author) - {"name", "email", "url"}):
+            errors.append(f"plugin manifest author field is not supported: {key}")
+        if not absolute_https_url(author.get("url")):
+            errors.append("plugin manifest author.url must be an absolute HTTPS URL")
+
+    if not absolute_https_url(payload.get("homepage")):
+        errors.append("plugin manifest homepage must be an absolute HTTPS URL")
+    keywords = payload.get("keywords")
+    if (
+        not isinstance(keywords, list)
+        or not keywords
+        or any(not non_empty_string(item) for item in keywords)
+    ):
+        errors.append("plugin manifest keywords must be a non-empty string array")
 
     interface = payload.get("interface")
     if not isinstance(interface, dict):
         errors.append("plugin manifest interface must be an object")
     else:
+        for key in sorted(set(interface) - ALLOWED_INTERFACE_FIELDS):
+            errors.append(f"plugin manifest interface field is not supported: {key}")
         for key in (
             "displayName",
             "shortDescription",
@@ -245,6 +310,17 @@ def validate_manifest(root: Path, candidates: set[Path], errors: list[str]) -> N
                 or any(not non_empty_string(item) for item in value)
             ):
                 errors.append(f"plugin manifest interface.{key} must be a non-empty string array")
+        prompts = interface.get("defaultPrompt")
+        if isinstance(prompts, list) and (
+            len(prompts) > 3
+            or any(isinstance(item, str) and len(item) > 128 for item in prompts)
+        ):
+            errors.append("plugin manifest interface.defaultPrompt must contain at most 3 entries of 128 characters")
+        if not absolute_https_url(interface.get("websiteURL")):
+            errors.append("plugin manifest interface.websiteURL must be an absolute HTTPS URL")
+        for key in ("privacyPolicyURL", "termsOfServiceURL"):
+            if key in interface and not absolute_https_url(interface.get(key)):
+                errors.append(f"plugin manifest interface.{key} must be an absolute HTTPS URL")
 
     if payload.get("license") != "MIT":
         errors.append("plugin manifest license must match the approved MIT license")

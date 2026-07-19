@@ -16,9 +16,11 @@ MINIMAL_MANIFEST = {
     "name": "codex-skin",
     "version": "0.0.0",
     "description": "fixture",
-    "author": {"name": "fixture"},
+    "author": {"name": "fixture", "url": "https://example.invalid/author"},
+    "homepage": "https://example.invalid/plugin",
     "repository": "https://github.com/yuanjohn01-byte/codex-skin-plugin",
     "license": "MIT",
+    "keywords": ["fixture"],
     "skills": "./skills/",
     "interface": {
         "displayName": "Fixture",
@@ -26,6 +28,9 @@ MINIMAL_MANIFEST = {
         "longDescription": "Fixture plugin for repository validation.",
         "developerName": "Fixture",
         "category": "Developer Tools",
+        "capabilities": ["Fixture"],
+        "websiteURL": "https://example.invalid",
+        "defaultPrompt": ["Run the fixture."],
     },
 }
 
@@ -144,7 +149,19 @@ def main() -> int:
     invalid_interface["interface"] = "fixture"
     negative_manifest(invalid_interface, "interface must be an object")
 
-    print("Public repository tests passed (positive scan + 11 negative fixtures).")
+    invalid_version = dict(MINIMAL_MANIFEST)
+    invalid_version["version"] = "00.1.0"
+    negative_manifest(invalid_version, "version must be strict semver")
+
+    invalid_homepage = dict(MINIMAL_MANIFEST)
+    invalid_homepage["homepage"] = "http://example.invalid/plugin"
+    negative_manifest(invalid_homepage, "homepage must be an absolute HTTPS URL")
+
+    unsupported_component = dict(MINIMAL_MANIFEST)
+    unsupported_component["mcpServers"] = "./.mcp.json"
+    negative_manifest(unsupported_component, "field is not approved for the MVP")
+
+    print("Public repository tests passed (positive scan + 14 negative fixtures).")
     return 0
 
 
