@@ -7,14 +7,16 @@ Status: internal S3 feasibility evidence, not a public signing or reputation cla
 The Windows workflow creates a one-day, non-exportable, self-signed RSA code-signing certificate in the GitHub runner's `CurrentUser` store. It temporarily peer-trusts only the public certificate in `CurrentUser\TrustedPeople`, then:
 
 1. signs the native Windows x64 Helper with SignTool `/fd SHA256`;
-2. verifies it with the Authenticode `/pa` policy while that temporary local trust exists;
+2. attempts the Authenticode `/pa` policy and records that self-signed trust result without treating it as public verification;
 3. executes signed `version --json` and `doctor --json` with Node, Python, and Go removed from `PATH`;
 4. changes one byte inside the signed PE image and requires verification to fail; and
 5. removes both temporary certificate-store entries in `finally` and verifies cleanup.
 
 The workflow never exports a PFX or private key and never uploads a certificate, thumbprint, subject, signed executable, or certificate-store snapshot. Its only artifact is a short-lived JSON summary containing tool versions, algorithms, hashes, booleans, and explicit limitations.
 
-This proves the repository's Authenticode command, signed-binary execution, verification, tamper-rejection, and cleanup plumbing. It does not prove public trust, stable publisher identity, RFC 3161 timestamping, download reputation, SmartScreen UI behavior, or commercial release readiness.
+The intact signed file must expose a signer through `Get-AuthenticodeSignature`; the modified file must report `HashMismatch`. SignTool `/pa` may still reject the self-signed chain even when the leaf is in the current user's peer-trust store, and that rejection is retained as evidence rather than bypassed.
+
+This proves the repository's Authenticode command, signed-binary execution, signature-presence check, tamper-rejection, and cleanup plumbing. It does not prove public `/pa` trust, stable publisher identity, RFC 3161 timestamping, download reputation, SmartScreen UI behavior, or commercial release readiness.
 
 ## SmartScreen boundary
 
