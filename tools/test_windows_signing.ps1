@@ -24,15 +24,15 @@ function Resolve-SignTool {
   return @($candidates)[0].FullName
 }
 
-function Invoke-SignTool {
+function Invoke-BoundedCommand {
   param(
-    [string]$SignTool,
+    [string]$Executable,
     [string[]]$Arguments,
     [bool]$ExpectSuccess = $true
   )
 
   $startInfo = [System.Diagnostics.ProcessStartInfo]::new()
-  $startInfo.FileName = $SignTool
+  $startInfo.FileName = $Executable
   $startInfo.UseShellExecute = $false
   $startInfo.CreateNoWindow = $true
   $startInfo.RedirectStandardOutput = $true
@@ -43,21 +43,22 @@ function Invoke-SignTool {
   $process = [System.Diagnostics.Process]::new()
   $process.StartInfo = $startInfo
   if (-not $process.Start()) {
-    throw "SignTool process did not start"
+    throw "bounded process did not start"
   }
   if (-not $process.WaitForExit(30000)) {
     $process.Kill($true)
-    throw "SignTool command timed out"
+    throw "bounded command timed out"
   }
   $succeeded = $process.ExitCode -eq 0
   if ($ExpectSuccess -and -not $succeeded) {
-    throw "SignTool command failed"
+    throw "bounded command failed"
   }
   return $succeeded
 }
 
 $resolvedHelper = (Resolve-Path $HelperPath).Path
 $signTool = Resolve-SignTool
+$certutil = Join-Path $env:SystemRoot "System32\certutil.exe"
 $scratch = Join-Path ([System.IO.Path]::GetTempPath()) ("codex-skin-windows-signing-" + [guid]::NewGuid().ToString("N"))
 $null = New-Item -ItemType Directory -Path $scratch
 $target = Join-Path $scratch "codex-skin-helper_0.1.0-s3_windows_x64.exe"
@@ -93,14 +94,16 @@ try {
   $thumbprint = $certificate.Thumbprint
   Write-Host "phase=trust-public-certificate-current-user"
   $null = Export-Certificate -Cert $certificate -FilePath $publicCertificate
-  $null = Import-Certificate -FilePath $publicCertificate -CertStoreLocation "Cert:\CurrentUser\Root"
+  if (-not (Invoke-BoundedCommand -Executable $certutil -Arguments @("-user", "-addstore", "-f", "Root", $publicCertificate))) {
+    throw "current-user test root import failed"
+  }
 
   Write-Host "phase=authenticode-sign"
-  if (-not (Invoke-SignTool -SignTool $signTool -Arguments @("sign", "/fd", "SHA256", "/sha1", $thumbprint, "/s", "My", $target))) {
+  if (-not (Invoke-BoundedCommand -Executable $signTool -Arguments @("sign", "/fd", "SHA256", "/sha1", $thumbprint, "/s", "My", $target))) {
     throw "self-signed Authenticode signing failed"
   }
   Write-Host "phase=authenticode-verify"
-  if (-not (Invoke-SignTool -SignTool $signTool -Arguments @("verify", "/pa", "/all", $target))) {
+  if (-not (Invoke-BoundedCommand -Executable $signTool -Arguments @("verify", "/pa", "/all", $target))) {
     throw "locally trusted Authenticode verification failed"
   }
   $authenticode = Get-AuthenticodeSignature -FilePath $target
@@ -136,7 +139,7 @@ try {
   }
   $tamperedBytes[1024] = $tamperedBytes[1024] -bxor 0x01
   [System.IO.File]::WriteAllBytes($tampered, $tamperedBytes)
-  $tamperedAccepted = Invoke-SignTool -SignTool $signTool -Arguments @("verify", "/pa", "/all", $tampered) -ExpectSuccess $false
+  $tamperedAccepted = Invoke-BoundedCommand -Executable $signTool -Arguments @("verify", "/pa", "/all", $tampered) -ExpectSuccess $false
   if ($tamperedAccepted) {
     throw "SignTool accepted a modified PE image"
   }
@@ -178,7 +181,7 @@ try {
 finally {
   Write-Host "phase=certificate-cleanup"
   if ($thumbprint) {
-    Remove-Item -LiteralPath "Cert:\CurrentUser\Root\$thumbprint" -Force -ErrorAction SilentlyContinue
+    $null = Invoke-BoundedCommand -Executable $certutil -Arguments @("-user", "-delstore", "Root", $thumbprint) -ExpectSuccess $false
     Remove-Item -LiteralPath "Cert:\CurrentUser\My\$thumbprint" -Force -ErrorAction SilentlyContinue
   }
   Remove-Item -LiteralPath $scratch -Recurse -Force -ErrorAction SilentlyContinue
