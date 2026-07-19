@@ -56,6 +56,18 @@ Skill: `codex-skin-version`.
 Upgrade target: replaces the v0.0.1 distribution-spike bundle.
 Theme operations are not available in this test build.
 """
+README_CONTRACT = """# Fixture
+codex plugin marketplace add yuanjohn01-byte/codex-skin-plugin --ref main
+codex plugin add codex-skin@codex-skin
+codex plugin list --json
+codex plugin marketplace upgrade codex-skin
+codex plugin marketplace remove codex-skin
+exactly one installed `codex-skin@codex-skin` entry
+Completely quit Codex and reopen it in a new task.
+Do not edit Codex configuration or delete Marketplace/Plugin cache directories.
+If upgrade fails, leave it installed.
+The remaining Windows Desktop test is required.
+"""
 
 
 def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -84,6 +96,7 @@ def write_baseline(fixture: Path) -> None:
         "MIT License\nPermission is hereby granted\nTHE SOFTWARE IS PROVIDED \"AS IS\"\n",
         encoding="utf-8",
     )
+    (fixture / "README.md").write_text(README_CONTRACT, encoding="utf-8")
 
 
 def negative_fixture(relative: str, content: bytes, expected_message: str) -> None:
@@ -157,6 +170,23 @@ def negative_skill(content: str, expected_message: str) -> None:
         combined = checked.stdout + checked.stderr
         if checked.returncode == 0 or expected_message not in combined:
             raise AssertionError(f"validator accepted invalid version Skill:\n{combined}")
+
+
+def negative_readme(content: str, expected_message: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="codex-skin-public-readme-") as directory:
+        fixture = Path(directory)
+        initialized = run(["git", "init", "--quiet"], fixture)
+        if initialized.returncode != 0:
+            raise AssertionError(initialized.stderr)
+        write_baseline(fixture)
+        (fixture / "README.md").write_text(content, encoding="utf-8")
+        added = run(["git", "add", "--force", "."], fixture)
+        if added.returncode != 0:
+            raise AssertionError(added.stderr)
+        checked = run([sys.executable, str(VALIDATOR), "--root", str(fixture)], fixture)
+        combined = checked.stdout + checked.stderr
+        if checked.returncode == 0 or expected_message not in combined:
+            raise AssertionError(f"validator accepted invalid README instructions:\n{combined}")
 
 
 def main() -> int:
@@ -248,8 +278,23 @@ def main() -> int:
         b"---\nname: extra\ndescription: extra\n---\n",
         "may contain only the version check Skill",
     )
+    negative_readme(
+        README_CONTRACT.replace(" --ref main", " --ref codex/test-branch"),
+        "non-canonical installation command",
+    )
+    negative_readme(
+        README_CONTRACT.replace("codex plugin list --json", "codex plugin list --available"),
+        "missing command: codex plugin list --json",
+    )
+    negative_readme(
+        README_CONTRACT.replace(
+            "Do not edit Codex configuration or delete Marketplace/Plugin cache directories.",
+            "Delete the cache and edit config.toml.",
+        ),
+        "missing safety marker",
+    )
 
-    print("Public repository tests passed (positive scan + 21 negative fixtures).")
+    print("Public repository tests passed (positive scan + 24 negative fixtures).")
     return 0
 
 

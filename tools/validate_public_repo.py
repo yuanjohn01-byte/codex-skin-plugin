@@ -135,7 +135,15 @@ PLUGIN_ROOT = Path("plugins/codex-skin")
 MANIFEST_RELATIVE = PLUGIN_ROOT / ".codex-plugin/plugin.json"
 MARKETPLACE_RELATIVE = Path(".agents/plugins/marketplace.json")
 VERSION_SKILL_RELATIVE = PLUGIN_ROOT / "skills/codex-skin-version/SKILL.md"
+README_RELATIVE = Path("README.md")
 EXPECTED_PLUGIN_VERSION = "0.0.2"
+INSTALL_COMMANDS = (
+    "codex plugin marketplace add yuanjohn01-byte/codex-skin-plugin --ref main",
+    "codex plugin add codex-skin@codex-skin",
+    "codex plugin list --json",
+)
+UPGRADE_COMMAND = "codex plugin marketplace upgrade codex-skin"
+FALLBACK_COMMAND = "codex plugin marketplace remove codex-skin"
 STRICT_SEMVER = re.compile(
     r"^(0|[1-9]\d*)\."
     r"(0|[1-9]\d*)\."
@@ -458,6 +466,43 @@ def validate_license(root: Path, candidates: set[Path], errors: list[str]) -> No
             errors.append(f"Public LICENSE is not the approved MIT text (missing {marker!r})")
 
 
+def validate_installation_instructions(
+    root: Path, candidates: set[Path], errors: list[str]
+) -> None:
+    readme = root / README_RELATIVE
+    if README_RELATIVE not in candidates or not readme.is_file():
+        errors.append("missing Public README installation instructions")
+        return
+    try:
+        content = readme.read_text(encoding="utf-8")
+    except OSError as exc:
+        errors.append(f"cannot read Public README: {exc}")
+        return
+
+    for command in (*INSTALL_COMMANDS, UPGRADE_COMMAND, FALLBACK_COMMAND):
+        if command not in content:
+            errors.append(f"README installation contract is missing command: {command}")
+    for marker in (
+        "exactly one installed `codex-skin@codex-skin` entry",
+        "Completely quit Codex",
+        "new task",
+        "Do not edit Codex configuration or delete Marketplace/Plugin cache directories.",
+        "leave it installed",
+        "remaining Windows Desktop test",
+    ):
+        if marker not in content:
+            errors.append(f"README installation contract is missing safety marker: {marker}")
+
+    forbidden_commands = (
+        "codex plugin list --available\n",
+        "codex plugin marketplace add https://github.com/",
+        "--ref codex/",
+    )
+    for command in forbidden_commands:
+        if command in content:
+            errors.append(f"README contains a non-canonical installation command: {command!r}")
+
+
 def validate(root: Path) -> list[str]:
     errors: list[str] = []
     candidate_list, enumeration_error = repository_candidates(root)
@@ -468,6 +513,7 @@ def validate(root: Path) -> list[str]:
     validate_marketplace(root, candidates, errors)
     validate_version_skill(root, candidates, errors)
     validate_license(root, candidates, errors)
+    validate_installation_instructions(root, candidates, errors)
     proprietary_marker = "ship" + "any"
 
     for relative in candidate_list:
