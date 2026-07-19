@@ -66,7 +66,7 @@ exactly one installed `codex-skin@codex-skin` entry
 Completely quit Codex and reopen it in a new task.
 Do not edit Codex configuration or delete Marketplace/Plugin cache directories.
 If upgrade fails, leave it installed.
-The remaining Windows Desktop test is required.
+A post-merge two-platform check is required.
 """
 
 

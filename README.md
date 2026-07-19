@@ -4,7 +4,7 @@ This is the standalone Public Plugin repository for Codex Skin. The installable 
 
 Current status: the pre-release Marketplace exposes the Codex Skin v0.0.2 upgrade candidate from this repository. The distribution spike remains a read-only version check; no theme capability or public compatibility claim is attached.
 
-The macOS upgrade spike starts from the v0.0.1 Git ref and checks replacement by v0.0.2 in an isolated Codex CLI profile. The Windows distribution workflow performs the equivalent CLI/cache upgrade on a clean GitHub-hosted runner. Windows Store Codex Desktop UI, restart, and authenticated new-task coverage remain a separate real-machine gate.
+The v0.0.1-to-v0.0.2 upgrade spike has passed macOS and Windows Desktop/CLI checks against the reviewed feature refs. The Windows distribution workflow also performs the equivalent CLI/cache upgrade on a clean GitHub-hosted runner. Every release still requires a post-merge two-platform check of the exact `main` form before its commands are published.
 
 The repository uses the MIT license. Its tracked-file allowlist, secret/Private-path checks and negative fixtures must pass before every remote push. Founder approval to create the Public repository has been recorded.
 
@@ -31,9 +31,9 @@ codex-skin-plugin/
 
 The bundled v0.0.2 Skill is a read-only installation and upgrade check. Production theme Skills, Helper, contracts, keys and platform adapters are intentionally deferred to the numbered M1/M4 tasks in the Private project plan.
 
-## Installation candidate
+## Installation
 
-The following is the single installation flow intended for the Codex Skin website after this release candidate passes its remaining gates and reaches `main`. It is not a claim that the current `main` branch is release-ready. Users do not need to open or fill in the Marketplace form, edit Codex configuration, or delete cache files.
+The following is the single installation flow for releases on `main`. A release is ready for website publication only after its documented gates pass. Users do not need to open or fill in the Marketplace form, edit Codex configuration, or delete cache files.
 
 Run these commands in a terminal:
 
@@ -45,9 +45,9 @@ codex plugin list --json
 
 The final command must show exactly one installed `codex-skin@codex-skin` entry with `installed: true` and `enabled: true`. Completely quit Codex, reopen it, start a new task, and ask Codex to run `$codex-skin-version`. A successful v0.0.2 distribution check reports Version `0.0.2`, Skill `codex-skin-version`, and that theme operations are unavailable in this test build.
 
-The command shape has passed macOS Desktop/CLI and Windows hosted CLI tests against feature refs. Publishing the `main` form still requires the remaining Windows Desktop test and a post-merge two-platform check.
+The command shape has passed macOS and Windows Desktop/CLI tests against the reviewed feature refs. For every release, publishing the `main` form also requires a post-merge two-platform check.
 
-## Upgrade candidate
+## Upgrade
 
 Refresh the existing Git-backed Marketplace snapshot, reinstall the same Plugin ID, and verify the result:
 

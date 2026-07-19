@@ -488,7 +488,7 @@ def validate_installation_instructions(
         "new task",
         "Do not edit Codex configuration or delete Marketplace/Plugin cache directories.",
         "leave it installed",
-        "remaining Windows Desktop test",
+        "post-merge two-platform check",
     ):
         if marker not in content:
             errors.append(f"README installation contract is missing safety marker: {marker}")
