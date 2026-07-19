@@ -79,7 +79,7 @@ try {
     throw "Scheduled Task did not use an interactive least-privilege principal"
   }
   $taskXml = Export-ScheduledTask -TaskName $taskName
-  foreach ($required in @("LeastPrivilege", "InteractiveToken", "run --reason process --json --internal-spike")) {
+  foreach ($required in @("InteractiveToken", "run --reason process --json --internal-spike")) {
     if (-not $taskXml.Contains($required)) { throw "Scheduled Task XML is missing $required" }
   }
   foreach ($forbidden in @("HighestAvailable", "<UserId>SYSTEM</UserId>", "powershell", "cmd.exe")) {
