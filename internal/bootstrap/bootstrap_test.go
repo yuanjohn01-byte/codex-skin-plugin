@@ -368,7 +368,7 @@ func (function roundTripFunc) RoundTrip(request *http.Request) (*http.Response, 
 	return function(request)
 }
 
-func TestRealHelperInstallation(t *testing.T) {
+func TestRealHelperInstallationAndFailedUpgrade(t *testing.T) {
 	helperPath := os.Getenv("CODEX_SKIN_TEST_HELPER")
 	if helperPath == "" {
 		t.Skip("set CODEX_SKIN_TEST_HELPER to run the native Helper installation test")
@@ -410,5 +410,35 @@ func TestRealHelperInstallation(t *testing.T) {
 	pointer, ok, err := readCurrent(filepath.Join(root, "bin"), platform)
 	if err != nil || !ok || pointer.HelperVersion != result.HelperVersion {
 		t.Fatalf("native current pointer failed: %#v, %v", pointer, err)
+	}
+
+	currentPath := filepath.Join(root, "bin", "current.json")
+	currentBeforeFailure, err := os.ReadFile(currentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	brokenUpgradeTag := key.addRelease(t, source, "0.1.0-s4", payload)
+	failedConfig := config
+	failedConfig.ReleaseTag = brokenUpgradeTag
+	if _, err := Install(context.Background(), failedConfig); !errors.Is(err, ErrSelfTest) {
+		t.Fatalf("native version-contract failure was not rejected: %v", err)
+	}
+	currentAfterFailure, err := os.ReadFile(currentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(currentBeforeFailure, currentAfterFailure) {
+		t.Fatal("failed native upgrade changed current.json")
+	}
+	staging, err := filepath.Glob(filepath.Join(root, "bin", ".staging-*"))
+	if err != nil || len(staging) != 0 {
+		t.Fatalf("failed native upgrade left staging directories: %v, %v", staging, err)
+	}
+	reused, err := Install(context.Background(), config)
+	if err != nil {
+		t.Fatalf("last-known-good native Helper was not reusable: %v", err)
+	}
+	if !reused.Reused || reused.Executable != result.Executable {
+		t.Fatalf("unexpected native reuse result: %#v", reused)
 	}
 }
