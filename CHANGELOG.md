@@ -20,6 +20,7 @@
 - Add an ephemeral Windows self-signed Authenticode/tamper/cleanup gate and document the remaining public trust, timestamp, and SmartScreen reputation limits.
 - Reject descriptor/signature tampering, artifact mismatch, HTTP truncation, interrupted reads, and downgrade before activation while preserving a reusable last-known-good Helper.
 - Add a fixed-surface per-user Guardian spike with deterministic builds, signature/self-test gates, side-by-side upgrade, verified rollback, registration-first uninstall, and native LaunchAgent/Scheduled Task lifecycle checks.
+- Add the generated device-authorization poll v1 Schema and an internal, non-CLI Helper client that respects the initial interval, `Retry-After`, persistent `slow_down`, context cancellation, and terminal cancel/expiry states without logging credentials.
 
 No theme operation or public compatibility claim is attached to this version.
 
