@@ -35,7 +35,7 @@ codex-skin-plugin/
     test_public_repository.py
 ```
 
-The bundled v0.0.2 Skill is a read-only installation and upgrade check. The S3 Helper source is not exposed as an installed capability yet. The internal device-authorization client can now validate a successful token response, keep the Access Token behind a redacting in-memory value, and rotate a Refresh Token stored with its device proof in macOS Keychain or Windows Credential Manager. This code still has no CLI or Skill entry and is not allowed to call the non-Production API from an installed Plugin. Production theme Skills, keys and platform adapters remain deferred to the numbered M1/M4 tasks in the Private project plan.
+The bundled v0.0.2 Skill is a read-only installation and upgrade check. The S3 Helper source is not exposed as an installed capability yet. The internal device-authorization client can now validate a successful token response, keep the Access Token behind a redacting in-memory value, and rotate a Refresh Token stored with its device proof in macOS Keychain or Windows Credential Manager. Its in-memory continuation validates the same-origin device-management response, preserves the original authorization proof, and invokes the caller's pending operation at most once after authorization; no theme operation is implemented here. This code still has no CLI or Skill entry and is not allowed to call the non-Production API from an installed Plugin. Production theme Skills, keys and platform adapters remain deferred to the numbered M1/M4 tasks in the Private project plan.
 
 ## Helper development
 
@@ -51,7 +51,7 @@ python3 tools/test_release_descriptor.py
 python3 tools/test_guardian_builds.py
 ```
 
-The canonical Helper protocol, release descriptor, and device-authorization poll Schemas live in the Private repository allowlist and are generated into `contracts/`. Direct edits to a Public Schema or its digest manifest fail the repository boundary check. The poll client is currently an internal library with no CLI or Skill entry and cannot make the unreleased Staging API a user dependency.
+The canonical Helper protocol, release descriptor, and device-authorization poll Schemas live in the Private repository allowlist and are generated into `contracts/`. Direct edits to a Public Schema or its digest manifest fail the repository boundary check. The poll client and same-task continuation are currently internal libraries with no CLI or Skill entry and cannot make the unreleased Staging API a user dependency.
 
 The credential backend uses the fixed `/usr/bin/security` binary on macOS and sends the secret only through stdin; it calls the current user's native `CredWriteW`/`CredReadW`/`CredDeleteW` APIs directly on Windows and frees the returned credential buffer. It never uses a shell, `cmdkey`, argv, environment variables, or an ordinary state file for credential contents. Native tests use an isolated temporary Keychain on macOS and a synthetic, cleanup-guarded Generic Credential on the Windows hosted runner.
 

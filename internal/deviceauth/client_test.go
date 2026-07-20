@@ -96,6 +96,26 @@ func envelope(code string, retryAfter int) string {
 	return string(encoded)
 }
 
+func deviceLimitEnvelope(action, state string, retryable bool, retryAfter int, managementURL string) string {
+	payload := map[string]any{
+		"error": map[string]any{
+			"code":       codeDeviceLimit,
+			"message":    "synthetic",
+			"action":     action,
+			"retryable":  retryable,
+			"incidentId": nil,
+			"details": map[string]any{
+				"state":         state,
+				"retryAfter":    retryAfter,
+				"managementUrl": managementURL,
+			},
+		},
+		"requestId": "req_0123456789abcdef0123456789abcdef",
+	}
+	encoded, _ := json.Marshal(payload)
+	return string(encoded)
+}
+
 func TestPollRespectsPendingAndSlowDownIntervals(t *testing.T) {
 	responses := []struct {
 		status     int
@@ -183,6 +203,297 @@ func TestPollStopsOnTerminalStates(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestPollReturnsOnlyValidatedDeviceLimit(t *testing.T) {
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.Header().Set("Retry-After", "7")
+		writer.WriteHeader(http.StatusConflict)
+		_, _ = writer.Write([]byte(deviceLimitEnvelope("manage_devices", "device_limit_reached", true, 7, server.URL+"/settings/devices")))
+	}))
+	defer server.Close()
+	store := newMemoryCredentialStore()
+	client, err := NewClient(server.URL, server.Client(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.wait = func(context.Context, time.Duration) error { return nil }
+	result, err := client.Poll(context.Background(), Credentials{
+		DeviceCode:   testDeviceCode,
+		CodeVerifier: testVerifier,
+		DeviceKey:    testDeviceKey,
+	}, minimumPollInterval)
+	if err != nil || result.Outcome != OutcomeDeviceLimit || result.ErrorCode != codeDeviceLimit {
+		t.Fatalf("device-limit result = %#v, %v", result, err)
+	}
+	if result.ManagementURL != server.URL+"/settings/devices" || result.RetryAfter != 7*time.Second {
+		t.Fatalf("device-limit metadata = %#v", result)
+	}
+	if len(store.values) != 0 {
+		t.Fatal("device-limit response wrote a credential")
+	}
+}
+
+func TestPollRejectsUnsafeDeviceLimitMetadata(t *testing.T) {
+	tests := []struct {
+		name          string
+		action        string
+		state         string
+		retryable     bool
+		retryAfter    int
+		managementURL func(string) string
+	}{
+		{name: "wrong action", action: "continue_polling", state: "device_limit_reached", retryable: true, retryAfter: 7, managementURL: func(origin string) string { return origin + "/settings/devices" }},
+		{name: "wrong state", action: "manage_devices", state: "authorization_pending", retryable: true, retryAfter: 7, managementURL: func(origin string) string { return origin + "/settings/devices" }},
+		{name: "not retryable", action: "manage_devices", state: "device_limit_reached", retryable: false, retryAfter: 7, managementURL: func(origin string) string { return origin + "/settings/devices" }},
+		{name: "missing retry", action: "manage_devices", state: "device_limit_reached", retryable: true, retryAfter: 0, managementURL: func(origin string) string { return origin + "/settings/devices" }},
+		{name: "foreign origin", action: "manage_devices", state: "device_limit_reached", retryable: true, retryAfter: 7, managementURL: func(string) string { return "https://example.com/settings/devices" }},
+		{name: "wrong scheme", action: "manage_devices", state: "device_limit_reached", retryable: true, retryAfter: 7, managementURL: func(origin string) string {
+			return strings.Replace(origin, "http://", "https://", 1) + "/settings/devices"
+		}},
+		{name: "wrong port", action: "manage_devices", state: "device_limit_reached", retryable: true, retryAfter: 7, managementURL: func(string) string { return "http://127.0.0.1:1/settings/devices" }},
+		{name: "userinfo", action: "manage_devices", state: "device_limit_reached", retryable: true, retryAfter: 7, managementURL: func(origin string) string { return strings.Replace(origin, "://", "://user@", 1) + "/settings/devices" }},
+		{name: "query", action: "manage_devices", state: "device_limit_reached", retryable: true, retryAfter: 7, managementURL: func(origin string) string { return origin + "/settings/devices?next=unsafe" }},
+		{name: "fragment", action: "manage_devices", state: "device_limit_reached", retryable: true, retryAfter: 7, managementURL: func(origin string) string { return origin + "/settings/devices#unsafe" }},
+		{name: "encoded path", action: "manage_devices", state: "device_limit_reached", retryable: true, retryAfter: 7, managementURL: func(origin string) string { return origin + "/%73ettings/devices" }},
+		{name: "wrong path", action: "manage_devices", state: "device_limit_reached", retryable: true, retryAfter: 7, managementURL: func(origin string) string { return origin + "/settings/billing" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var server *httptest.Server
+			server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+				writer.WriteHeader(http.StatusConflict)
+				_, _ = writer.Write([]byte(deviceLimitEnvelope(test.action, test.state, test.retryable, test.retryAfter, test.managementURL(server.URL))))
+			}))
+			defer server.Close()
+			client, err := NewClient(server.URL, server.Client(), newMemoryCredentialStore())
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.wait = func(context.Context, time.Duration) error { return nil }
+			_, err = client.Poll(context.Background(), Credentials{
+				DeviceCode:   testDeviceCode,
+				CodeVerifier: testVerifier,
+				DeviceKey:    testDeviceKey,
+			}, minimumPollInterval)
+			if !errors.Is(err, ErrProtocol) {
+				t.Fatalf("unsafe device-limit metadata error = %v", err)
+			}
+		})
+	}
+}
+
+func TestAuthorizeAndContinueRunsOriginalOperationAfterApproval(t *testing.T) {
+	accessToken := syntheticAccessToken("R")
+	refreshToken := strings.Repeat("S", 43)
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		requestCount++
+		if requestCount == 1 {
+			writer.WriteHeader(http.StatusAccepted)
+			_, _ = writer.Write([]byte(envelope(codePending, 4)))
+			return
+		}
+		_, _ = writer.Write([]byte(tokenEnvelope(accessToken, refreshToken, testDeviceID)))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, server.Client(), newMemoryCredentialStore())
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.wait = func(context.Context, time.Duration) error { return nil }
+	originalInstruction := "install requested theme"
+	operationCount := 0
+	result, err := client.AuthorizeAndContinue(context.Background(), Continuation{
+		Credentials: Credentials{
+			DeviceCode:   testDeviceCode,
+			CodeVerifier: testVerifier,
+			DeviceKey:    testDeviceKey,
+		},
+		InitialInterval: minimumPollInterval,
+		Run: func(_ context.Context, authorized Result) error {
+			operationCount++
+			if originalInstruction != "install requested theme" || authorized.AccessToken == nil || authorized.AccessToken.Value() != accessToken {
+				return errors.New("original operation context was not preserved")
+			}
+			return nil
+		},
+	})
+	if err != nil || result.Outcome != OutcomeAuthorized || operationCount != 1 || requestCount != 2 {
+		t.Fatalf("continuation result = %#v, requests = %d, operations = %d, error = %v", result, requestCount, operationCount, err)
+	}
+}
+
+func TestAuthorizeAndContinueResumesSameProofAfterDeviceRevoke(t *testing.T) {
+	accessToken := syntheticAccessToken("T")
+	refreshToken := strings.Repeat("U", 43)
+	store := newMemoryCredentialStore()
+	var server *httptest.Server
+	requestCount := 0
+	deviceSlotReleased := false
+	proofs := make([]proofRequest, 0, 2)
+	server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		var proof proofRequest
+		if err := json.NewDecoder(request.Body).Decode(&proof); err != nil {
+			t.Fatal(err)
+		}
+		proofs = append(proofs, proof)
+		requestCount++
+		if requestCount == 1 {
+			writer.Header().Set("Retry-After", "7")
+			writer.WriteHeader(http.StatusConflict)
+			_, _ = writer.Write([]byte(deviceLimitEnvelope("manage_devices", "device_limit_reached", true, 7, server.URL+"/settings/devices")))
+			return
+		}
+		if !deviceSlotReleased {
+			t.Fatal("authorization resumed before the device-slot callback completed")
+		}
+		_, _ = writer.Write([]byte(tokenEnvelope(accessToken, refreshToken, testDeviceID)))
+	}))
+	defer server.Close()
+	client, err := NewClient(server.URL, server.Client(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var waits []time.Duration
+	client.wait = func(_ context.Context, duration time.Duration) error {
+		waits = append(waits, duration)
+		return nil
+	}
+	credentials := Credentials{DeviceCode: testDeviceCode, CodeVerifier: testVerifier, DeviceKey: testDeviceKey}
+	originalInstruction := "install requested theme"
+	limitCount := 0
+	operationCount := 0
+	result, err := client.AuthorizeAndContinue(context.Background(), Continuation{
+		Credentials:     credentials,
+		InitialInterval: minimumPollInterval,
+		AwaitDeviceSlot: func(_ context.Context, limit DeviceLimit) error {
+			limitCount++
+			if limit.ManagementURL != server.URL+"/settings/devices" || limit.RetryAfter != 7*time.Second {
+				return errors.New("device management metadata changed")
+			}
+			if len(store.values) != 0 {
+				return errors.New("device-limit response persisted a credential")
+			}
+			deviceSlotReleased = true
+			return nil
+		},
+		Run: func(_ context.Context, authorized Result) error {
+			operationCount++
+			if originalInstruction != "install requested theme" || authorized.AccessToken == nil || authorized.AccessToken.Value() != accessToken {
+				return errors.New("original operation context was not preserved")
+			}
+			return nil
+		},
+	})
+	if err != nil || result.Outcome != OutcomeAuthorized || limitCount != 1 || operationCount != 1 || requestCount != 2 {
+		t.Fatalf("continuation result = %#v, limits = %d, operations = %d, requests = %d, error = %v", result, limitCount, operationCount, requestCount, err)
+	}
+	if len(waits) != 2 || waits[0] != minimumPollInterval || waits[1] != 7*time.Second {
+		t.Fatalf("continuation waits = %v", waits)
+	}
+	for _, proof := range proofs {
+		if proof.DeviceCode != credentials.DeviceCode || proof.CodeVerifier != credentials.CodeVerifier {
+			t.Fatalf("continuation changed authorization proof: %#v", proofs)
+		}
+	}
+	credential := store.credential(t, testDeviceID)
+	if credential.RefreshToken != refreshToken || credential.DeviceKey != testDeviceKey {
+		t.Fatal("continuation did not persist the successful token response")
+	}
+	formatted := fmt.Sprintf("%#v", Continuation{Credentials: credentials, InitialInterval: minimumPollInterval})
+	if strings.Contains(formatted, testDeviceCode) || strings.Contains(formatted, testVerifier) || strings.Contains(formatted, testDeviceKey) {
+		t.Fatal("formatted continuation exposed authorization credentials")
+	}
+}
+
+func TestAuthorizeAndContinueDoesNotRunAfterBlockedOrTerminalResult(t *testing.T) {
+	t.Run("management callback failure", func(t *testing.T) {
+		callbackError := errors.New("device management was not completed")
+		operationCount := 0
+		var server *httptest.Server
+		server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(http.StatusConflict)
+			_, _ = writer.Write([]byte(deviceLimitEnvelope("manage_devices", "device_limit_reached", true, 7, server.URL+"/settings/devices")))
+		}))
+		defer server.Close()
+		client, err := NewClient(server.URL, server.Client(), newMemoryCredentialStore())
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.wait = func(context.Context, time.Duration) error { return nil }
+		result, err := client.AuthorizeAndContinue(context.Background(), Continuation{
+			Credentials:     Credentials{DeviceCode: testDeviceCode, CodeVerifier: testVerifier, DeviceKey: testDeviceKey},
+			InitialInterval: minimumPollInterval,
+			AwaitDeviceSlot: func(context.Context, DeviceLimit) error { return callbackError },
+			Run: func(context.Context, Result) error {
+				operationCount++
+				return nil
+			},
+		})
+		if !errors.Is(err, callbackError) || result.Outcome != OutcomeDeviceLimit || operationCount != 0 {
+			t.Fatalf("blocked continuation = %#v, operations = %d, error = %v", result, operationCount, err)
+		}
+	})
+
+	t.Run("repeated limit returns without repeat prompt", func(t *testing.T) {
+		requestCount := 0
+		limitCount := 0
+		operationCount := 0
+		var server *httptest.Server
+		server = httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			requestCount++
+			writer.WriteHeader(http.StatusConflict)
+			_, _ = writer.Write([]byte(deviceLimitEnvelope("manage_devices", "device_limit_reached", true, 4, server.URL+"/settings/devices")))
+		}))
+		defer server.Close()
+		client, err := NewClient(server.URL, server.Client(), newMemoryCredentialStore())
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.wait = func(context.Context, time.Duration) error { return nil }
+		result, err := client.AuthorizeAndContinue(context.Background(), Continuation{
+			Credentials:     Credentials{DeviceCode: testDeviceCode, CodeVerifier: testVerifier, DeviceKey: testDeviceKey},
+			InitialInterval: minimumPollInterval,
+			AwaitDeviceSlot: func(context.Context, DeviceLimit) error {
+				limitCount++
+				return nil
+			},
+			Run: func(context.Context, Result) error {
+				operationCount++
+				return nil
+			},
+		})
+		if err != nil || result.Outcome != OutcomeDeviceLimit || requestCount != 2 || limitCount != 1 || operationCount != 0 {
+			t.Fatalf("repeated limit = %#v, requests = %d, limits = %d, operations = %d, error = %v", result, requestCount, limitCount, operationCount, err)
+		}
+	})
+
+	t.Run("terminal authorization", func(t *testing.T) {
+		operationCount := 0
+		server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+			writer.WriteHeader(http.StatusForbidden)
+			_, _ = writer.Write([]byte(envelope(codeDenied, 0)))
+		}))
+		defer server.Close()
+		client, err := NewClient(server.URL, server.Client(), newMemoryCredentialStore())
+		if err != nil {
+			t.Fatal(err)
+		}
+		client.wait = func(context.Context, time.Duration) error { return nil }
+		result, err := client.AuthorizeAndContinue(context.Background(), Continuation{
+			Credentials:     Credentials{DeviceCode: testDeviceCode, CodeVerifier: testVerifier, DeviceKey: testDeviceKey},
+			InitialInterval: minimumPollInterval,
+			Run: func(context.Context, Result) error {
+				operationCount++
+				return nil
+			},
+		})
+		if err != nil || result.Outcome != OutcomeCancelled || operationCount != 0 {
+			t.Fatalf("terminal continuation = %#v, operations = %d, error = %v", result, operationCount, err)
+		}
+	})
 }
 
 func TestCancelAndErrorsDoNotExposeCredentials(t *testing.T) {
