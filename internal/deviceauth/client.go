@@ -28,6 +28,7 @@ const (
 	codeExpired        = "CS-AUTH-POLL-005"
 	codeDenied         = "CS-AUTH-POLL-006"
 	codeConsumed       = "CS-AUTH-POLL-007"
+	codeDeviceLimit    = "CS-AUTH-POLL-010"
 
 	codeTokenInvalidRequest = "CS-AUTH-TOKEN-001"
 	codeTokenInvalidGrant   = "CS-AUTH-TOKEN-002"
@@ -60,6 +61,7 @@ const (
 	OutcomeExpired     Outcome = "expired"
 	OutcomeConsumed    Outcome = "consumed"
 	OutcomeInvalid     Outcome = "invalid"
+	OutcomeDeviceLimit Outcome = "device_limit"
 	OutcomeRetry       Outcome = "retry"
 	OutcomeReauthorize Outcome = "reauthorize"
 	OutcomeFailed      Outcome = "failed"
@@ -69,6 +71,14 @@ type Credentials struct {
 	DeviceCode   string
 	CodeVerifier string
 	DeviceKey    string
+}
+
+func (Credentials) String() string {
+	return "[REDACTED]"
+}
+
+func (Credentials) GoString() string {
+	return "deviceauth.Credentials([REDACTED])"
 }
 
 type Device struct {
@@ -104,12 +114,34 @@ func (*AccessToken) GoString() string {
 }
 
 type Result struct {
-	Outcome     Outcome
-	RequestID   string
-	AccessToken *AccessToken
-	Device      Device
-	ErrorCode   string
-	RetryAfter  time.Duration
+	Outcome       Outcome
+	RequestID     string
+	AccessToken   *AccessToken
+	Device        Device
+	ErrorCode     string
+	RetryAfter    time.Duration
+	ManagementURL string
+}
+
+type DeviceLimit struct {
+	RequestID     string
+	RetryAfter    time.Duration
+	ManagementURL string
+}
+
+type Continuation struct {
+	Credentials     Credentials
+	InitialInterval time.Duration
+	AwaitDeviceSlot func(context.Context, DeviceLimit) error
+	Run             func(context.Context, Result) error
+}
+
+func (Continuation) String() string {
+	return "[REDACTED]"
+}
+
+func (Continuation) GoString() string {
+	return "deviceauth.Continuation([REDACTED])"
 }
 
 type CredentialStore interface {
@@ -143,9 +175,13 @@ type responseEnvelope struct {
 	Data      *tokenResponseData `json:"data"`
 	RequestID string             `json:"requestId"`
 	Error     *struct {
-		Code    string `json:"code"`
-		Details struct {
-			RetryAfter int `json:"retryAfter"`
+		Code      string `json:"code"`
+		Action    string `json:"action"`
+		Retryable bool   `json:"retryable"`
+		Details   struct {
+			State         string `json:"state"`
+			RetryAfter    int    `json:"retryAfter"`
+			ManagementURL string `json:"managementUrl"`
 		} `json:"details"`
 	} `json:"error"`
 }
@@ -330,6 +366,17 @@ func (client *Client) Poll(ctx context.Context, credentials Credentials, initial
 				return Result{}, ErrProtocol
 			}
 			return Result{Outcome: OutcomeConsumed, RequestID: envelope.RequestID}, nil
+		case codeDeviceLimit:
+			if status != http.StatusConflict || !client.validDeviceLimit(envelope, retryAfter) {
+				return Result{}, ErrProtocol
+			}
+			return Result{
+				Outcome:       OutcomeDeviceLimit,
+				RequestID:     envelope.RequestID,
+				ErrorCode:     codeDeviceLimit,
+				RetryAfter:    retryAfter,
+				ManagementURL: envelope.Error.Details.ManagementURL,
+			}, nil
 		case codeInvalidRequest, codeInvalidGrant:
 			if status != http.StatusBadRequest {
 				return Result{}, ErrProtocol
@@ -342,6 +389,54 @@ func (client *Client) Poll(ctx context.Context, credentials Credentials, initial
 			interval = maximumPollInterval
 		}
 	}
+}
+
+func (client *Client) AuthorizeAndContinue(ctx context.Context, continuation Continuation) (Result, error) {
+	if continuation.Run == nil {
+		return Result{}, ErrInvalidConfiguration
+	}
+	interval := continuation.InitialInterval
+	deviceLimitHandled := false
+	for {
+		result, err := client.Poll(ctx, continuation.Credentials, interval)
+		if err != nil {
+			return Result{}, err
+		}
+		if result.Outcome == OutcomeDeviceLimit {
+			if continuation.AwaitDeviceSlot == nil || deviceLimitHandled {
+				return result, nil
+			}
+			if err := continuation.AwaitDeviceSlot(ctx, DeviceLimit{
+				RequestID:     result.RequestID,
+				RetryAfter:    result.RetryAfter,
+				ManagementURL: result.ManagementURL,
+			}); err != nil {
+				return result, err
+			}
+			deviceLimitHandled = true
+			interval = largerDuration(interval, result.RetryAfter)
+			continue
+		}
+		if result.Outcome == OutcomeAuthorized {
+			if err := continuation.Run(ctx, result); err != nil {
+				return result, err
+			}
+		}
+		return result, nil
+	}
+}
+
+func (client *Client) validDeviceLimit(envelope responseEnvelope, retryAfter time.Duration) bool {
+	if envelope.Error == nil || envelope.Error.Action != "manage_devices" || !envelope.Error.Retryable || envelope.Error.Details.State != "device_limit_reached" || retryAfter <= 0 {
+		return false
+	}
+	managementURL, err := url.Parse(envelope.Error.Details.ManagementURL)
+	if err != nil || !managementURL.IsAbs() || managementURL.Opaque != "" || managementURL.User != nil || managementURL.RawQuery != "" || managementURL.ForceQuery || managementURL.Fragment != "" || managementURL.RawPath != "" || managementURL.Path != "/settings/devices" {
+		return false
+	}
+	return strings.EqualFold(managementURL.Scheme, client.baseURL.Scheme) &&
+		strings.EqualFold(managementURL.Hostname(), client.baseURL.Hostname()) &&
+		managementURL.Port() == client.baseURL.Port()
 }
 
 func (client *Client) Refresh(ctx context.Context, deviceID string) (Result, error) {

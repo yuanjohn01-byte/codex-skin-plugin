@@ -23,6 +23,7 @@
 - Add the generated device-authorization poll v1 Schema and an internal, non-CLI Helper client that respects the initial interval, `Retry-After`, persistent `slow_down`, context cancellation, and terminal cancel/expiry states without logging credentials.
 - Extend the generated device-authorization contract with one-time token issuance, refresh rotation, replay-revocation errors, and the refresh endpoint while keeping the v0.0.2 Plugin and Helper command surface unchanged.
 - Add internal macOS Keychain and Windows Credential Manager backends plus token-response persistence/refresh rotation tests; Access Tokens remain memory-only and the installed v0.0.2 surface remains unchanged.
+- Add an internal same-task authorization continuation that strictly validates device-limit management metadata, reuses the same proof after an explicit device-slot signal, and runs the caller's pending operation at most once without changing the installed v0.0.2 surface.
 
 No theme operation or public compatibility claim is attached to this version.
 
