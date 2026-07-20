@@ -36,6 +36,8 @@ jobs:
         with:
           go-version: "1.26.5"
           cache: true
+      - name: Test native Keychain storage and token rotation client
+        run: go test -count=1 ./internal/credentials ./internal/deviceauth
       - name: Build both macOS Helper architectures
         run: >-
           python3 tools/build_helper.py
