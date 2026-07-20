@@ -168,7 +168,7 @@ func TestGeneratedContractMatchesClientConstants(t *testing.T) {
 	if err := json.Unmarshal(content, &schema); err != nil {
 		t.Fatal(err)
 	}
-	if schema.Endpoints["poll"] != pollPath || schema.Endpoints["cancel"] != cancelPath {
+	if schema.Endpoints["poll"] != pollPath || schema.Endpoints["cancel"] != cancelPath || schema.Endpoints["refresh"] != "/api/v1/plugin/token/refresh" {
 		t.Fatalf("generated endpoint contract differs: %#v", schema.Endpoints)
 	}
 	encoded := string(content)
@@ -177,7 +177,12 @@ func TestGeneratedContractMatchesClientConstants(t *testing.T) {
 			t.Fatalf("generated contract is missing %s", code)
 		}
 	}
-	for _, definition := range []string{"proofRequest", "pollErrorEnvelope", "cancelSuccessEnvelope"} {
+	for _, code := range []string{"CS-AUTH-TOKEN-001", "CS-AUTH-TOKEN-002", "CS-AUTH-TOKEN-003", "CS-AUTH-TOKEN-004", "CS-AUTH-TOKEN-005", "CS-AUTH-TOKEN-006", "CS-AUTH-TOKEN-007"} {
+		if !strings.Contains(encoded, `"`+code+`"`) {
+			t.Fatalf("generated contract is missing %s", code)
+		}
+	}
+	for _, definition := range []string{"proofRequest", "pollErrorEnvelope", "cancelSuccessEnvelope", "tokenSuccessEnvelope", "refreshRequest", "tokenErrorEnvelope"} {
 		if _, ok := schema.Defs[definition]; !ok {
 			t.Fatalf("generated contract is missing %s", definition)
 		}

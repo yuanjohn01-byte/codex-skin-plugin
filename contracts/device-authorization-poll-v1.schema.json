@@ -2,10 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yuanjohn01-byte/codex-skin-plugin/blob/main/contracts/device-authorization-poll-v1.schema.json",
   "title": "Codex Skin device authorization poll contract v1",
-  "description": "Public request and non-token response contract for the Helper device authorization poll and cancel endpoints. Token success is added by M1-S4-005.",
+  "description": "Public request and response contract for Helper device authorization polling, cancellation, token issuance, and refresh rotation.",
   "x-endpoints": {
     "poll": "/api/v1/plugin/device-authorizations/token",
-    "cancel": "/api/v1/plugin/device-authorizations/cancel"
+    "cancel": "/api/v1/plugin/device-authorizations/cancel",
+    "refresh": "/api/v1/plugin/token/refresh"
   },
   "oneOf": [
     {
@@ -16,6 +17,15 @@
     },
     {
       "$ref": "#/$defs/cancelSuccessEnvelope"
+    },
+    {
+      "$ref": "#/$defs/tokenSuccessEnvelope"
+    },
+    {
+      "$ref": "#/$defs/refreshRequest"
+    },
+    {
+      "$ref": "#/$defs/tokenErrorEnvelope"
     }
   ],
   "$defs": {
@@ -58,7 +68,8 @@
                 "CS-AUTH-POLL-005",
                 "CS-AUTH-POLL-006",
                 "CS-AUTH-POLL-007",
-                "CS-AUTH-POLL-008"
+                "CS-AUTH-POLL-008",
+                "CS-AUTH-POLL-009"
               ]
             },
             "message": {
@@ -71,6 +82,7 @@
                 "fix_request",
                 "continue_polling",
                 "reauthorize",
+                "retry_later",
                 "contact_support"
               ]
             },
@@ -106,6 +118,151 @@
                   "type": "integer",
                   "minimum": 1,
                   "maximum": 300
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^req_[a-f0-9]{32}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "tokenSuccessEnvelope": {
+      "type": "object",
+      "required": ["data", "requestId"],
+      "properties": {
+        "data": {
+          "type": "object",
+          "required": [
+            "tokenType",
+            "accessToken",
+            "expiresIn",
+            "refreshToken",
+            "device"
+          ],
+          "properties": {
+            "tokenType": {
+              "const": "Bearer"
+            },
+            "accessToken": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$",
+              "minLength": 80,
+              "maxLength": 8192
+            },
+            "expiresIn": {
+              "const": 900
+            },
+            "refreshToken": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            },
+            "device": {
+              "type": "object",
+              "required": ["id", "displayName"],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "^dev_[A-Za-z0-9_-]{32}$"
+                },
+                "displayName": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^req_[a-f0-9]{32}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "refreshRequest": {
+      "type": "object",
+      "required": ["refreshToken", "deviceKey"],
+      "properties": {
+        "refreshToken": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "deviceKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "tokenErrorEnvelope": {
+      "type": "object",
+      "required": ["error", "requestId"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "required": [
+            "code",
+            "message",
+            "action",
+            "retryable",
+            "incidentId",
+            "details"
+          ],
+          "properties": {
+            "code": {
+              "enum": [
+                "CS-AUTH-TOKEN-001",
+                "CS-AUTH-TOKEN-002",
+                "CS-AUTH-TOKEN-003",
+                "CS-AUTH-TOKEN-004",
+                "CS-AUTH-TOKEN-005",
+                "CS-AUTH-TOKEN-006",
+                "CS-AUTH-TOKEN-007"
+              ]
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "action": {
+              "enum": [
+                "fix_request",
+                "reauthorize",
+                "retry_later",
+                "contact_support"
+              ]
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "incidentId": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^INC-[A-Z0-9]{12}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "details": {
+              "type": "object",
+              "properties": {
+                "retryAfter": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 600
                 }
               },
               "additionalProperties": false

@@ -126,11 +126,15 @@ def write_baseline(fixture: Path) -> None:
             "x-endpoints": {
                 "poll": "/api/v1/plugin/device-authorizations/token",
                 "cancel": "/api/v1/plugin/device-authorizations/cancel",
+                "refresh": "/api/v1/plugin/token/refresh",
             },
             "$defs": {
                 "proofRequest": {},
                 "pollErrorEnvelope": {},
                 "cancelSuccessEnvelope": {},
+                "tokenSuccessEnvelope": {},
+                "refreshRequest": {},
+                "tokenErrorEnvelope": {},
             },
         },
     }
