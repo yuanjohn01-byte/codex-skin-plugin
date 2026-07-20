@@ -1,0 +1,120 @@
+name: Per-User Guardian Lifecycle Spike
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/guardian-lifecycle-spike.yml"
+      - "cmd/codex-skin-guardian/**"
+      - "go.mod"
+      - "go.sum"
+      - "internal/buildinfo/**"
+      - "internal/guardian/**"
+      - "internal/guardiancli/**"
+      - "tools/build_guardian.py"
+      - "tools/test_guardian_builds.py"
+      - "tools/test_guardian_macos.py"
+      - "tools/test_guardian_windows.ps1"
+  push:
+    branches:
+      - "codex/**"
+    paths:
+      - ".github/workflows/guardian-lifecycle-spike.yml"
+      - "cmd/codex-skin-guardian/**"
+      - "go.mod"
+      - "go.sum"
+      - "internal/buildinfo/**"
+      - "internal/guardian/**"
+      - "internal/guardiancli/**"
+      - "tools/build_guardian.py"
+      - "tools/test_guardian_builds.py"
+      - "tools/test_guardian_macos.py"
+      - "tools/test_guardian_windows.ps1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  guardian-reproducible-cross-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: false
+      - name: Build all targets twice and compare
+        run: python3 tools/test_guardian_builds.py
+      - name: Test lifecycle manager with race detector
+        run: go test -race ./internal/guardian ./internal/guardiancli
+      - name: Prove the Guardian command has no network package
+        run: |
+          if go list -deps ./cmd/codex-skin-guardian | grep -E '^net($|/)'; then
+            echo "Guardian command unexpectedly includes a network package" >&2
+            exit 1
+          fi
+
+  macos-per-user-lifecycle:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: false
+      - name: Select native macOS architecture
+        id: native
+        run: |
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            echo "target=macos-arm64" >> "$GITHUB_OUTPUT"
+            echo "suffix=macos_arm64" >> "$GITHUB_OUTPUT"
+          else
+            echo "target=macos-x64" >> "$GITHUB_OUTPUT"
+            echo "suffix=macos_x64" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build two native Guardian versions
+        run: |
+          python3 tools/build_guardian.py --target "${{ steps.native.outputs.target }}" --version 0.1.0-s3 --output dist/guardian/v1
+          python3 tools/build_guardian.py --target "${{ steps.native.outputs.target }}" --version 0.1.0-s4 --output dist/guardian/v2
+      - name: Sign, register, upgrade, rollback, and uninstall
+        run: >-
+          python3 tools/test_guardian_macos.py
+          --v1 "dist/guardian/v1/codex-skin-guardian_0.1.0-s3_${{ steps.native.outputs.suffix }}"
+          --v2 "dist/guardian/v2/codex-skin-guardian_0.1.0-s4_${{ steps.native.outputs.suffix }}"
+      - name: Upload non-secret lifecycle summary only
+        uses: actions/upload-artifact@v4
+        with:
+          name: guardian-macos-spike-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/guardian/macos-lifecycle-summary.json
+          if-no-files-found: error
+          retention-days: 14
+
+  windows-per-user-lifecycle:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: false
+      - name: Build two native Guardian versions
+        shell: pwsh
+        run: |
+          python tools/build_guardian.py --target windows-x64 --version 0.1.0-s3 --output dist/guardian/v1
+          python tools/build_guardian.py --target windows-x64 --version 0.1.0-s4 --output dist/guardian/v2
+      - name: Sign, register, upgrade, rollback, and uninstall
+        shell: pwsh
+        run: >-
+          ./tools/test_guardian_windows.ps1
+          -V1Path dist/guardian/v1/codex-skin-guardian_0.1.0-s3_windows_x64.exe
+          -V2Path dist/guardian/v2/codex-skin-guardian_0.1.0-s4_windows_x64.exe
+      - name: Upload non-secret lifecycle summary only
+        uses: actions/upload-artifact@v4
+        with:
+          name: guardian-windows-spike-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/guardian/windows-lifecycle-summary.json
+          if-no-files-found: error
+          retention-days: 14
