@@ -22,6 +22,7 @@
 - Add a fixed-surface per-user Guardian spike with deterministic builds, signature/self-test gates, side-by-side upgrade, verified rollback, registration-first uninstall, and native LaunchAgent/Scheduled Task lifecycle checks.
 - Add the generated device-authorization poll v1 Schema and an internal, non-CLI Helper client that respects the initial interval, `Retry-After`, persistent `slow_down`, context cancellation, and terminal cancel/expiry states without logging credentials.
 - Extend the generated device-authorization contract with one-time token issuance, refresh rotation, replay-revocation errors, and the refresh endpoint while keeping the v0.0.2 Plugin and Helper command surface unchanged.
+- Add internal macOS Keychain and Windows Credential Manager backends plus token-response persistence/refresh rotation tests; Access Tokens remain memory-only and the installed v0.0.2 surface remains unchanged.
 
 No theme operation or public compatibility claim is attached to this version.
 
