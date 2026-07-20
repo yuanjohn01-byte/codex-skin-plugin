@@ -565,12 +565,15 @@ def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[
             "tokenSuccessEnvelope",
             "refreshRequest",
             "tokenErrorEnvelope",
+            "logoutSuccessEnvelope",
+            "logoutErrorEnvelope",
         }.issubset(definitions):
             errors.append("Device authorization poll contract is missing required v1 definitions")
         if endpoints != {
             "poll": "/api/v1/plugin/device-authorizations/token",
             "cancel": "/api/v1/plugin/device-authorizations/cancel",
             "refresh": "/api/v1/plugin/token/refresh",
+            "logout": "/api/v1/plugin/logout",
         }:
             errors.append("Device authorization poll contract endpoint paths are invalid")
 

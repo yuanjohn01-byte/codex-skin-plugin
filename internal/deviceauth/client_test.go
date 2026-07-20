@@ -227,7 +227,7 @@ func TestGeneratedContractMatchesClientConstants(t *testing.T) {
 	if err := json.Unmarshal(content, &schema); err != nil {
 		t.Fatal(err)
 	}
-	if schema.Endpoints["poll"] != pollPath || schema.Endpoints["cancel"] != cancelPath || schema.Endpoints["refresh"] != refreshPath {
+	if schema.Endpoints["poll"] != pollPath || schema.Endpoints["cancel"] != cancelPath || schema.Endpoints["refresh"] != refreshPath || schema.Endpoints["logout"] != "/api/v1/plugin/logout" {
 		t.Fatalf("generated endpoint contract differs: %#v", schema.Endpoints)
 	}
 	encoded := string(content)
@@ -241,7 +241,12 @@ func TestGeneratedContractMatchesClientConstants(t *testing.T) {
 			t.Fatalf("generated contract is missing %s", code)
 		}
 	}
-	for _, definition := range []string{"proofRequest", "pollErrorEnvelope", "cancelSuccessEnvelope", "tokenSuccessEnvelope", "refreshRequest", "tokenErrorEnvelope"} {
+	for _, code := range []string{"CS-AUTH-POLL-010", "CS-AUTH-LOGOUT-001", "CS-AUTH-LOGOUT-002", "CS-AUTH-LOGOUT-003", "CS-AUTH-LOGOUT-004"} {
+		if !strings.Contains(encoded, `"`+code+`"`) {
+			t.Fatalf("generated contract is missing %s", code)
+		}
+	}
+	for _, definition := range []string{"proofRequest", "pollErrorEnvelope", "cancelSuccessEnvelope", "tokenSuccessEnvelope", "refreshRequest", "tokenErrorEnvelope", "logoutSuccessEnvelope", "logoutErrorEnvelope"} {
 		if _, ok := schema.Defs[definition]; !ok {
 			t.Fatalf("generated contract is missing %s", definition)
 		}

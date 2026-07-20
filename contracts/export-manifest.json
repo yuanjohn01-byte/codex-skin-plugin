@@ -12,7 +12,7 @@
     },
     {
       "destination": "contracts/device-authorization-poll-v1.schema.json",
-      "sha256": "a10012a83b05f22109aef18f80016cc79d6be964245ac30b4371af0475056d24",
+      "sha256": "ebc422ad4efa58ad4c3a3ab2aaedb338a81cfba685f81797a9f5c0a018602fb0",
       "source": "codex-skin/contracts/public/device-authorization-poll-v1.schema.json"
     }
   ],

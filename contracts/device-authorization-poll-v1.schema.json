@@ -2,11 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yuanjohn01-byte/codex-skin-plugin/blob/main/contracts/device-authorization-poll-v1.schema.json",
   "title": "Codex Skin device authorization poll contract v1",
-  "description": "Public request and response contract for Helper device authorization polling, cancellation, token issuance, and refresh rotation.",
+  "description": "Public request and response contract for Helper device authorization polling, cancellation, token issuance, refresh rotation, device-limit recovery, and logout.",
   "x-endpoints": {
     "poll": "/api/v1/plugin/device-authorizations/token",
     "cancel": "/api/v1/plugin/device-authorizations/cancel",
-    "refresh": "/api/v1/plugin/token/refresh"
+    "refresh": "/api/v1/plugin/token/refresh",
+    "logout": "/api/v1/plugin/logout"
   },
   "oneOf": [
     {
@@ -26,6 +27,12 @@
     },
     {
       "$ref": "#/$defs/tokenErrorEnvelope"
+    },
+    {
+      "$ref": "#/$defs/logoutSuccessEnvelope"
+    },
+    {
+      "$ref": "#/$defs/logoutErrorEnvelope"
     }
   ],
   "$defs": {
@@ -69,7 +76,8 @@
                 "CS-AUTH-POLL-006",
                 "CS-AUTH-POLL-007",
                 "CS-AUTH-POLL-008",
-                "CS-AUTH-POLL-009"
+                "CS-AUTH-POLL-009",
+                "CS-AUTH-POLL-010"
               ]
             },
             "message": {
@@ -83,7 +91,8 @@
                 "continue_polling",
                 "reauthorize",
                 "retry_later",
-                "contact_support"
+                "contact_support",
+                "manage_devices"
               ]
             },
             "retryable": {
@@ -111,13 +120,19 @@
                     "slow_down",
                     "expired_token",
                     "access_denied",
-                    "authorization_consumed"
+                    "authorization_consumed",
+                    "device_limit_reached"
                   ]
                 },
                 "retryAfter": {
                   "type": "integer",
                   "minimum": 1,
                   "maximum": 300
+                },
+                "managementUrl": {
+                  "type": "string",
+                  "pattern": "^https?://[^\\s]+/settings/devices$",
+                  "maxLength": 2048
                 }
               },
               "additionalProperties": false
@@ -287,6 +302,90 @@
           "properties": {
             "status": {
               "const": "cancelled"
+            }
+          },
+          "additionalProperties": false
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^req_[a-f0-9]{32}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "logoutSuccessEnvelope": {
+      "type": "object",
+      "required": ["data", "requestId"],
+      "properties": {
+        "data": {
+          "type": "object",
+          "required": ["deviceId", "status"],
+          "properties": {
+            "deviceId": {
+              "type": "string",
+              "pattern": "^dev_[A-Za-z0-9_-]{32}$"
+            },
+            "status": {
+              "const": "logged_out"
+            }
+          },
+          "additionalProperties": false
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^req_[a-f0-9]{32}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "logoutErrorEnvelope": {
+      "type": "object",
+      "required": ["error", "requestId"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "required": [
+            "code",
+            "message",
+            "action",
+            "retryable",
+            "incidentId",
+            "details"
+          ],
+          "properties": {
+            "code": {
+              "enum": [
+                "CS-AUTH-LOGOUT-001",
+                "CS-AUTH-LOGOUT-002",
+                "CS-AUTH-LOGOUT-003",
+                "CS-AUTH-LOGOUT-004"
+              ]
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "action": {
+              "enum": ["fix_request", "reauthorize", "contact_support"]
+            },
+            "retryable": {
+              "const": false
+            },
+            "incidentId": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^INC-[A-Z0-9]{12}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "details": {
+              "type": "object",
+              "additionalProperties": false
             }
           },
           "additionalProperties": false
