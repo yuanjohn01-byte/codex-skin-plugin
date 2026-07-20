@@ -98,30 +98,47 @@ def write_baseline(fixture: Path) -> None:
         encoding="utf-8",
     )
     (fixture / "README.md").write_text(README_CONTRACT, encoding="utf-8")
-    contract = fixture / "contracts" / "helper-protocol-v1.schema.json"
-    contract.parent.mkdir(parents=True)
-    contract_payload = {
-        "$schema": "https://json-schema.org/draft/2020-12/schema",
-        "$defs": {
-            "progressEvent": {},
-            "resultEvent": {},
-            "error": {},
-            "versionData": {},
-            "doctorData": {},
+    contracts = {
+        "helper-protocol-v1.schema.json": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {
+                "progressEvent": {},
+                "resultEvent": {},
+                "error": {},
+                "versionData": {},
+                "doctorData": {},
+            },
+        },
+        "helper-release-descriptor-v1.schema.json": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "required": [
+                "schemaVersion",
+                "helperVersion",
+                "releaseTag",
+                "publishedAt",
+                "signingKeyId",
+                "artifacts",
+            ],
+            "additionalProperties": False,
         },
     }
-    contract_bytes = (json.dumps(contract_payload) + "\n").encode()
-    contract.write_bytes(contract_bytes)
+    contract_root = fixture / "contracts"
+    contract_root.mkdir(parents=True)
+    manifest_artifacts = []
+    for filename, payload in contracts.items():
+        contract_bytes = (json.dumps(payload) + "\n").encode()
+        (contract_root / filename).write_bytes(contract_bytes)
+        manifest_artifacts.append(
+            {
+                "destination": f"contracts/{filename}",
+                "sha256": hashlib.sha256(contract_bytes).hexdigest(),
+                "source": f"codex-skin/contracts/public/{filename}",
+            }
+        )
     export_manifest = {
         "schemaVersion": 1,
         "generatedFrom": "codex-skin/contracts/public/export-allowlist.json",
-        "artifacts": [
-            {
-                "destination": "contracts/helper-protocol-v1.schema.json",
-                "sha256": hashlib.sha256(contract_bytes).hexdigest(),
-                "source": "codex-skin/contracts/public/helper-protocol-v1.schema.json",
-            }
-        ],
+        "artifacts": manifest_artifacts,
     }
     (fixture / "contracts" / "export-manifest.json").write_text(
         json.dumps(export_manifest), encoding="utf-8"
@@ -327,8 +344,13 @@ def main() -> int:
         b"{}\n",
         "export manifest or SHA-256",
     )
+    negative_fixture(
+        "contracts/helper-release-descriptor-v1.schema.json",
+        b"{}\n",
+        "export manifest or SHA-256",
+    )
 
-    print("Public repository tests passed (positive scan + 25 negative fixtures).")
+    print("Public repository tests passed (positive scan + 26 negative fixtures).")
     return 0
 
 

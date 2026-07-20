@@ -137,8 +137,17 @@ MANIFEST_RELATIVE = PLUGIN_ROOT / ".codex-plugin/plugin.json"
 MARKETPLACE_RELATIVE = Path(".agents/plugins/marketplace.json")
 VERSION_SKILL_RELATIVE = PLUGIN_ROOT / "skills/codex-skin-version/SKILL.md"
 README_RELATIVE = Path("README.md")
-EXPORTED_CONTRACT_RELATIVE = Path("contracts/helper-protocol-v1.schema.json")
 EXPORT_MANIFEST_RELATIVE = Path("contracts/export-manifest.json")
+EXPORTED_CONTRACTS = (
+    (
+        Path("contracts/helper-protocol-v1.schema.json"),
+        "codex-skin/contracts/public/helper-protocol-v1.schema.json",
+    ),
+    (
+        Path("contracts/helper-release-descriptor-v1.schema.json"),
+        "codex-skin/contracts/public/helper-release-descriptor-v1.schema.json",
+    ),
+)
 EXPECTED_PLUGIN_VERSION = "0.0.2"
 INSTALL_COMMANDS = (
     "codex plugin marketplace add yuanjohn01-byte/codex-skin-plugin --ref main",
@@ -470,7 +479,7 @@ def validate_license(root: Path, candidates: set[Path], errors: list[str]) -> No
 
 
 def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[str]) -> None:
-    required = {EXPORTED_CONTRACT_RELATIVE, EXPORT_MANIFEST_RELATIVE}
+    required = {relative for relative, _ in EXPORTED_CONTRACTS} | {EXPORT_MANIFEST_RELATIVE}
     missing = sorted(required - candidates, key=lambda item: item.as_posix())
     if missing:
         for relative in missing:
@@ -479,32 +488,35 @@ def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[
 
     try:
         manifest = json.loads((root / EXPORT_MANIFEST_RELATIVE).read_text(encoding="utf-8"))
-        schema_bytes = (root / EXPORTED_CONTRACT_RELATIVE).read_bytes()
-        schema = json.loads(schema_bytes)
+        schemas = {
+            relative: ((root / relative).read_bytes(), json.loads((root / relative).read_bytes()))
+            for relative, _ in EXPORTED_CONTRACTS
+        }
     except (OSError, json.JSONDecodeError) as exc:
         errors.append(f"invalid exported public contract: {exc}")
         return
 
-    expected_digest = hashlib.sha256(schema_bytes).hexdigest()
     expected_manifest = {
         "schemaVersion": 1,
         "generatedFrom": "codex-skin/contracts/public/export-allowlist.json",
         "artifacts": [
             {
-                "destination": EXPORTED_CONTRACT_RELATIVE.as_posix(),
-                "sha256": expected_digest,
-                "source": "codex-skin/contracts/public/helper-protocol-v1.schema.json",
+                "destination": relative.as_posix(),
+                "sha256": hashlib.sha256(schemas[relative][0]).hexdigest(),
+                "source": source,
             }
+            for relative, source in EXPORTED_CONTRACTS
         ],
     }
     if manifest != expected_manifest:
         errors.append("public contract export manifest or SHA-256 does not match the generated schema")
 
-    if not isinstance(schema, dict):
+    protocol_schema = schemas[EXPORTED_CONTRACTS[0][0]][1]
+    if not isinstance(protocol_schema, dict):
         errors.append("Helper protocol schema root must be an object")
     else:
-        definitions = schema.get("$defs")
-        if schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
+        definitions = protocol_schema.get("$defs")
+        if protocol_schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
             errors.append("Helper protocol must use JSON Schema draft 2020-12")
         if not isinstance(definitions, dict) or not {
             "progressEvent",
@@ -514,6 +526,25 @@ def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[
             "doctorData",
         }.issubset(definitions):
             errors.append("Helper protocol schema is missing required v1 definitions")
+
+    release_schema = schemas[EXPORTED_CONTRACTS[1][0]][1]
+    if not isinstance(release_schema, dict):
+        errors.append("Helper release descriptor schema root must be an object")
+    else:
+        required_fields = release_schema.get("required")
+        if release_schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
+            errors.append("Helper release descriptor must use JSON Schema draft 2020-12")
+        if not isinstance(required_fields, list) or not {
+            "schemaVersion",
+            "helperVersion",
+            "releaseTag",
+            "publishedAt",
+            "signingKeyId",
+            "artifacts",
+        }.issubset(required_fields):
+            errors.append("Helper release descriptor schema is missing required v1 fields")
+        if release_schema.get("additionalProperties") is not False:
+            errors.append("Helper release descriptor schema must reject unknown root fields")
 
     for relative in candidates:
         if relative.parts and relative.parts[0] == "contracts" and relative not in required:
