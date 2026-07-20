@@ -51,7 +51,7 @@ python3 tools/test_release_descriptor.py
 python3 tools/test_guardian_builds.py
 ```
 
-The canonical Helper protocol and release descriptor Schemas live in the Private repository allowlist and are generated into `contracts/`. Direct edits to a Public Schema or its digest manifest fail the repository boundary check.
+The canonical Helper protocol, release descriptor, and device-authorization poll Schemas live in the Private repository allowlist and are generated into `contracts/`. Direct edits to a Public Schema or its digest manifest fail the repository boundary check. The poll client is currently an internal library with no CLI or Skill entry and cannot make the unreleased Staging API a user dependency.
 
 The build test produces unsigned internal artifacts for `macos-arm64`, `macos-x64`, and `windows-x64` under ignored `dist/helper/`, validates Mach-O/PE architecture headers, and compares two clean builds byte-for-byte. Release assets are not committed to Git. Windows CI executes the native x64 Helper after removing Node, Python, and Go from `PATH`.
 

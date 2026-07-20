@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuanjohn01-byte/codex-skin-plugin/blob/main/contracts/device-authorization-poll-v1.schema.json",
+  "title": "Codex Skin device authorization poll contract v1",
+  "description": "Public request and non-token response contract for the Helper device authorization poll and cancel endpoints. Token success is added by M1-S4-005.",
+  "x-endpoints": {
+    "poll": "/api/v1/plugin/device-authorizations/token",
+    "cancel": "/api/v1/plugin/device-authorizations/cancel"
+  },
+  "oneOf": [
+    {
+      "$ref": "#/$defs/proofRequest"
+    },
+    {
+      "$ref": "#/$defs/pollErrorEnvelope"
+    },
+    {
+      "$ref": "#/$defs/cancelSuccessEnvelope"
+    }
+  ],
+  "$defs": {
+    "proofRequest": {
+      "type": "object",
+      "required": ["deviceCode", "codeVerifier"],
+      "properties": {
+        "deviceCode": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "codeVerifier": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9._~-]{43,128}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "pollErrorEnvelope": {
+      "type": "object",
+      "required": ["error", "requestId"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "required": [
+            "code",
+            "message",
+            "action",
+            "retryable",
+            "incidentId",
+            "details"
+          ],
+          "properties": {
+            "code": {
+              "enum": [
+                "CS-AUTH-POLL-001",
+                "CS-AUTH-POLL-002",
+                "CS-AUTH-POLL-003",
+                "CS-AUTH-POLL-004",
+                "CS-AUTH-POLL-005",
+                "CS-AUTH-POLL-006",
+                "CS-AUTH-POLL-007",
+                "CS-AUTH-POLL-008"
+              ]
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "action": {
+              "enum": [
+                "fix_request",
+                "continue_polling",
+                "reauthorize",
+                "contact_support"
+              ]
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "incidentId": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^INC-[A-Z0-9]{12}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "details": {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "enum": [
+                    "invalid_request",
+                    "invalid_grant",
+                    "authorization_pending",
+                    "slow_down",
+                    "expired_token",
+                    "access_denied",
+                    "authorization_consumed"
+                  ]
+                },
+                "retryAfter": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 300
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^req_[a-f0-9]{32}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "cancelSuccessEnvelope": {
+      "type": "object",
+      "required": ["data", "requestId"],
+      "properties": {
+        "data": {
+          "type": "object",
+          "required": ["status"],
+          "properties": {
+            "status": {
+              "const": "cancelled"
+            }
+          },
+          "additionalProperties": false
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^req_[a-f0-9]{32}$"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

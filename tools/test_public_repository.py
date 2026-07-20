@@ -121,6 +121,18 @@ def write_baseline(fixture: Path) -> None:
             ],
             "additionalProperties": False,
         },
+        "device-authorization-poll-v1.schema.json": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "x-endpoints": {
+                "poll": "/api/v1/plugin/device-authorizations/token",
+                "cancel": "/api/v1/plugin/device-authorizations/cancel",
+            },
+            "$defs": {
+                "proofRequest": {},
+                "pollErrorEnvelope": {},
+                "cancelSuccessEnvelope": {},
+            },
+        },
     }
     contract_root = fixture / "contracts"
     contract_root.mkdir(parents=True)
@@ -349,8 +361,13 @@ def main() -> int:
         b"{}\n",
         "export manifest or SHA-256",
     )
+    negative_fixture(
+        "contracts/device-authorization-poll-v1.schema.json",
+        b"{}\n",
+        "export manifest or SHA-256",
+    )
 
-    print("Public repository tests passed (positive scan + 26 negative fixtures).")
+    print("Public repository tests passed (positive scan + 27 negative fixtures).")
     return 0
 
 

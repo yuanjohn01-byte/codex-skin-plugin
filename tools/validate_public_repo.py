@@ -147,6 +147,10 @@ EXPORTED_CONTRACTS = (
         Path("contracts/helper-release-descriptor-v1.schema.json"),
         "codex-skin/contracts/public/helper-release-descriptor-v1.schema.json",
     ),
+    (
+        Path("contracts/device-authorization-poll-v1.schema.json"),
+        "codex-skin/contracts/public/device-authorization-poll-v1.schema.json",
+    ),
 )
 EXPECTED_PLUGIN_VERSION = "0.0.2"
 INSTALL_COMMANDS = (
@@ -545,6 +549,26 @@ def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[
             errors.append("Helper release descriptor schema is missing required v1 fields")
         if release_schema.get("additionalProperties") is not False:
             errors.append("Helper release descriptor schema must reject unknown root fields")
+
+    poll_schema = schemas[EXPORTED_CONTRACTS[2][0]][1]
+    if not isinstance(poll_schema, dict):
+        errors.append("Device authorization poll schema root must be an object")
+    else:
+        definitions = poll_schema.get("$defs")
+        endpoints = poll_schema.get("x-endpoints")
+        if poll_schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
+            errors.append("Device authorization poll contract must use JSON Schema draft 2020-12")
+        if not isinstance(definitions, dict) or not {
+            "proofRequest",
+            "pollErrorEnvelope",
+            "cancelSuccessEnvelope",
+        }.issubset(definitions):
+            errors.append("Device authorization poll contract is missing required v1 definitions")
+        if endpoints != {
+            "poll": "/api/v1/plugin/device-authorizations/token",
+            "cancel": "/api/v1/plugin/device-authorizations/cancel",
+        }:
+            errors.append("Device authorization poll contract endpoint paths are invalid")
 
     for relative in candidates:
         if relative.parts and relative.parts[0] == "contracts" and relative not in required:

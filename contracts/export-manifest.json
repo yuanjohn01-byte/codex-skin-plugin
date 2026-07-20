@@ -9,6 +9,11 @@
       "destination": "contracts/helper-release-descriptor-v1.schema.json",
       "sha256": "dcb65b1a40be4c33d2035cfdfe05364f69dca772ba224e7791f6103aca6cd760",
       "source": "codex-skin/contracts/public/helper-release-descriptor-v1.schema.json"
+    },
+    {
+      "destination": "contracts/device-authorization-poll-v1.schema.json",
+      "sha256": "367e4903237fabb75dd289b5395d64532e6410196565399e974c5f2c595ffb60",
+      "source": "codex-skin/contracts/public/device-authorization-poll-v1.schema.json"
     }
   ],
   "generatedFrom": "codex-skin/contracts/public/export-allowlist.json",
