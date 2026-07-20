@@ -35,7 +35,7 @@ codex-skin-plugin/
     test_public_repository.py
 ```
 
-The bundled v0.0.2 Skill is a read-only installation and upgrade check. The S3 Helper source is not exposed as an installed capability yet. Production theme Skills, keys and platform adapters remain deferred to the numbered M1/M4 tasks in the Private project plan.
+The bundled v0.0.2 Skill is a read-only installation and upgrade check. The S3 Helper source is not exposed as an installed capability yet. The generated device-authorization contract now describes token issuance and refresh rotation, but the Helper does not yet persist or expose those credentials; that remains the internal S4 credential-store work. Production theme Skills, keys and platform adapters remain deferred to the numbered M1/M4 tasks in the Private project plan.
 
 ## Helper development
 
