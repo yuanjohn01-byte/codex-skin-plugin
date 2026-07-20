@@ -85,6 +85,9 @@ func (source *HTTPReleaseSource) Fetch(
 	if err != nil {
 		return nil, err
 	}
+	if response.ContentLength >= 0 && int64(len(content)) != response.ContentLength {
+		return nil, fmt.Errorf("release asset download was truncated")
+	}
 	if int64(len(content)) > maxBytes {
 		return nil, fmt.Errorf("release asset exceeds the trusted size limit")
 	}

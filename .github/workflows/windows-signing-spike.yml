@@ -1,0 +1,51 @@
+name: Windows Signing Feasibility Spike
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/windows-signing-spike.yml"
+      - "cmd/**"
+      - "go.mod"
+      - "go.sum"
+      - "internal/**"
+      - "tools/build_helper.py"
+      - "tools/test_windows_signing.ps1"
+  push:
+    branches:
+      - "codex/**"
+    paths:
+      - ".github/workflows/windows-signing-spike.yml"
+      - "cmd/**"
+      - "go.mod"
+      - "go.sum"
+      - "internal/**"
+      - "tools/build_helper.py"
+      - "tools/test_windows_signing.ps1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  internal-self-signed-authenticode:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - name: Build native Windows x64 Helper
+        shell: pwsh
+        run: python tools/build_helper.py --target windows-x64
+      - name: Sign, run, verify, tamper, and clean ephemeral certificate
+        shell: pwsh
+        run: ./tools/test_windows_signing.ps1
+      - name: Upload non-secret feasibility summary only
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-signing-spike-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/signing/windows-signing-spike-summary.json
+          if-no-files-found: error
+          retention-days: 14

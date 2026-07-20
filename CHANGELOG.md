@@ -17,6 +17,8 @@
 - Add an out-of-Plugin-cache per-user bootstrap with restricted GitHub Release downloads, staged self-test, version directories, and atomic `current.json` activation.
 - Preserve the previous Helper, state, and recovery files across failed bootstrap, Plugin cache replacement, and successful upgrade tests.
 - Add a secret-free macOS ad-hoc signing/tamper feasibility gate and document the remaining Developer ID, notarization, Gatekeeper, and stapled-container limits.
+- Add an ephemeral Windows self-signed Authenticode/tamper/cleanup gate and document the remaining public trust, timestamp, and SmartScreen reputation limits.
+- Reject descriptor/signature tampering, artifact mismatch, HTTP truncation, interrupted reads, and downgrade before activation while preserving a reusable last-known-good Helper.
 
 No theme operation or public compatibility claim is attached to this version.
 

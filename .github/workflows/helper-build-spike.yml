@@ -69,12 +69,14 @@ jobs:
         with:
           go-version: "1.26.5"
           cache: true
-      - name: Test Windows bootstrap and atomic current pointer
-        shell: pwsh
-        run: go test ./...
       - name: Build the native Windows x64 Helper
         shell: pwsh
         run: python tools/build_helper.py --target windows-x64
+      - name: Test Windows bootstrap, failed upgrade, and atomic current pointer
+        shell: pwsh
+        run: |
+          $env:CODEX_SKIN_TEST_HELPER = (Resolve-Path 'dist/helper/codex-skin-helper_0.1.0-s3_windows_x64.exe').Path
+          go test ./...
       - name: Execute without Node, Python, or Go on PATH
         shell: pwsh
         run: |
