@@ -127,6 +127,7 @@ def write_baseline(fixture: Path) -> None:
                 "poll": "/api/v1/plugin/device-authorizations/token",
                 "cancel": "/api/v1/plugin/device-authorizations/cancel",
                 "refresh": "/api/v1/plugin/token/refresh",
+                "logout": "/api/v1/plugin/logout",
             },
             "$defs": {
                 "proofRequest": {},
@@ -135,6 +136,8 @@ def write_baseline(fixture: Path) -> None:
                 "tokenSuccessEnvelope": {},
                 "refreshRequest": {},
                 "tokenErrorEnvelope": {},
+                "logoutSuccessEnvelope": {},
+                "logoutErrorEnvelope": {},
             },
         },
     }
