@@ -1,0 +1,52 @@
+name: macOS Signing Feasibility Spike
+
+on:
+  pull_request:
+    paths:
+      - ".github/workflows/macos-signing-spike.yml"
+      - "cmd/**"
+      - "go.mod"
+      - "go.sum"
+      - "internal/**"
+      - "tools/build_helper.py"
+      - "tools/test_macos_signing.py"
+  push:
+    branches:
+      - "codex/**"
+    paths:
+      - ".github/workflows/macos-signing-spike.yml"
+      - "cmd/**"
+      - "go.mod"
+      - "go.sum"
+      - "internal/**"
+      - "tools/build_helper.py"
+      - "tools/test_macos_signing.py"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  internal-adhoc-signing:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - name: Build both macOS Helper architectures
+        run: >-
+          python3 tools/build_helper.py
+          --target macos-arm64
+          --target macos-x64
+      - name: Verify ad-hoc signing and tamper rejection
+        run: python3 tools/test_macos_signing.py
+      - name: Upload non-secret feasibility summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-signing-spike-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist/signing/macos-signing-spike-summary.json
+          if-no-files-found: error
+          retention-days: 14
