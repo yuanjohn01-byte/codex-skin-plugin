@@ -3,6 +3,7 @@ name: Windows Plugin Distribution Spike
 on:
   pull_request:
     paths:
+      - '.gitattributes'
       - '.agents/plugins/marketplace.json'
       - 'plugins/codex-skin/**'
       - 'tools/**'
@@ -11,6 +12,7 @@ on:
     branches:
       - 'codex/**'
     paths:
+      - '.gitattributes'
       - '.agents/plugins/marketplace.json'
       - 'plugins/codex-skin/**'
       - 'tools/**'

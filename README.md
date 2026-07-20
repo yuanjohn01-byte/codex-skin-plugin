@@ -4,6 +4,8 @@ This is the standalone Public Plugin repository for Codex Skin. The installable 
 
 Current status: the pre-release Marketplace exposes the Codex Skin v0.0.2 upgrade candidate from this repository. The distribution spike remains a read-only version check; no theme capability or public compatibility claim is attached.
 
+S3 now includes the source for a self-contained Go Helper prototype. Its `version` and runtime-only `doctor` commands emit the generated public JSON Lines v1 contract, but the Helper is not yet bootstrapped by the installed Plugin and does not perform theme, Codex, network, or recovery operations.
+
 The v0.0.1-to-v0.0.2 upgrade spike has passed macOS and Windows Desktop/CLI checks against the reviewed feature refs. The Windows distribution workflow also performs the equivalent CLI/cache upgrade on a clean GitHub-hosted runner. Every release still requires a post-merge two-platform check of the exact `main` form before its commands are published.
 
 The repository uses the MIT license. Its tracked-file allowlist, secret/Private-path checks and negative fixtures must pass before every remote push. Founder approval to create the Public repository has been recorded.
@@ -24,12 +26,28 @@ codex-skin-plugin/
         codex-skin-version/SKILL.md
       scripts/
       assets/
+  cmd/codex-skin/              # self-contained Helper entrypoint
+  internal/                    # Helper CLI/protocol implementation
+  contracts/                   # generated public contracts only
   tools/
     validate_public_repo.py
     test_public_repository.py
 ```
 
-The bundled v0.0.2 Skill is a read-only installation and upgrade check. Production theme Skills, Helper, contracts, keys and platform adapters are intentionally deferred to the numbered M1/M4 tasks in the Private project plan.
+The bundled v0.0.2 Skill is a read-only installation and upgrade check. The S3 Helper source is not exposed as an installed capability yet. Production theme Skills, keys and platform adapters remain deferred to the numbered M1/M4 tasks in the Private project plan.
+
+## Helper development
+
+Go 1.26.5 is pinned in `go.mod`. The minimal contract checks are:
+
+```bash
+go test ./...
+go vet ./...
+go run ./cmd/codex-skin version --json
+go run ./cmd/codex-skin doctor --json
+```
+
+The canonical Helper protocol Schema lives in the Private repository allowlist and is generated into `contracts/`. Direct edits to the Public Schema or its digest manifest fail the repository boundary check.
 
 ## Installation
 
