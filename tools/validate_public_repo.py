@@ -56,13 +56,55 @@ ALLOWED_TOP_LEVEL = {
     "tsconfig.json",
     "vitest.config.ts",
 }
+ALLOWED_TOP_LEVEL_CASEFOLD = {entry.casefold() for entry in ALLOWED_TOP_LEVEL}
 FORBIDDEN_PREFIXES = {
     ("contracts", "private"),
     ("docs", "archive"),
+    ("docs", "engineering"),
     ("docs", "evidence"),
     ("docs", "handoff"),
     ("docs", "internal"),
+    ("docs", "operations"),
     ("docs", "planning"),
+    ("docs", "product"),
+}
+LOCAL_ONLY_COMPONENTS = {
+    "archive",
+    "archives",
+    "artifact",
+    "artifacts",
+    "capture",
+    "captures",
+    "discussion",
+    "discussions",
+    "draft",
+    "drafts",
+    "evidence",
+    "handoff",
+    "handoffs",
+    "log",
+    "logs",
+    "note",
+    "notes",
+    "one-time-handoff",
+    "one-time-handoffs",
+    "one_time_handoff",
+    "one_time_handoffs",
+    "output",
+    "outputs",
+    "prompt",
+    "prompts",
+    "recording",
+    "recordings",
+    "scratch",
+    "screenshot",
+    "screenshots",
+    "temp",
+    "tmp",
+    "transcript",
+    "transcripts",
+    "video",
+    "videos",
 }
 FORBIDDEN_COMPONENTS = {
     ".claude",
@@ -75,11 +117,9 @@ FORBIDDEN_COMPONENTS = {
     "license-proof",
     "personal",
     "private",
-    "prompts",
     "source-art",
     "source_art",
     "themes",
-    "transcripts",
     "user-data",
 }
 FORBIDDEN_SUFFIXES = {
@@ -218,12 +258,20 @@ def repository_candidates(root: Path) -> tuple[list[Path], str | None]:
     return sorted(set(paths), key=lambda item: item.as_posix()), None
 
 
+def normalized_parts(relative: Path | str) -> tuple[str, ...]:
+    """Use Git-style separators and case-insensitive policy on every platform."""
+    normalized = str(relative).replace("\\", "/")
+    return tuple(part.casefold() for part in normalized.split("/") if part not in {"", "."})
+
+
 def forbidden_path_reason(relative: Path) -> str | None:
-    parts = tuple(part.lower() for part in relative.parts)
-    name = relative.name.lower()
+    parts = normalized_parts(relative)
+    name = parts[-1] if parts else ""
     if name == ".env" or name.startswith(".env.") or name == ".dev.vars" or name.startswith(".dev.vars."):
         return "environment file"
-    if relative.parts and relative.parts[0] not in ALLOWED_TOP_LEVEL:
+    if any(part in LOCAL_ONLY_COMPONENTS for part in parts[:-1]):
+        return "local-only evidence path"
+    if parts and parts[0] not in ALLOWED_TOP_LEVEL_CASEFOLD:
         return "top-level path outside the Public allowlist"
     if any(parts[: len(prefix)] == prefix for prefix in FORBIDDEN_PREFIXES):
         return "Private or local-only documentation path"
