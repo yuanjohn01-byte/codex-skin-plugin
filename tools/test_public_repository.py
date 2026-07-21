@@ -154,6 +154,23 @@ def write_baseline(fixture: Path) -> None:
                 "source": f"codex-skin/contracts/public/{filename}",
             }
         )
+    fixtures = {
+        "fixtures/free-test-theme-v1/fixture-policy-v1.json": b"{}\n",
+        "fixtures/free-test-theme-v1/fixture-provenance.json": b"{}\n",
+        "fixtures/free-test-theme-v1/manifest.json": b"{}\n",
+        "fixtures/free-test-theme-v1/assets/synthetic-dawn.png": b"fixture-png",
+    }
+    for destination, content in fixtures.items():
+        target = fixture / destination
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        manifest_artifacts.append(
+            {
+                "destination": destination,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "source": f"codex-skin/fixtures/public/free-test-theme-v1/{Path(destination).relative_to('fixtures/free-test-theme-v1').as_posix()}",
+            }
+        )
     export_manifest = {
         "schemaVersion": 1,
         "generatedFrom": "codex-skin/contracts/public/export-allowlist.json",
