@@ -3,11 +3,10 @@ name: Windows Plugin Distribution Spike
 on:
   pull_request:
     paths:
-      - '.gitattributes'
-      - '.agents/plugins/marketplace.json'
-      - 'plugins/codex-skin/**'
-      - 'tools/**'
-      - '.github/workflows/windows-plugin-spike.yml'
+      - ".gitattributes"
+      - ".agents/plugins/marketplace.json"
+      - "plugins/codex-skin/**"
+      - ".github/workflows/windows-plugin-spike.yml"
   workflow_dispatch:
 
 concurrency:
@@ -30,7 +29,7 @@ jobs:
 
       - uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          node-version: "22"
 
       - name: Install the pinned Codex CLI
         shell: pwsh

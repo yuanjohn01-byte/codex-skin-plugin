@@ -42,6 +42,11 @@ __pycache__/
 /transcripts/
 /prompts/
 /outputs/
+/logs/
+/screenshots/
+/recordings/
+/videos/
+/captures/
 /tmp/
 /temp/
 /private/

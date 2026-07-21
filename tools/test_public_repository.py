@@ -270,6 +270,9 @@ def main() -> int:
         "themes/pro.cskin",
         "docs/internal/plan.md",
         "artifacts/helper.zip",
+        "logs/ci.txt",
+        "screenshots/review.png",
+        "recordings/manual-test.mp4",
     ):
         assert_ignored(relative, True)
     for relative in (
@@ -278,12 +281,15 @@ def main() -> int:
         "src/helper/main.go",
         "contracts/public/theme.schema.json",
         "tests/theme_test.go",
+        "docs/user-installation.md",
+        "SECURITY.md",
     ):
         assert_ignored(relative, False)
 
     negative_fixture(".env", b"EXAMPLE=value\n", "environment file")
     negative_fixture("notes/private.md", b"local note\n", "outside the Public allowlist")
     negative_fixture("docs/internal/plan.md", b"internal plan\n", "documentation path")
+    negative_fixture("screenshots/review.png", b"raw capture\n", "local-only evidence path")
     marker = ("ship" + "any").encode("utf-8")
     negative_fixture("src/copied-template.txt", marker, "Private template marker")
     secret = b"access_" + b"token=\"" + b"sensitive-value-1234" + b"\"\n"
@@ -374,7 +380,7 @@ def main() -> int:
         "export manifest or SHA-256",
     )
 
-    print("Public repository tests passed (positive scan + 27 negative fixtures).")
+    print("Public repository tests passed (positive scan + 28 negative fixtures).")
     return 0
 
 

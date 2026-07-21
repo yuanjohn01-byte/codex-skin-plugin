@@ -64,6 +64,13 @@ FORBIDDEN_PREFIXES = {
     ("docs", "internal"),
     ("docs", "planning"),
 }
+LOCAL_ONLY_ROOTS = {
+    "captures",
+    "logs",
+    "recordings",
+    "screenshots",
+    "videos",
+}
 FORBIDDEN_COMPONENTS = {
     ".claude",
     ".codex",
@@ -223,6 +230,8 @@ def forbidden_path_reason(relative: Path) -> str | None:
     name = relative.name.lower()
     if name == ".env" or name.startswith(".env.") or name == ".dev.vars" or name.startswith(".dev.vars."):
         return "environment file"
+    if parts and parts[0] in LOCAL_ONLY_ROOTS:
+        return "local-only evidence path"
     if relative.parts and relative.parts[0] not in ALLOWED_TOP_LEVEL:
         return "top-level path outside the Public allowlist"
     if any(parts[: len(prefix)] == prefix for prefix in FORBIDDEN_PREFIXES):
