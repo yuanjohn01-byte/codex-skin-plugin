@@ -4,8 +4,10 @@
 - Repo scope: `plugin` / `both`
 - CI profile: `fast` / `standard` / `full`
 - Changed repositories: `plugin` / `private + plugin`
-- Paired Private PR/ref (`both` only; otherwise `N/A`):
-- Handoff allowlist (`both` only; otherwise `N/A`):
+- Paired Private PR (`both` only; otherwise `N/A`):
+- Private final 40-character commit SHA (`both` only; otherwise `N/A`):
+- Public final 40-character commit SHA (`both` only; otherwise `N/A`):
+- Exact handoff allowlist (`Private path -> Public path`, one file per line; `both` only):
 - User-visible change:
 
 ## Frozen head

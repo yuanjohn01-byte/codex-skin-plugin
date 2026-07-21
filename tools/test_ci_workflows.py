@@ -65,7 +65,10 @@ def main() -> int:
     template = (ROOT / ".github" / "pull_request_template.md").read_text()
     for marker in (
         "Repo scope: `plugin` / `both`",
-        "Paired Private PR/ref (`both` only; otherwise `N/A`)",
+        "Paired Private PR (`both` only; otherwise `N/A`)",
+        "Private final 40-character commit SHA",
+        "Public final 40-character commit SHA",
+        "Exact handoff allowlist (`Private path -> Public path`",
         "Final head is frozen",
         "does not require a Private branch/twin",
     ):
