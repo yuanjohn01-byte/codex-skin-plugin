@@ -66,6 +66,8 @@ Run a secret, forbidden-path, license and large-file scan before every push/rele
 4. Preserve unrelated work; never patch the read-only Dream Skin reference.
 5. If the required Private API is not already in Production, stop the Plugin release even if local tests pass.
 
+The Private task-start record is maintained locally and does not require a standalone Public push. Push only a locally verified, reviewable Public increment, or open a Draft PR early when remote cross-platform CI or collaboration is needed.
+
 Update the Private project plan at task end with Public branch, commit, PR, tag/release, checksums, platform run IDs and remaining issues.
 
 ## Verification and Release
@@ -83,6 +85,8 @@ Minimum relevant checks:
 Do not invent command names. Once CI/scripts exist, update this file with the verified commands.
 
 Use `codex/<task-id>-<slug>` branches and `type(scope): summary` commits. When a verified task/subtask is complete, update the project plan, commit, push the feature branch and create/update a PR without another reminder.
+
+Public feature CI is PR-driven; do not restore a parallel `push` trigger for `codex/**` or push solely for task status/evidence. Stale PR heads are cancelled, the Public baseline checks `main` after merge, and path-filtered platform workflows remain available on PRs and by manual dispatch.
 
 Public release sequence:
 

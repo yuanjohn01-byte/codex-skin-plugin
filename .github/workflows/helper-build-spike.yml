@@ -13,21 +13,11 @@ on:
       - "tools/create_release_descriptor.py"
       - "tools/test_helper_builds.py"
       - "tools/test_release_descriptor.py"
-  push:
-    branches:
-      - "codex/**"
-    paths:
-      - ".github/workflows/helper-build-spike.yml"
-      - "cmd/**"
-      - "go.mod"
-      - "go.sum"
-      - "internal/**"
-      - "contracts/**"
-      - "tools/build_helper.py"
-      - "tools/create_release_descriptor.py"
-      - "tools/test_helper_builds.py"
-      - "tools/test_release_descriptor.py"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

@@ -5,8 +5,11 @@ on:
   push:
     branches:
       - main
-      - 'codex/**'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
@@ -22,6 +25,8 @@ jobs:
           cache: true
       - name: Compile repository validators
         run: python3 -m compileall -q tools
+      - name: Test CI trigger and concurrency policy
+        run: python3 tools/test_ci_workflows.py
       - name: Test manifest, license, and Public upload boundary
         run: python3 tools/test_public_repository.py
       - name: Check Go formatting

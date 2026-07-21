@@ -14,22 +14,11 @@ on:
       - "tools/test_guardian_builds.py"
       - "tools/test_guardian_macos.py"
       - "tools/test_guardian_windows.ps1"
-  push:
-    branches:
-      - "codex/**"
-    paths:
-      - ".github/workflows/guardian-lifecycle-spike.yml"
-      - "cmd/codex-skin-guardian/**"
-      - "go.mod"
-      - "go.sum"
-      - "internal/buildinfo/**"
-      - "internal/guardian/**"
-      - "internal/guardiancli/**"
-      - "tools/build_guardian.py"
-      - "tools/test_guardian_builds.py"
-      - "tools/test_guardian_macos.py"
-      - "tools/test_guardian_windows.ps1"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
