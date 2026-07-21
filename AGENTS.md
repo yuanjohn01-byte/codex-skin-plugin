@@ -58,24 +58,14 @@ Run a secret, forbidden-path, license and large-file scan before every push/rele
 - User-facing failures include a stable `CS-*`, one `INC-*` or local operation ID, current-theme impact and an actionable next step. Do not show raw stack traces.
 - Default diagnostics exclude prompts, code, absolute paths, tokens, cookies and screenshots. Expanded diagnostics require explicit user approval and local redaction preview.
 
-## Start and Progress
+## Task entry
 
-1. Confirm the Private project-plan task has `repo_scope: plugin` or `both` and is the only `开发中` item.
-2. Inspect branch, remotes, `git status`, manifest, marketplace, release workflow, generated contracts and tests.
-3. Record the planned platforms, versions, QA IDs and evidence location.
-4. Preserve unrelated work; never patch the read-only Dream Skin reference.
-5. If the required Private API is not already in Production, stop the Plugin release even if local tests pass.
-
-For `repo_scope: plugin`, create only this repository's branch/PR and run only Public
-checks; a Private branch or same-name twin is forbidden as a default requirement. For
-`repo_scope: both`, record the exact allowlisted handoff artifacts and paired Private
-PR/ref. The Public baseline remains independently publishable and must not clone,
-query or wait for Private. Cross-repository comparison is a separate explicit gate;
-Public `main` must not depend on Private's transient branch or merge state.
-
-The Private task-start record is maintained locally and does not require a standalone Public push. Push only a locally verified, reviewable Public increment, or open a Draft PR early when remote cross-platform CI or collaboration is needed.
-
-Update the Private project plan at task end with Public branch, commit, PR, tag/release, checksums, platform run IDs and remaining issues.
+Follow the Workspace-root `AGENTS.md` for task contracts, risk handling and remote
+delivery, and the Private release workflow for cross-repository sequencing. Confirm
+the Private project-plan task has `repo_scope: plugin` or `both`, inspect the manifest,
+marketplace, generated contracts and tests, and preserve unrelated work. Never patch
+the read-only Dream Skin reference. If an API is not in Production, stop a Plugin
+release even when local checks pass.
 
 ## Verification and Release
 
@@ -91,30 +81,6 @@ Minimum relevant checks:
 
 Do not invent command names. Once CI/scripts exist, update this file with the verified commands.
 
-Use `codex/<task-id>-<slug>` branches and `type(scope): summary` commits. When a verified task/subtask is complete, update the project plan, commit, push the feature branch and create/update a PR without another reminder.
-
-Public feature CI is PR-driven; do not restore a parallel `push` trigger for `codex/**` or push solely for task status/evidence. Stale PR heads are cancelled, the Public baseline checks `main` after merge, and path-filtered platform workflows remain available on PRs and by manual dispatch.
-
-Use impact-based profiles: `fast` for public docs/governance-only work, `standard` for
-scoped contracts/tests/components, and `full` for workflow/source uncertainty, shared
-Helper/adapter/Guardian behavior, release candidates and manual full runs. macOS and
-Windows remain MVP platforms; shared OS runtime or release changes require both, while
-unrelated docs or Private-only work must not start the platform matrix.
-
-Version only durable public user/safety/release documentation. Keep Private plans and
-evidence, personal notes, drafts, transcripts, prompts, raw logs,
-screenshots/recordings, temporary outputs, build artifacts and one-time handoffs out
-of Public. Detailed CI output/run IDs belong in PR/Actions; do not add a commit only to
-record evidence. Freeze the final candidate head before review and use one
-concentrated push per implementation/repair round.
-
-Public release sequence:
-
-```text
-PR checks → two-platform install/update/apply/restore
-→ bump plugin version + CHANGELOG → merge
-→ immutable plugin-vX.Y.Z tag → GitHub Release
-→ Private recommended_version → verify public update instructions
-```
-
-Never force-push or publish failing/unsigned Production artifacts. Creating the Public remote, changing visibility/license, or forcing a mass minimum version requires explicit Founder confirmation.
+Keep only durable public user/safety/release documentation here; never add Private
+plans/evidence or raw local artifacts. The Workspace root and Private release workflow
+define profiles, review, PR CI, release order and Founder-confirmation boundaries.
