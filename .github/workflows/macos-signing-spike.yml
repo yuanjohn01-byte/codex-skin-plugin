@@ -10,18 +10,11 @@ on:
       - "internal/**"
       - "tools/build_helper.py"
       - "tools/test_macos_signing.py"
-  push:
-    branches:
-      - "codex/**"
-    paths:
-      - ".github/workflows/macos-signing-spike.yml"
-      - "cmd/**"
-      - "go.mod"
-      - "go.sum"
-      - "internal/**"
-      - "tools/build_helper.py"
-      - "tools/test_macos_signing.py"
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read

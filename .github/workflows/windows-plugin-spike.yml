@@ -8,16 +8,11 @@ on:
       - 'plugins/codex-skin/**'
       - 'tools/**'
       - '.github/workflows/windows-plugin-spike.yml'
-  push:
-    branches:
-      - 'codex/**'
-    paths:
-      - '.gitattributes'
-      - '.agents/plugins/marketplace.json'
-      - 'plugins/codex-skin/**'
-      - 'tools/**'
-      - '.github/workflows/windows-plugin-spike.yml'
   workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
