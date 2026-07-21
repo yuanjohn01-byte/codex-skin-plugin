@@ -271,6 +271,23 @@ def negative_symlink(relative: str, directory: bool) -> None:
             raise AssertionError(f"tracked symlink was not rejected:\n{combined}")
 
 
+def negative_export_manifest(content: str, expected_message: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="codex-skin-public-export-") as directory:
+        fixture = Path(directory)
+        initialized = run(["git", "init", "--quiet"], fixture)
+        if initialized.returncode != 0:
+            raise AssertionError(initialized.stderr)
+        write_baseline(fixture)
+        (fixture / "contracts/export-manifest.json").write_text(content, encoding="utf-8")
+        added = run(["git", "add", "--force", "."], fixture)
+        if added.returncode != 0:
+            raise AssertionError(added.stderr)
+        checked = run([sys.executable, str(VALIDATOR), "--root", str(fixture)], fixture)
+        combined = checked.stdout + checked.stderr
+        if checked.returncode == 0 or expected_message not in combined:
+            raise AssertionError(f"export manifest was not rejected:\n{combined}")
+
+
 def negative_manifest(payload: dict[str, object], expected_message: str) -> None:
     with tempfile.TemporaryDirectory(prefix="codex-skin-public-manifest-") as directory:
         fixture = Path(directory)
@@ -439,6 +456,41 @@ def main() -> int:
     )
     negative_symlink("src/file-link.txt", False)
     negative_symlink("docs/directory-link", True)
+
+    with tempfile.TemporaryDirectory(prefix="codex-skin-public-export-source-") as directory:
+        export_fixture = Path(directory)
+        write_baseline(export_fixture)
+        export_path = export_fixture / "contracts/export-manifest.json"
+        export_manifest = json.loads(export_path.read_text(encoding="utf-8"))
+        export_text = export_path.read_text(encoding="utf-8")
+    negative_export_manifest(
+        export_text.replace('"schemaVersion": 1,', '"schemaVersion": 1, "schemaVersion": 1,', 1),
+        "duplicate JSON key",
+    )
+    for invalid_version in (True, 1.0, "1"):
+        payload = dict(export_manifest)
+        payload["schemaVersion"] = invalid_version
+        negative_export_manifest(json.dumps(payload), "export manifest or SHA-256")
+    nested = export_manifest["artifacts"][0]
+    negative_export_manifest(
+        export_text.replace(
+            f'"destination": "{nested["destination"]}",',
+            f'"destination": "{nested["destination"]}", "destination": "{nested["destination"]}",',
+            1,
+        ),
+        "duplicate JSON key",
+    )
+    for mutate in (
+        lambda payload: payload.__setitem__("artifacts", False),
+        lambda payload: payload.__setitem__("artifacts", [False]),
+        lambda payload: payload["artifacts"][0].__setitem__("destination", 1),
+        lambda payload: payload["artifacts"][0].__setitem__("sha256", True),
+        lambda payload: payload["artifacts"][0].__setitem__("extra", True),
+        lambda payload: payload["artifacts"][0].pop("source"),
+    ):
+        payload = json.loads(export_text)
+        mutate(payload)
+        negative_export_manifest(json.dumps(payload), "export manifest or SHA-256")
 
     invalid_name = dict(MINIMAL_MANIFEST)
     invalid_name["name"] = "Codex Skin"
