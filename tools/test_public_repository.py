@@ -10,7 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from validate_public_repo import forbidden_path_reason
+from validate_public_repo import canonical_relative_path, forbidden_path_reason
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -364,6 +364,8 @@ def main() -> int:
     if current.returncode != 0:
         sys.stderr.write(current.stdout + current.stderr)
         return 1
+    if canonical_relative_path(r"src\file-link.txt") != "src/file-link.txt":
+        raise AssertionError("Windows repository path diagnostic is not canonical")
 
     local_only_examples = (
         ".env",

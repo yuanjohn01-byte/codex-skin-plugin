@@ -309,6 +309,11 @@ def normalized_parts(relative: Path | str) -> tuple[str, ...]:
     return tuple(part.casefold() for part in normalized.split("/") if part not in {"", "."})
 
 
+def canonical_relative_path(relative: Path | str) -> str:
+    """Keep repository-boundary diagnostics stable across Windows and POSIX."""
+    return str(relative).replace("\\", "/")
+
+
 def forbidden_path_reason(relative: Path) -> str | None:
     parts = normalized_parts(relative)
     name = parts[-1] if parts else ""
@@ -734,7 +739,10 @@ def validate(root: Path) -> list[str]:
     for relative in candidate_list:
         path = root / relative
         if path.is_symlink():
-            errors.append(f"symbolic links are not allowed in Public source: {relative}")
+            errors.append(
+                "symbolic links are not allowed in Public source: "
+                f"{canonical_relative_path(relative)}"
+            )
             continue
         reason = forbidden_path_reason(relative)
         if reason:
