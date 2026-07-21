@@ -32,9 +32,23 @@ def reject(name: str, relative: str, mutate) -> None:
             raise AssertionError(f"fixture validator accepted {name}")
 
 
+def reject_raw_json(name: str, relative: str, content: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="codex-skin-theme-fixture-") as directory:
+        root = Path(directory)
+        shutil.copytree(ROOT / "fixtures", root / "fixtures")
+        target = root / "fixtures/free-test-theme-v1" / relative
+        target.write_text(content, encoding="utf-8")
+        result = validate(root)
+        if result.returncode == 0:
+            raise AssertionError(f"fixture validator accepted {name}")
+
+
 def main() -> int:
     if validate(ROOT).returncode:
         raise AssertionError("fixture validator rejected the reviewed fixture")
+    validator_source = VALIDATOR.read_text(encoding="utf-8")
+    if "zip(strict=" in validator_source:
+        raise AssertionError("fixture validator must support Python 3.9 without zip(strict=...)")
     reject("manifest javascript payload", "manifest.json", lambda payload: payload.__setitem__("payload", "javascript:alert(1)"))
     reject("provenance HTTPS source", "fixture-provenance.json", lambda payload: payload.__setitem__("source", "https://evil.invalid/asset"))
     reject("manifest extra field", "manifest.json", lambda payload: payload.__setitem__("extra", True))
@@ -44,6 +58,11 @@ def main() -> int:
     reject("region integer", "manifest.json", lambda payload: payload["design"]["regions"].__setitem__("home", 1))
     reject("blur float", "manifest.json", lambda payload: payload["design"]["tokens"].__setitem__("surfaceBlurPx", 18.0))
     reject("asset size float", "manifest.json", lambda payload: payload["assets"][0].__setitem__("byteSize", 670.0))
+    reject_raw_json(
+        "manifest duplicate JSON key",
+        "manifest.json",
+        '{"schemaVersion": 1, "schemaVersion": 1}',
+    )
     print("Free Theme fixture exact-schema negative tests passed.")
     return 0
 

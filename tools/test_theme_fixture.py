@@ -59,7 +59,15 @@ EXPECTED_MANIFEST = {
 
 
 def load_json(path: Path) -> dict[str, object]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    def reject_duplicate_keys(pairs):
+        payload = {}
+        for key, value in pairs:
+            if key in payload:
+                raise ValueError(f"{path.name} contains duplicate JSON key: {key}")
+            payload[key] = value
+        return payload
+
+    payload = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys)
     if not isinstance(payload, dict):
         raise ValueError(f"{path.name} must be a JSON object")
     return payload
@@ -71,7 +79,9 @@ def strictly_equal(actual: object, expected: object) -> bool:
     if isinstance(expected, dict):
         return set(actual) == set(expected) and all(strictly_equal(actual[key], value) for key, value in expected.items())
     if isinstance(expected, list):
-        return len(actual) == len(expected) and all(strictly_equal(item, value) for item, value in zip(actual, expected, strict=True))
+        return len(actual) == len(expected) and all(
+            strictly_equal(actual[index], expected[index]) for index in range(len(expected))
+        )
     return actual == expected
 
 
