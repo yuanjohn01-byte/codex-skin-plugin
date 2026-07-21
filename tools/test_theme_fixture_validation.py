@@ -43,6 +43,17 @@ def reject_raw_json(name: str, relative: str, content: str) -> None:
             raise AssertionError(f"fixture validator accepted {name}")
 
 
+def reject_tree_entry(name: str, mutate) -> None:
+    with tempfile.TemporaryDirectory(prefix="codex-skin-theme-fixture-") as directory:
+        root = Path(directory)
+        shutil.copytree(ROOT / "fixtures", root / "fixtures")
+        fixture = root / "fixtures/free-test-theme-v1"
+        mutate(root, fixture)
+        result = validate(root)
+        if result.returncode == 0:
+            raise AssertionError(f"fixture validator accepted {name}")
+
+
 def main() -> int:
     if validate(ROOT).returncode:
         raise AssertionError("fixture validator rejected the reviewed fixture")
@@ -63,6 +74,18 @@ def main() -> int:
         "manifest.json",
         '{"schemaVersion": 1, "schemaVersion": 1}',
     )
+    reject_tree_entry("extra ordinary file", lambda _root, fixture: (fixture / "extra.txt").write_text("extra\n", encoding="utf-8"))
+    reject_tree_entry("extra ordinary directory", lambda _root, fixture: (fixture / "extra").mkdir())
+    reject_tree_entry("fixture file symlink", lambda _root, fixture: (fixture / "linked.json").symlink_to(fixture / "manifest.json"))
+    reject_tree_entry("fixture directory symlink", lambda _root, fixture: (fixture / "linked-assets").symlink_to(fixture / "assets", target_is_directory=True))
+
+    def root_symlink(root: Path, fixture: Path) -> None:
+        source = root / "fixture-source"
+        shutil.copytree(fixture, source)
+        shutil.rmtree(fixture)
+        fixture.symlink_to(source, target_is_directory=True)
+
+    reject_tree_entry("fixture root symlink", root_symlink)
     print("Free Theme fixture exact-schema negative tests passed.")
     return 0
 

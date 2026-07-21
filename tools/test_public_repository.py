@@ -244,6 +244,33 @@ def negative_fixture(relative: str, content: bytes, expected_message: str) -> No
             raise AssertionError(f"validator did not reject {relative}:\n{combined}")
 
 
+def negative_symlink(relative: str, directory: bool) -> None:
+    with tempfile.TemporaryDirectory(prefix="codex-skin-public-boundary-") as directory_path:
+        fixture = Path(directory_path)
+        initialized = run(["git", "init", "--quiet"], fixture)
+        if initialized.returncode != 0:
+            raise AssertionError(initialized.stderr)
+        write_baseline(fixture)
+        source = fixture / ("docs/real" if directory else "src/real.txt")
+        if directory:
+            source.mkdir(parents=True)
+            (source / "readme.md").write_text("safe\n", encoding="utf-8")
+        else:
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text("safe\n", encoding="utf-8")
+        link = fixture / relative
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(source, target_is_directory=directory)
+        added = run(["git", "add", "--force", "."], fixture)
+        if added.returncode != 0:
+            raise AssertionError(added.stderr)
+        checked = run([sys.executable, str(VALIDATOR), "--root", str(fixture)], fixture)
+        combined = checked.stdout + checked.stderr
+        expected = f"symbolic links are not allowed in Public source: {relative}"
+        if checked.returncode == 0 or expected not in combined:
+            raise AssertionError(f"tracked symlink was not rejected:\n{combined}")
+
+
 def negative_manifest(payload: dict[str, object], expected_message: str) -> None:
     with tempfile.TemporaryDirectory(prefix="codex-skin-public-manifest-") as directory:
         fixture = Path(directory)
@@ -410,6 +437,8 @@ def main() -> int:
         b"not a manifest\n",
         "only plugin.json belongs",
     )
+    negative_symlink("src/file-link.txt", False)
+    negative_symlink("docs/directory-link", True)
 
     invalid_name = dict(MINIMAL_MANIFEST)
     invalid_name["name"] = "Codex Skin"
@@ -489,7 +518,7 @@ def main() -> int:
         "export manifest or SHA-256",
     )
 
-    print("Public repository tests passed (positive scan + 39 negative fixtures).")
+    print("Public repository tests passed (positive scan + 41 negative fixtures).")
     return 0
 
 

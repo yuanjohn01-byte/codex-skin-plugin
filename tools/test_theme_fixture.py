@@ -102,8 +102,18 @@ def main() -> int:
     parser.add_argument("--fixture", type=Path, default=FIXTURE)
     args = parser.parse_args()
     fixture = args.root.resolve() / args.fixture
+    if fixture.is_symlink() or not fixture.is_dir():
+        raise ValueError("fixture root must be a real directory")
     allowed_files = {"fixture-policy-v1.json", "fixture-provenance.json", "manifest.json", ASSET_PATH}
-    actual_files = {path.relative_to(fixture).as_posix() for path in fixture.rglob("*") if path.is_file()}
+    allowed_entries = allowed_files | {"assets"}
+    entries = list(fixture.rglob("*"))
+    for path in entries:
+        if path.is_symlink():
+            raise ValueError(f"fixture must not contain symbolic links: {path.relative_to(fixture).as_posix()}")
+    actual_entries = {path.relative_to(fixture).as_posix() for path in entries}
+    if actual_entries != allowed_entries:
+        raise ValueError(f"fixture must contain only reviewed entries: {sorted(actual_entries)}")
+    actual_files = {path.relative_to(fixture).as_posix() for path in entries if path.is_file()}
     if actual_files != allowed_files:
         raise ValueError(f"fixture must contain only reviewed JSON and the synthetic PNG: {sorted(actual_files)}")
     if not strictly_equal(load_json(fixture / "fixture-policy-v1.json"), EXPECTED_POLICY):

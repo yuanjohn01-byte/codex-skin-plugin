@@ -706,14 +706,14 @@ def validate(root: Path) -> list[str]:
 
     for relative in candidate_list:
         path = root / relative
+        if path.is_symlink():
+            errors.append(f"symbolic links are not allowed in Public source: {relative}")
+            continue
         reason = forbidden_path_reason(relative)
         if reason:
             errors.append(f"forbidden {reason}: {relative}")
             continue
         if not path.is_file():
-            continue
-        if path.is_symlink():
-            errors.append(f"symbolic links are not allowed in Public source: {relative}")
             continue
         if path.stat().st_size > MAX_FILE_BYTES:
             errors.append(f"file exceeds 5 MiB Public source limit: {relative}")
