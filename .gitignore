@@ -42,6 +42,11 @@ __pycache__/
 /transcripts/
 /prompts/
 /outputs/
+/logs/
+/screenshots/
+/recordings/
+/videos/
+/captures/
 /tmp/
 /temp/
 /private/
@@ -55,6 +60,52 @@ __pycache__/
 *.local.md
 *.notes.md
 *.draft.md
+
+# The same local-only directory categories are forbidden at any nesting depth.
+# Git paths always use `/`; bracket classes keep this effective on case-sensitive runners.
+**/.[Cc][Ll][Aa][Uu][Dd][Ee]/**
+**/.[Cc][Oo][Dd][Ee][Xx]/**
+**/.[Cc][Oo][Dd][Ee][Xx]-[Ss][Kk][Ii][Nn]-[Ll][Oo][Cc][Aa][Ll]/**
+**/.[Hh][Ii][Ss][Tt][Oo][Rr][Yy]/**
+**/.[Ii][Dd][Ee][Aa]/**
+**/.[Vv][Ss][Cc][Oo][Dd][Ee]/**
+**/[Aa][Rr][Cc][Hh][Ii][Vv][Ee]/**
+**/[Aa][Rr][Cc][Hh][Ii][Vv][Ee][Ss]/**
+**/[Aa][Rr][Tt][Ii][Ff][Aa][Cc][Tt]/**
+**/[Aa][Rr][Tt][Ii][Ff][Aa][Cc][Tt][Ss]/**
+**/[Cc][Aa][Pp][Tt][Uu][Rr][Ee]/**
+**/[Cc][Aa][Pp][Tt][Uu][Rr][Ee][Ss]/**
+**/[Dd][Ii][Ss][Cc][Uu][Ss][Ss][Ii][Oo][Nn]/**
+**/[Dd][Ii][Ss][Cc][Uu][Ss][Ss][Ii][Oo][Nn][Ss]/**
+**/[Dd][Rr][Aa][Ff][Tt]/**
+**/[Dd][Rr][Aa][Ff][Tt][Ss]/**
+**/[Ee][Vv][Ii][Dd][Ee][Nn][Cc][Ee]/**
+**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff]/**
+**/[Hh][Aa][Nn][Dd][Oo][Ff][Ff][Ss]/**
+**/[Ll][Oo][Gg]/**
+**/[Ll][Oo][Gg][Ss]/**
+**/[Nn][Oo][Tt][Ee]/**
+**/[Nn][Oo][Tt][Ee][Ss]/**
+**/[Oo][Nn][Ee]-[Tt][Ii][Mm][Ee]-[Hh][Aa][Nn][Dd][Oo][Ff][Ff]/**
+**/[Oo][Nn][Ee]-[Tt][Ii][Mm][Ee]-[Hh][Aa][Nn][Dd][Oo][Ff][Ff][Ss]/**
+**/[Oo][Nn][Ee]_[Tt][Ii][Mm][Ee]_[Hh][Aa][Nn][Dd][Oo][Ff][Ff]/**
+**/[Oo][Nn][Ee]_[Tt][Ii][Mm][Ee]_[Hh][Aa][Nn][Dd][Oo][Ff][Ff][Ss]/**
+**/[Oo][Uu][Tt][Pp][Uu][Tt]/**
+**/[Oo][Uu][Tt][Pp][Uu][Tt][Ss]/**
+**/[Pp][Ee][Rr][Ss][Oo][Nn][Aa][Ll]/**
+**/[Pp][Rr][Oo][Mm][Pp][Tt]/**
+**/[Pp][Rr][Oo][Mm][Pp][Tt][Ss]/**
+**/[Rr][Ee][Cc][Oo][Rr][Dd][Ii][Nn][Gg]/**
+**/[Rr][Ee][Cc][Oo][Rr][Dd][Ii][Nn][Gg][Ss]/**
+**/[Ss][Cc][Rr][Aa][Tt][Cc][Hh]/**
+**/[Ss][Cc][Rr][Ee][Ee][Nn][Ss][Hh][Oo][Tt]/**
+**/[Ss][Cc][Rr][Ee][Ee][Nn][Ss][Hh][Oo][Tt][Ss]/**
+**/[Tt][Ee][Mm][Pp]/**
+**/[Tt][Mm][Pp]/**
+**/[Tt][Rr][Aa][Nn][Ss][Cc][Rr][Ii][Pp][Tt]/**
+**/[Tt][Rr][Aa][Nn][Ss][Cc][Rr][Ii][Pp][Tt][Ss]/**
+**/[Vv][Ii][Dd][Ee][Oo]/**
+**/[Vv][Ii][Dd][Ee][Oo][Ss]/**
 
 # Release binaries and packages are published as immutable GitHub Release assets
 *.zip

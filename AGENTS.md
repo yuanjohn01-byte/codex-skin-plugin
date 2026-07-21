@@ -66,6 +66,13 @@ Run a secret, forbidden-path, license and large-file scan before every push/rele
 4. Preserve unrelated work; never patch the read-only Dream Skin reference.
 5. If the required Private API is not already in Production, stop the Plugin release even if local tests pass.
 
+For `repo_scope: plugin`, create only this repository's branch/PR and run only Public
+checks; a Private branch or same-name twin is forbidden as a default requirement. For
+`repo_scope: both`, record the exact allowlisted handoff artifacts and paired Private
+PR/ref. The Public baseline remains independently publishable and must not clone,
+query or wait for Private. Cross-repository comparison is a separate explicit gate;
+Public `main` must not depend on Private's transient branch or merge state.
+
 The Private task-start record is maintained locally and does not require a standalone Public push. Push only a locally verified, reviewable Public increment, or open a Draft PR early when remote cross-platform CI or collaboration is needed.
 
 Update the Private project plan at task end with Public branch, commit, PR, tag/release, checksums, platform run IDs and remaining issues.
@@ -87,6 +94,19 @@ Do not invent command names. Once CI/scripts exist, update this file with the ve
 Use `codex/<task-id>-<slug>` branches and `type(scope): summary` commits. When a verified task/subtask is complete, update the project plan, commit, push the feature branch and create/update a PR without another reminder.
 
 Public feature CI is PR-driven; do not restore a parallel `push` trigger for `codex/**` or push solely for task status/evidence. Stale PR heads are cancelled, the Public baseline checks `main` after merge, and path-filtered platform workflows remain available on PRs and by manual dispatch.
+
+Use impact-based profiles: `fast` for public docs/governance-only work, `standard` for
+scoped contracts/tests/components, and `full` for workflow/source uncertainty, shared
+Helper/adapter/Guardian behavior, release candidates and manual full runs. macOS and
+Windows remain MVP platforms; shared OS runtime or release changes require both, while
+unrelated docs or Private-only work must not start the platform matrix.
+
+Version only durable public user/safety/release documentation. Keep Private plans and
+evidence, personal notes, drafts, transcripts, prompts, raw logs,
+screenshots/recordings, temporary outputs, build artifacts and one-time handoffs out
+of Public. Detailed CI output/run IDs belong in PR/Actions; do not add a commit only to
+record evidence. Freeze the final candidate head before review and use one
+concentrated push per implementation/repair round.
 
 Public release sequence:
 

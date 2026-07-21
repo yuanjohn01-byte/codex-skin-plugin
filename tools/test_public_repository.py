@@ -10,9 +10,53 @@ import sys
 import tempfile
 from pathlib import Path
 
+from validate_public_repo import forbidden_path_reason
+
 
 ROOT = Path(__file__).resolve().parents[1]
 VALIDATOR = ROOT / "tools" / "validate_public_repo.py"
+LOCAL_ONLY_COMPONENTS = (
+    ".claude",
+    ".codex",
+    ".codex-skin-local",
+    ".history",
+    ".idea",
+    ".vscode",
+    "archive",
+    "archives",
+    "artifact",
+    "artifacts",
+    "capture",
+    "captures",
+    "discussion",
+    "discussions",
+    "draft",
+    "drafts",
+    "evidence",
+    "handoff",
+    "handoffs",
+    "log",
+    "logs",
+    "note",
+    "notes",
+    "one-time-handoff",
+    "one_time_handoff",
+    "output",
+    "outputs",
+    "personal",
+    "prompts",
+    "recording",
+    "recordings",
+    "scratch",
+    "screenshot",
+    "screenshots",
+    "temp",
+    "tmp",
+    "transcript",
+    "transcripts",
+    "video",
+    "videos",
+)
 MINIMAL_MANIFEST = {
     "name": "codex-skin",
     "version": "0.0.2",
@@ -277,7 +321,7 @@ def main() -> int:
         sys.stderr.write(current.stdout + current.stderr)
         return 1
 
-    for relative in (
+    local_only_examples = (
         ".env",
         ".dev.vars",
         ".claude/settings.json",
@@ -287,25 +331,79 @@ def main() -> int:
         "themes/pro.cskin",
         "docs/internal/plan.md",
         "artifacts/helper.zip",
-    ):
+        "logs/ci.txt",
+        "screenshots/review.png",
+        "recordings/manual-test.mp4",
+        "docs/drafts/plan.md",
+        "docs/notes/review.md",
+        "docs/temp/output.txt",
+        "docs/logs/ci.txt",
+        "docs/screenshots/review.png",
+        "docs/recordings/test.mov",
+        "docs/DrAfTs/mixed-case.md",
+        "docs/handoffs/one-time.txt",
+    )
+    for relative in local_only_examples:
         assert_ignored(relative, True)
+    for component in LOCAL_ONLY_COMPONENTS:
+        relative = f"docs/{component}/sample.txt"
+        assert_ignored(relative, True)
+        if forbidden_path_reason(Path(relative)) is None:
+            raise AssertionError(f"validator accepted nested local-only component: {relative}")
+
+    for windows_or_case_variant in (
+        r"docs\Drafts\plan.md",
+        r"docs\NOTES\review.md",
+        r"docs\Temp\output.txt",
+        r"docs\LOGS\ci.txt",
+        r"docs\ScreenShots\review.png",
+        r"docs\Recordings\test.mov",
+    ):
+        if forbidden_path_reason(Path(windows_or_case_variant)) is None:
+            raise AssertionError(
+                f"validator accepted Windows/case local-only path: {windows_or_case_variant}"
+            )
+
     for relative in (
+        "AGENTS.md",
         "LICENSE",
         "plugins/codex-skin/assets/icon.png",
         "src/helper/main.go",
         "contracts/public/theme.schema.json",
         "tests/theme_test.go",
+        "docs/user-installation.md",
+        "SECURITY.md",
     ):
         assert_ignored(relative, False)
+        if forbidden_path_reason(Path(relative)) is not None:
+            raise AssertionError(f"validator rejected durable Public content: {relative}")
 
     negative_fixture(".env", b"EXAMPLE=value\n", "environment file")
-    negative_fixture("notes/private.md", b"local note\n", "outside the Public allowlist")
+    negative_fixture("notes/private.md", b"local note\n", "local-only evidence path")
     negative_fixture("docs/internal/plan.md", b"internal plan\n", "documentation path")
+    negative_fixture("docs/planning/plan.md", b"internal plan\n", "documentation path")
+    negative_fixture("docs/product/prd.md", b"internal PRD\n", "documentation path")
+    negative_fixture(
+        "docs/engineering/system-design.md", b"internal design\n", "documentation path"
+    )
+    negative_fixture("docs/operations/runbook.md", b"internal ops\n", "documentation path")
+    negative_fixture("contracts/private/api.json", b"{}\n", "documentation path")
+    negative_fixture("screenshots/review.png", b"raw capture\n", "local-only evidence path")
+    negative_fixture("docs/drafts/plan.md", b"draft\n", "local-only evidence path")
+    negative_fixture("docs/notes/review.md", b"note\n", "local-only evidence path")
+    negative_fixture("docs/temp/output.txt", b"temporary\n", "local-only evidence path")
+    negative_fixture("docs/logs/ci.txt", b"raw log\n", "local-only evidence path")
+    negative_fixture(
+        "docs/screenshots/review.png", b"capture\n", "local-only evidence path"
+    )
+    negative_fixture(
+        "docs/recordings/test.mov", b"recording\n", "local-only evidence path"
+    )
     marker = ("ship" + "any").encode("utf-8")
     negative_fixture("src/copied-template.txt", marker, "Private template marker")
     secret = b"access_" + b"token=\"" + b"sensitive-value-1234" + b"\"\n"
     negative_fixture("src/config.txt", secret, "generic-secret-assignment")
-    negative_fixture("artifacts/helper.zip", b"binary", "outside the Public allowlist")
+    negative_fixture("artifacts/helper.zip", b"binary", "local-only evidence path")
     negative_fixture("src/oversized.bin", b"0" * (5 * 1024 * 1024 + 1), "exceeds 5 MiB")
     negative_fixture(
         "plugins/codex-skin/.codex-plugin/notes.md",
@@ -391,7 +489,7 @@ def main() -> int:
         "export manifest or SHA-256",
     )
 
-    print("Public repository tests passed (positive scan + 27 negative fixtures).")
+    print("Public repository tests passed (positive scan + 39 negative fixtures).")
     return 0
 
 
