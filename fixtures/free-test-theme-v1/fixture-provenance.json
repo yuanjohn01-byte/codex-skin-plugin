@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "asset": "assets/synthetic-dawn.png",
+  "rights": "Synthetic asset generated deterministically in this repository; no third-party or source artwork is used.",
+  "generator": "tools/codex-skin/generate_free_theme_fixture_asset.py",
+  "generatorVersion": 1,
+  "description": "A 16-by-16 RGB gradient assembled from fixed arithmetic constants and encoded as a standard PNG."
+}

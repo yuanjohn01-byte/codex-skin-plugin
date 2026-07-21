@@ -192,6 +192,24 @@ EXPORTED_CONTRACTS = (
         "codex-skin/contracts/public/device-authorization-poll-v1.schema.json",
     ),
 )
+EXPORTED_FIXTURES = (
+    (
+        Path("fixtures/free-test-theme-v1/fixture-policy-v1.json"),
+        "codex-skin/fixtures/public/free-test-theme-v1/fixture-policy-v1.json",
+    ),
+    (
+        Path("fixtures/free-test-theme-v1/fixture-provenance.json"),
+        "codex-skin/fixtures/public/free-test-theme-v1/fixture-provenance.json",
+    ),
+    (
+        Path("fixtures/free-test-theme-v1/manifest.json"),
+        "codex-skin/fixtures/public/free-test-theme-v1/manifest.json",
+    ),
+    (
+        Path("fixtures/free-test-theme-v1/assets/synthetic-dawn.png"),
+        "codex-skin/fixtures/public/free-test-theme-v1/assets/synthetic-dawn.png",
+    ),
+)
 EXPECTED_PLUGIN_VERSION = "0.0.2"
 INSTALL_COMMANDS = (
     "codex plugin marketplace add yuanjohn01-byte/codex-skin-plugin --ref main",
@@ -258,10 +276,42 @@ def repository_candidates(root: Path) -> tuple[list[Path], str | None]:
     return sorted(set(paths), key=lambda item: item.as_posix()), None
 
 
+def load_strict_json(path: Path) -> object:
+    def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
+        payload: dict[str, object] = {}
+        for key, value in pairs:
+            if key in payload:
+                raise ValueError(f"{path.name} contains duplicate JSON key: {key}")
+            payload[key] = value
+        return payload
+
+    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=reject_duplicate_keys)
+
+
+def strictly_equal(actual: object, expected: object) -> bool:
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(actual) == set(expected) and all(
+            strictly_equal(actual[key], value) for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(
+            strictly_equal(actual[index], expected[index])
+            for index in range(len(expected))
+        )
+    return actual == expected
+
+
 def normalized_parts(relative: Path | str) -> tuple[str, ...]:
     """Use Git-style separators and case-insensitive policy on every platform."""
     normalized = str(relative).replace("\\", "/")
     return tuple(part.casefold() for part in normalized.split("/") if part not in {"", "."})
+
+
+def canonical_relative_path(relative: Path | str) -> str:
+    """Keep repository-boundary diagnostics stable across Windows and POSIX."""
+    return str(relative).replace("\\", "/")
 
 
 def forbidden_path_reason(relative: Path) -> str | None:
@@ -531,7 +581,8 @@ def validate_license(root: Path, candidates: set[Path], errors: list[str]) -> No
 
 
 def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[str]) -> None:
-    required = {relative for relative, _ in EXPORTED_CONTRACTS} | {EXPORT_MANIFEST_RELATIVE}
+    exported_artifacts = (*EXPORTED_CONTRACTS, *EXPORTED_FIXTURES)
+    required = {relative for relative, _ in exported_artifacts} | {EXPORT_MANIFEST_RELATIVE}
     missing = sorted(required - candidates, key=lambda item: item.as_posix())
     if missing:
         for relative in missing:
@@ -539,9 +590,13 @@ def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[
         return
 
     try:
-        manifest = json.loads((root / EXPORT_MANIFEST_RELATIVE).read_text(encoding="utf-8"))
+        manifest = load_strict_json(root / EXPORT_MANIFEST_RELATIVE)
+        artifacts = {
+            relative: (root / relative).read_bytes()
+            for relative, _ in exported_artifacts
+        }
         schemas = {
-            relative: ((root / relative).read_bytes(), json.loads((root / relative).read_bytes()))
+            relative: ((root / relative).read_bytes(), load_strict_json(root / relative))
             for relative, _ in EXPORTED_CONTRACTS
         }
     except (OSError, json.JSONDecodeError) as exc:
@@ -554,13 +609,13 @@ def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[
         "artifacts": [
             {
                 "destination": relative.as_posix(),
-                "sha256": hashlib.sha256(schemas[relative][0]).hexdigest(),
+                "sha256": hashlib.sha256(artifacts[relative]).hexdigest(),
                 "source": source,
             }
-            for relative, source in EXPORTED_CONTRACTS
+            for relative, source in exported_artifacts
         ],
     }
-    if manifest != expected_manifest:
+    if not strictly_equal(manifest, expected_manifest):
         errors.append("public contract export manifest or SHA-256 does not match the generated schema")
 
     protocol_schema = schemas[EXPORTED_CONTRACTS[0][0]][1]
@@ -683,14 +738,17 @@ def validate(root: Path) -> list[str]:
 
     for relative in candidate_list:
         path = root / relative
+        if path.is_symlink():
+            errors.append(
+                "symbolic links are not allowed in Public source: "
+                f"{canonical_relative_path(relative)}"
+            )
+            continue
         reason = forbidden_path_reason(relative)
         if reason:
             errors.append(f"forbidden {reason}: {relative}")
             continue
         if not path.is_file():
-            continue
-        if path.is_symlink():
-            errors.append(f"symbolic links are not allowed in Public source: {relative}")
             continue
         if path.stat().st_size > MAX_FILE_BYTES:
             errors.append(f"file exceeds 5 MiB Public source limit: {relative}")

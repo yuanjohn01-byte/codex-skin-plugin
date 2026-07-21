@@ -14,6 +14,26 @@
       "destination": "contracts/device-authorization-poll-v1.schema.json",
       "sha256": "ebc422ad4efa58ad4c3a3ab2aaedb338a81cfba685f81797a9f5c0a018602fb0",
       "source": "codex-skin/contracts/public/device-authorization-poll-v1.schema.json"
+    },
+    {
+      "destination": "fixtures/free-test-theme-v1/fixture-policy-v1.json",
+      "sha256": "3bce4fb41ac4b336694192268b1a479b42a8e3d92d074642f0657724cc685616",
+      "source": "codex-skin/fixtures/public/free-test-theme-v1/fixture-policy-v1.json"
+    },
+    {
+      "destination": "fixtures/free-test-theme-v1/fixture-provenance.json",
+      "sha256": "7f71a6a4581baecd9a286a7a3ff6e7c20907fe2e651741d84b93af21a7e42bf5",
+      "source": "codex-skin/fixtures/public/free-test-theme-v1/fixture-provenance.json"
+    },
+    {
+      "destination": "fixtures/free-test-theme-v1/manifest.json",
+      "sha256": "37dd29e2a3370183350c4449450ab0a10c742b57e7b1bbe33e8362bbdbae01ea",
+      "source": "codex-skin/fixtures/public/free-test-theme-v1/manifest.json"
+    },
+    {
+      "destination": "fixtures/free-test-theme-v1/assets/synthetic-dawn.png",
+      "sha256": "32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575",
+      "source": "codex-skin/fixtures/public/free-test-theme-v1/assets/synthetic-dawn.png"
     }
   ],
   "generatedFrom": "codex-skin/contracts/public/export-allowlist.json",

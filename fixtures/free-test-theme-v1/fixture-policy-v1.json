@@ -1,0 +1,41 @@
+{
+  "schemaVersion": 1,
+  "requiredRegions": [
+    "home",
+    "sidebar",
+    "suggestionCards",
+    "projectPicker",
+    "composer"
+  ],
+  "allowedTokens": [
+    "backgroundImage",
+    "backgroundOverlay",
+    "surfaceOpacity",
+    "surfaceBlurPx",
+    "textPrimary",
+    "textSecondary",
+    "accent",
+    "border",
+    "radiusScale"
+  ],
+  "allowedCustomization": [
+    "backgroundOverlay",
+    "surfaceOpacity",
+    "surfaceBlurPx",
+    "accent",
+    "radiusScale"
+  ],
+  "allowedAssetPaths": [
+    "assets/synthetic-dawn.png"
+  ],
+  "allowedAssetRoles": [
+    "background"
+  ],
+  "allowedAssetContentTypes": [
+    "image/png"
+  ],
+  "requiredPlatforms": [
+    "macos",
+    "windows"
+  ]
+}

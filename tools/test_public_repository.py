@@ -10,7 +10,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from validate_public_repo import forbidden_path_reason
+from validate_public_repo import canonical_relative_path, forbidden_path_reason
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -198,6 +198,23 @@ def write_baseline(fixture: Path) -> None:
                 "source": f"codex-skin/contracts/public/{filename}",
             }
         )
+    fixtures = {
+        "fixtures/free-test-theme-v1/fixture-policy-v1.json": b"{}\n",
+        "fixtures/free-test-theme-v1/fixture-provenance.json": b"{}\n",
+        "fixtures/free-test-theme-v1/manifest.json": b"{}\n",
+        "fixtures/free-test-theme-v1/assets/synthetic-dawn.png": b"fixture-png",
+    }
+    for destination, content in fixtures.items():
+        target = fixture / destination
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+        manifest_artifacts.append(
+            {
+                "destination": destination,
+                "sha256": hashlib.sha256(content).hexdigest(),
+                "source": f"codex-skin/fixtures/public/free-test-theme-v1/{Path(destination).relative_to('fixtures/free-test-theme-v1').as_posix()}",
+            }
+        )
     export_manifest = {
         "schemaVersion": 1,
         "generatedFrom": "codex-skin/contracts/public/export-allowlist.json",
@@ -225,6 +242,50 @@ def negative_fixture(relative: str, content: bytes, expected_message: str) -> No
         combined = checked.stdout + checked.stderr
         if checked.returncode == 0 or expected_message not in combined:
             raise AssertionError(f"validator did not reject {relative}:\n{combined}")
+
+
+def negative_symlink(relative: str, directory: bool) -> None:
+    with tempfile.TemporaryDirectory(prefix="codex-skin-public-boundary-") as directory_path:
+        fixture = Path(directory_path)
+        initialized = run(["git", "init", "--quiet"], fixture)
+        if initialized.returncode != 0:
+            raise AssertionError(initialized.stderr)
+        write_baseline(fixture)
+        source = fixture / ("docs/real" if directory else "src/real.txt")
+        if directory:
+            source.mkdir(parents=True)
+            (source / "readme.md").write_text("safe\n", encoding="utf-8")
+        else:
+            source.parent.mkdir(parents=True, exist_ok=True)
+            source.write_text("safe\n", encoding="utf-8")
+        link = fixture / relative
+        link.parent.mkdir(parents=True, exist_ok=True)
+        link.symlink_to(source, target_is_directory=directory)
+        added = run(["git", "add", "--force", "."], fixture)
+        if added.returncode != 0:
+            raise AssertionError(added.stderr)
+        checked = run([sys.executable, str(VALIDATOR), "--root", str(fixture)], fixture)
+        combined = checked.stdout + checked.stderr
+        expected = f"symbolic links are not allowed in Public source: {relative}"
+        if checked.returncode == 0 or expected not in combined:
+            raise AssertionError(f"tracked symlink was not rejected:\n{combined}")
+
+
+def negative_export_manifest(content: str, expected_message: str) -> None:
+    with tempfile.TemporaryDirectory(prefix="codex-skin-public-export-") as directory:
+        fixture = Path(directory)
+        initialized = run(["git", "init", "--quiet"], fixture)
+        if initialized.returncode != 0:
+            raise AssertionError(initialized.stderr)
+        write_baseline(fixture)
+        (fixture / "contracts/export-manifest.json").write_text(content, encoding="utf-8")
+        added = run(["git", "add", "--force", "."], fixture)
+        if added.returncode != 0:
+            raise AssertionError(added.stderr)
+        checked = run([sys.executable, str(VALIDATOR), "--root", str(fixture)], fixture)
+        combined = checked.stdout + checked.stderr
+        if checked.returncode == 0 or expected_message not in combined:
+            raise AssertionError(f"export manifest was not rejected:\n{combined}")
 
 
 def negative_manifest(payload: dict[str, object], expected_message: str) -> None:
@@ -303,6 +364,8 @@ def main() -> int:
     if current.returncode != 0:
         sys.stderr.write(current.stdout + current.stderr)
         return 1
+    if canonical_relative_path(r"src\file-link.txt") != "src/file-link.txt":
+        raise AssertionError("Windows repository path diagnostic is not canonical")
 
     local_only_examples = (
         ".env",
@@ -393,6 +456,43 @@ def main() -> int:
         b"not a manifest\n",
         "only plugin.json belongs",
     )
+    negative_symlink("src/file-link.txt", False)
+    negative_symlink("docs/directory-link", True)
+
+    with tempfile.TemporaryDirectory(prefix="codex-skin-public-export-source-") as directory:
+        export_fixture = Path(directory)
+        write_baseline(export_fixture)
+        export_path = export_fixture / "contracts/export-manifest.json"
+        export_manifest = json.loads(export_path.read_text(encoding="utf-8"))
+        export_text = export_path.read_text(encoding="utf-8")
+    negative_export_manifest(
+        export_text.replace('"schemaVersion": 1,', '"schemaVersion": 1, "schemaVersion": 1,', 1),
+        "duplicate JSON key",
+    )
+    for invalid_version in (True, 1.0, "1"):
+        payload = dict(export_manifest)
+        payload["schemaVersion"] = invalid_version
+        negative_export_manifest(json.dumps(payload), "export manifest or SHA-256")
+    nested = export_manifest["artifacts"][0]
+    negative_export_manifest(
+        export_text.replace(
+            f'"destination": "{nested["destination"]}",',
+            f'"destination": "{nested["destination"]}", "destination": "{nested["destination"]}",',
+            1,
+        ),
+        "duplicate JSON key",
+    )
+    for mutate in (
+        lambda payload: payload.__setitem__("artifacts", False),
+        lambda payload: payload.__setitem__("artifacts", [False]),
+        lambda payload: payload["artifacts"][0].__setitem__("destination", 1),
+        lambda payload: payload["artifacts"][0].__setitem__("sha256", True),
+        lambda payload: payload["artifacts"][0].__setitem__("extra", True),
+        lambda payload: payload["artifacts"][0].pop("source"),
+    ):
+        payload = json.loads(export_text)
+        mutate(payload)
+        negative_export_manifest(json.dumps(payload), "export manifest or SHA-256")
 
     invalid_name = dict(MINIMAL_MANIFEST)
     invalid_name["name"] = "Codex Skin"
@@ -472,7 +572,7 @@ def main() -> int:
         "export manifest or SHA-256",
     )
 
-    print("Public repository tests passed (positive scan + 39 negative fixtures).")
+    print("Public repository tests passed (positive scan + 41 negative fixtures).")
     return 0
 
 

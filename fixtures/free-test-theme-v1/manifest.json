@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "themePublicId": "100001",
+  "themeVersion": "1.0.0",
+  "name": "Synthetic Dawn",
+  "design": {
+    "mode": "dark",
+    "tokens": {
+      "backgroundImage": "assets/synthetic-dawn.png",
+      "backgroundOverlay": 0.42,
+      "surfaceOpacity": 0.82,
+      "surfaceBlurPx": 18,
+      "textPrimary": "#F7F7FA",
+      "textSecondary": "#C8CAD3",
+      "accent": "#A78BFA",
+      "border": "#FFFFFF24",
+      "radiusScale": 1.0
+    },
+    "regions": {
+      "home": true,
+      "sidebar": true,
+      "suggestionCards": true,
+      "projectPicker": true,
+      "composer": true
+    }
+  },
+  "customization": {
+    "allowed": [
+      "backgroundOverlay",
+      "surfaceOpacity",
+      "surfaceBlurPx",
+      "accent",
+      "radiusScale"
+    ]
+  },
+  "assets": [
+    {
+      "path": "assets/synthetic-dawn.png",
+      "role": "background",
+      "contentType": "image/png",
+      "byteSize": 670,
+      "sha256": "32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575"
+    }
+  ],
+  "compatibility": {
+    "platforms": [
+      "macos",
+      "windows"
+    ],
+    "minEngineVersion": "0.1.0"
+  }
+}
