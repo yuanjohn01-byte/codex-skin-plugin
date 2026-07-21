@@ -65,6 +65,16 @@ def load_json(path: Path) -> dict[str, object]:
     return payload
 
 
+def strictly_equal(actual: object, expected: object) -> bool:
+    if type(actual) is not type(expected):
+        return False
+    if isinstance(expected, dict):
+        return set(actual) == set(expected) and all(strictly_equal(actual[key], value) for key, value in expected.items())
+    if isinstance(expected, list):
+        return len(actual) == len(expected) and all(strictly_equal(item, value) for item, value in zip(actual, expected, strict=True))
+    return actual == expected
+
+
 def validate_png(path: Path) -> bytes:
     content = path.read_bytes()
     if content[:8] != b"\x89PNG\r\n\x1a\n" or len(content) < 33:
@@ -86,11 +96,11 @@ def main() -> int:
     actual_files = {path.relative_to(fixture).as_posix() for path in fixture.rglob("*") if path.is_file()}
     if actual_files != allowed_files:
         raise ValueError(f"fixture must contain only reviewed JSON and the synthetic PNG: {sorted(actual_files)}")
-    if load_json(fixture / "fixture-policy-v1.json") != EXPECTED_POLICY:
+    if not strictly_equal(load_json(fixture / "fixture-policy-v1.json"), EXPECTED_POLICY):
         raise ValueError("fixture policy does not match the exact reviewed v1 schema")
-    if load_json(fixture / "fixture-provenance.json") != EXPECTED_PROVENANCE:
+    if not strictly_equal(load_json(fixture / "fixture-provenance.json"), EXPECTED_PROVENANCE):
         raise ValueError("fixture provenance does not match the exact reviewed schema")
-    if load_json(fixture / "manifest.json") != EXPECTED_MANIFEST:
+    if not strictly_equal(load_json(fixture / "manifest.json"), EXPECTED_MANIFEST):
         raise ValueError("fixture manifest does not match the exact reviewed v1 data-only structure")
     content = validate_png(fixture / ASSET_PATH)
     if hashlib.sha256(content).hexdigest() != ASSET_SHA256:

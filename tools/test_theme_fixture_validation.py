@@ -40,6 +40,10 @@ def main() -> int:
     reject("manifest extra field", "manifest.json", lambda payload: payload.__setitem__("extra", True))
     reject("manifest CSS field", "manifest.json", lambda payload: payload["design"].__setitem__("css", "body{}"))
     reject("data URI token", "manifest.json", lambda payload: payload["design"]["tokens"].__setitem__("backgroundImage", "data:image/png;base64,AA=="))
+    reject("schemaVersion boolean", "manifest.json", lambda payload: payload.__setitem__("schemaVersion", True))
+    reject("region integer", "manifest.json", lambda payload: payload["design"]["regions"].__setitem__("home", 1))
+    reject("blur float", "manifest.json", lambda payload: payload["design"]["tokens"].__setitem__("surfaceBlurPx", 18.0))
+    reject("asset size float", "manifest.json", lambda payload: payload["assets"][0].__setitem__("byteSize", 670.0))
     print("Free Theme fixture exact-schema negative tests passed.")
     return 0
 
