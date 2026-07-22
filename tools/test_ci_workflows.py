@@ -120,6 +120,12 @@ def main() -> int:
         }
 
     assert triggered("tools/create_release_descriptor.py") == {"helper-build-spike.yml"}
+    assert triggered("tools/build_helper.py") == {
+        "guardian-lifecycle-spike.yml",
+        "helper-build-spike.yml",
+        "macos-signing-spike.yml",
+        "windows-signing-spike.yml",
+    }
     assert triggered("internal/guardian/manager.go") == {"guardian-lifecycle-spike.yml"}
     assert triggered("tools/test_macos_signing.py") == {"macos-signing-spike.yml"}
     assert triggered("tools/test_windows_signing.ps1") == {"windows-signing-spike.yml"}

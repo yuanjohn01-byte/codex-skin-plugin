@@ -11,6 +11,7 @@ on:
       - "internal/guardian/**"
       - "internal/guardiancli/**"
       - "tools/build_guardian.py"
+      - "tools/build_helper.py"
       - "tools/test_guardian_builds.py"
       - "tools/test_guardian_macos.py"
       - "tools/test_guardian_windows.ps1"

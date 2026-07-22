@@ -137,8 +137,30 @@ def changed_paths(base_sha: str, head_sha: str, root: Path = ROOT) -> list[str] 
         or set(base_sha) == {"0"}
     ):
         return None
+    merge_base_result = subprocess.run(
+        ["git", "merge-base", "--all", base_sha, head_sha],
+        cwd=root,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    merge_bases = [line for line in merge_base_result.stdout.splitlines() if line]
+    if (
+        merge_base_result.returncode != 0
+        or len(merge_bases) != 1
+        or IMMUTABLE_GIT_SHA.fullmatch(merge_bases[0]) is None
+    ):
+        return None
     result = subprocess.run(
-        ["git", "diff", "--name-only", "--no-renames", base_sha, head_sha, "--"],
+        [
+            "git",
+            "diff",
+            "--name-only",
+            "--no-renames",
+            merge_bases[0],
+            head_sha,
+            "--",
+        ],
         cwd=root,
         check=False,
         capture_output=True,
