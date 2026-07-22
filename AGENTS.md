@@ -84,3 +84,8 @@ Do not invent command names. Once CI/scripts exist, update this file with the ve
 Keep only durable public user/safety/release documentation here; never add Private
 plans/evidence or raw local artifacts. The Workspace root and Private release workflow
 define profiles, review, PR CI, release order and Founder-confirmation boundaries.
+
+The required `repository-boundary` context always reports. Durable docs and fixture
+validation do not install Go or trigger Helper/Guardian/signing/platform matrices;
+those workflows remain explicitly scoped to their own product paths, while workflow,
+dependency, unknown and manual input fail closed to full.
