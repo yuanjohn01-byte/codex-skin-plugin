@@ -6,7 +6,9 @@ This repository is Public and must remain independently publishable. It owns onl
 
 The repository root owns marketplace and release metadata. The installable Plugin root is `plugins/codex-skin/`; its folder name and `.codex-plugin/plugin.json` name must both be `codex-skin`.
 
-Also follow the parent Workspace `AGENTS.md`. For cross-repository tasks, read the Private project-plan item without copying Private content here.
+Also follow the parent Workspace `AGENTS.md`. Read the Private
+`docs/product/paid-alpha-release-scope.md` and current project-plan delivery package
+without copying Private content here.
 
 ## Public Safety Boundary
 
@@ -34,9 +36,15 @@ Run a secret, forbidden-path, license and large-file scan before every push/rele
 - Follow the current official Codex Plugin structure, including required `plugins/codex-skin/.codex-plugin/plugin.json`.
 - Website install/update instructions must be copied only from macOS/Windows `PLG-S1` evidence, not guessed from old screenshots or memory.
 - MVP uses Skills plus an on-demand CLI Helper. Do not add a persistent MCP server, daemon, tray/menu app or automatic hook without a new architecture/security decision.
+- Paid Alpha does not install or register Guardian; update-triggered background
+  reconcile is deferred.
 - Users must not install Node. The released Helper must be self-contained for supported platforms.
 - Bootstrap downloads only fixed release assets selected by platform/version, verifies descriptor/hash/signature, and stores Helper/recovery state outside Plugin cache.
-- Public release artifacts are versioned, checksummed, signed/notarized as required and accompanied by an SBOM.
+- Public release artifacts are versioned, checksummed, covered by an Ed25519 release
+  descriptor and accompanied by an SBOM. Invited Paid Alpha users may temporarily
+  receive Helpers without commercial OS certificates only with explicit
+  Gatekeeper/SmartScreen disclosure. Developer ID/notarization and Windows commercial
+  signing are required before unrestricted public self-serve payment.
 
 ## Theme and Local Engine Invariants
 
@@ -45,8 +53,11 @@ Run a secret, forbidden-path, license and large-file scan before every push/rele
 - Verify Codex official process identity before attach or stop. No process-name-only fallback.
 - CDP listens on loopback only; never upload the local port.
 - Apply uses validate→stage→apply→verify→commit with journal and last-known-good rollback.
-- Unknown/blocked compatibility prevents new apply but never prevents restore.
-- Restore must work offline, logged out, subscription expired and Plugin removed. It must live outside Plugin cache.
+- Compatibility uses verified official identity plus required capability/marker probes
+  and post-apply verification. Failed or indeterminate probes prevent new apply;
+  an unseen version number alone does not. Restore always remains available.
+- Restore must work offline, logged out, Paid Alpha access expired and Plugin removed.
+  It must live outside Plugin cache.
 - Repeated switch/pause/restore/uninstall operations must be idempotent.
 
 ## API, Auth and Diagnostics
@@ -54,7 +65,8 @@ Run a secret, forbidden-path, license and large-file scan before every push/rele
 - Consume only generated, versioned public contracts from the Private allowlist.
 - Access tokens stay in memory; refresh tokens use macOS Keychain/Windows Credential Manager and rotate on use.
 - Respect server polling interval, `Retry-After`, idempotency and non-retryable errors.
-- Do not locally grant Pro access based on UI, callback URL or editable state. Server entitlement is authoritative.
+- Do not locally grant Pro access based on UI, callback URL or editable state. Server
+  access state is authoritative.
 - User-facing failures include a stable `CS-*`, one `INC-*` or local operation ID, current-theme impact and an actionable next step. Do not show raw stack traces.
 - Default diagnostics exclude prompts, code, absolute paths, tokens, cookies and screenshots. Expanded diagnostics require explicit user approval and local redaction preview.
 
@@ -62,7 +74,7 @@ Run a secret, forbidden-path, license and large-file scan before every push/rele
 
 Follow the Workspace-root `AGENTS.md` for task contracts, risk handling and remote
 delivery, and the Private release workflow for cross-repository sequencing. Confirm
-the Private project-plan task has `repo_scope: plugin` or `both`, inspect the manifest,
+the Private project-plan package has `repo_scope: plugin` or `both`, inspect the manifest,
 marketplace, generated contracts and tests, and preserve unrelated work. Never patch
 the read-only Dream Skin reference. If an API is not in Production, stop a Plugin
 release even when local checks pass.
@@ -75,7 +87,8 @@ Minimum relevant checks:
 - format/lint/typecheck/unit/contract/integration tests available in the repo.
 - secret, forbidden-path, proprietary-template/source marker, license, dependency, SBOM and large-file scans.
 - malicious theme and signature/hash negative tests.
-- macOS and Windows fresh install, vN→vN+1 update, apply, verify, switch and restore.
+- macOS and Windows fresh install, vN→vN+1 update, apply, verify, switch and restore
+  for shared Helper/adapter or Release changes; ordinary Skill/docs changes stay scoped.
 - no-Node environment, network loss, Plugin deletion, token revoke and offline restore.
 - version, README, CHANGELOG, generated contracts and release descriptor consistency.
 
@@ -86,7 +99,7 @@ plans/evidence or raw local artifacts. The Workspace root and Private release wo
 define profiles, review, PR CI, release order and Founder-confirmation boundaries.
 
 The required `repository-boundary` context always reports. Durable docs and fixture
-validation do not install Go or trigger Helper/Guardian/signing/platform matrices;
-those workflows remain scoped to their own PR paths. Direct/untrusted main and the
-central manual full gate call all five reusable specialized workflows; a proven normal
-merge-main stays lightweight.
+validation do not install Go or trigger Helper/Guardian/signing/platform matrices.
+Guardian and signing feasibility remain available as deferred/manual workflows but
+are not Paid Alpha gates except when their own code changes. `PA-CI-001` must align the
+central manual profile before RC; a proven normal merge-main stays lightweight.
