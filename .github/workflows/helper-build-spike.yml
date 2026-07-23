@@ -22,9 +22,10 @@ on:
       - "tools/test_helper_builds.py"
       - "tools/test_release_descriptor.py"
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: helper-build-spike-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:

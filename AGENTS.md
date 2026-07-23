@@ -87,5 +87,6 @@ define profiles, review, PR CI, release order and Founder-confirmation boundarie
 
 The required `repository-boundary` context always reports. Durable docs and fixture
 validation do not install Go or trigger Helper/Guardian/signing/platform matrices;
-those workflows remain explicitly scoped to their own product paths, while workflow,
-dependency, unknown and manual input fail closed to full.
+those workflows remain scoped to their own PR paths. Direct/untrusted main and the
+central manual full gate call all five reusable specialized workflows; a proven normal
+merge-main stays lightweight.

@@ -65,3 +65,48 @@ jobs:
       - name: Test the Helper and JSONL contract
         if: steps.scope.outputs.run_go == 'true'
         run: go test ./...
+
+  full-helper-build:
+    needs: repository-boundary
+    if: >-
+      needs.repository-boundary.outputs.run_full == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/helper-build-spike.yml
+    permissions:
+      contents: read
+
+  full-guardian-lifecycle:
+    needs: repository-boundary
+    if: >-
+      needs.repository-boundary.outputs.run_full == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/guardian-lifecycle-spike.yml
+    permissions:
+      contents: read
+
+  full-macos-signing:
+    needs: repository-boundary
+    if: >-
+      needs.repository-boundary.outputs.run_full == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/macos-signing-spike.yml
+    permissions:
+      contents: read
+
+  full-windows-signing:
+    needs: repository-boundary
+    if: >-
+      needs.repository-boundary.outputs.run_full == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/windows-signing-spike.yml
+    permissions:
+      contents: read
+
+  full-windows-plugin:
+    needs: repository-boundary
+    if: >-
+      needs.repository-boundary.outputs.run_full == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/windows-plugin-spike.yml
+    permissions:
+      contents: read
