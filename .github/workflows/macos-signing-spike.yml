@@ -4,16 +4,26 @@ on:
   pull_request:
     paths:
       - ".github/workflows/macos-signing-spike.yml"
-      - "cmd/**"
+      - "cmd/codex-skin/**"
       - "go.mod"
       - "go.sum"
-      - "internal/**"
+      - "internal/bootstrap/**"
+      - "internal/buildinfo/**"
+      - "internal/cli/**"
+      - "internal/credentials/**"
+      - "internal/deviceauth/**"
+      - "internal/protocol/**"
+      - "internal/release/**"
+      - "contracts/device-authorization-poll-v1.schema.json"
+      - "contracts/helper-protocol-v1.schema.json"
+      - "contracts/helper-release-descriptor-v1.schema.json"
       - "tools/build_helper.py"
       - "tools/test_macos_signing.py"
   workflow_dispatch:
+  workflow_call:
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: macos-signing-spike-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:

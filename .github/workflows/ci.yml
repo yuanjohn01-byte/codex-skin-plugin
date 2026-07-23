@@ -17,25 +17,96 @@ permissions:
 jobs:
   repository-boundary:
     runs-on: ubuntu-latest
+    outputs:
+      ci_profile: ${{ steps.scope.outputs.ci_profile }}
+      run_full: ${{ steps.scope.outputs.run_full }}
+      lightweight_main: ${{ steps.scope.outputs.lightweight_main }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
         with:
-          go-version: "1.26.5"
-          cache: true
+          fetch-depth: 0
+      - name: Select fail-closed component checks
+        id: scope
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: >-
+          python3 tools/ci_scope.py
+          --event "$GITHUB_EVENT_NAME"
+          --ref "$GITHUB_REF"
+          --base "$BASE_SHA"
+          --head "$HEAD_SHA"
+          >> "$GITHUB_OUTPUT"
       - name: Compile repository validators
         run: python3 -m compileall -q tools
+      - name: Test CI scope selection
+        run: python3 tools/test_ci_scope.py
       - name: Test CI trigger and concurrency policy
         run: python3 tools/test_ci_workflows.py
       - name: Test manifest, license, and Public upload boundary
         run: python3 tools/test_public_repository.py
       - name: Validate the exported Free Theme Manifest v1 fixture
+        if: steps.scope.outputs.run_fixture == 'true'
         run: python3 tools/test_theme_fixture.py
       - name: Test Free Theme fixture exact-schema rejections
+        if: steps.scope.outputs.run_fixture == 'true'
         run: python3 tools/test_theme_fixture_validation.py
+      - uses: actions/setup-go@v5
+        if: steps.scope.outputs.run_go == 'true'
+        with:
+          go-version: "1.26.5"
+          cache: true
       - name: Check Go formatting
+        if: steps.scope.outputs.run_go == 'true'
         run: test -z "$(gofmt -l cmd internal)"
       - name: Vet the Helper
+        if: steps.scope.outputs.run_go == 'true'
         run: go vet ./...
       - name: Test the Helper and JSONL contract
+        if: steps.scope.outputs.run_go == 'true'
         run: go test ./...
+
+  full-helper-build:
+    needs: repository-boundary
+    if: >-
+      needs.repository-boundary.outputs.run_full == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/helper-build-spike.yml
+    permissions:
+      contents: read
+
+  full-guardian-lifecycle:
+    needs: repository-boundary
+    if: >-
+      needs.repository-boundary.outputs.run_full == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/guardian-lifecycle-spike.yml
+    permissions:
+      contents: read
+
+  full-macos-signing:
+    needs: repository-boundary
+    if: >-
+      needs.repository-boundary.outputs.run_full == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/macos-signing-spike.yml
+    permissions:
+      contents: read
+
+  full-windows-signing:
+    needs: repository-boundary
+    if: >-
+      needs.repository-boundary.outputs.run_full == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/windows-signing-spike.yml
+    permissions:
+      contents: read
+
+  full-windows-plugin:
+    needs: repository-boundary
+    if: >-
+      needs.repository-boundary.outputs.run_full == 'true' &&
+      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    uses: ./.github/workflows/windows-plugin-spike.yml
+    permissions:
+      contents: read
