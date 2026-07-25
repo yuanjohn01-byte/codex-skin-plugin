@@ -1,12 +1,6 @@
 name: Windows Plugin Distribution Spike
 
 on:
-  pull_request:
-    paths:
-      - ".gitattributes"
-      - ".agents/plugins/marketplace.json"
-      - "plugins/codex-skin/**"
-      - ".github/workflows/windows-plugin-spike.yml"
   workflow_dispatch:
   workflow_call:
 

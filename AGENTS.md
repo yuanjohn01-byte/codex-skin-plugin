@@ -101,5 +101,7 @@ define profiles, review, PR CI, release order and Founder-confirmation boundarie
 The required `repository-boundary` context always reports. Durable docs and fixture
 validation do not install Go or trigger Helper/Guardian/signing/platform matrices.
 Guardian and signing feasibility remain available as deferred/manual workflows but
-are not Paid Alpha gates except when their own code changes. `PA-CI-001` must align the
-central manual profile before RC; a proven normal merge-main stays lightweight.
+are not Paid Alpha gates except when their own code changes. The central selector is
+the only automatic PR router: manual `paid-alpha` runs current Gate/RC components,
+while published Release, manual `full`, and untrusted `main` run complete full. A
+proven normal merge-main stays lightweight.

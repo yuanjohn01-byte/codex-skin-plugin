@@ -9,7 +9,9 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ci_scope import (
+    COMPLETE_FULL_SELECTION,
     FULL_SELECTION,
+    PAID_ALPHA_FULL_SELECTION,
     changed_paths,
     is_normal_main_merge,
     normalize_path,
@@ -120,7 +122,11 @@ def main() -> int:
     for paths in (["README.md"], ["AGENTS.md", "SECURITY.md"]):
         selection = select_ci(paths, "pull_request")
         assert selection.ci_profile == "fast"
-        assert not selection.run_fixture and not selection.run_go
+        assert not any(
+            value is True
+            for name, value in selection.outputs()
+            if name.startswith("run_")
+        )
 
     for fixture_path in (
         "fixtures/free-test-theme-v1/manifest.json",
@@ -130,21 +136,44 @@ def main() -> int:
         selection = select_ci([fixture_path], "pull_request")
         assert selection.ci_profile == "standard"
         assert selection.run_fixture and not selection.run_go
+        assert not selection.run_helper_build
 
     for go_path in (
         "cmd/codex-skin/main.go",
         "internal/bootstrap/bootstrap.go",
-        "internal/guardian/manager.go",
         "contracts/helper-protocol-v1.schema.json",
         "tools/build_helper.py",
     ):
         selection = select_ci([go_path], "pull_request")
         assert selection.ci_profile == "standard"
-        assert selection.run_go and not selection.run_fixture
+        assert selection.run_go and selection.run_helper_build
+        assert not selection.run_fixture
+        assert not selection.run_guardian_lifecycle
+        assert not selection.run_macos_signing
+        assert not selection.run_windows_signing
 
     plugin = select_ci(["plugins/codex-skin/.codex-plugin/plugin.json"], "pull_request")
     assert plugin.ci_profile == "standard"
+    assert plugin.run_windows_plugin
     assert not plugin.run_fixture and not plugin.run_go
+
+    guardian = select_ci(["internal/guardian/manager.go"], "pull_request")
+    assert guardian.ci_profile == "standard"
+    assert guardian.run_guardian_lifecycle
+    assert not guardian.run_go and not guardian.run_helper_build
+    assert not guardian.run_macos_signing and not guardian.run_windows_signing
+
+    macos_signing = select_ci(["tools/test_macos_signing.py"], "pull_request")
+    assert macos_signing.ci_profile == "standard"
+    assert macos_signing.run_macos_signing
+    assert not macos_signing.run_helper_build
+
+    windows_signing = select_ci(
+        ["tools/test_windows_signing.ps1"], "pull_request"
+    )
+    assert windows_signing.ci_profile == "standard"
+    assert windows_signing.run_windows_signing
+    assert not windows_signing.run_helper_build
 
     for full_path in (
         ".github/workflows/ci.yml",
@@ -153,16 +182,47 @@ def main() -> int:
         "go.sum",
         "unknown/new-release-input.toml",
     ):
-        assert select_ci([full_path], "pull_request") == FULL_SELECTION
-    assert select_ci(None, "pull_request") == FULL_SELECTION
-    assert select_ci(["README.md"], "workflow_dispatch") == FULL_SELECTION
-    assert select_ci(["README.md"], "release") == FULL_SELECTION
-    assert select_ci(["README.md"], "schedule") == FULL_SELECTION
+        assert select_ci([full_path], "pull_request") == PAID_ALPHA_FULL_SELECTION
+    assert select_ci(None, "pull_request") == PAID_ALPHA_FULL_SELECTION
+    assert (
+        select_ci(
+            ["README.md"],
+            "workflow_dispatch",
+            manual_profile="paid-alpha",
+        )
+        == PAID_ALPHA_FULL_SELECTION
+    )
+    assert (
+        select_ci(["README.md"], "workflow_dispatch", manual_profile="full")
+        == COMPLETE_FULL_SELECTION
+    )
+    assert select_ci(["README.md"], "release") == COMPLETE_FULL_SELECTION
+    assert select_ci(["README.md"], "schedule") == PAID_ALPHA_FULL_SELECTION
 
     merge_main = select_ci(None, "push", normal_main_merge=True)
     assert merge_main.ci_profile == "fast" and merge_main.lightweight_main
     assert not merge_main.run_fixture and not merge_main.run_go
-    assert select_ci(["README.md"], "push") == FULL_SELECTION
+    assert select_ci(["README.md"], "push") == COMPLETE_FULL_SELECTION
+
+    workflow_changes = select_ci(
+        [
+            ".github/workflows/ci.yml",
+            ".github/workflows/guardian-lifecycle-spike.yml",
+            ".github/workflows/macos-signing-spike.yml",
+            ".github/workflows/windows-signing-spike.yml",
+        ],
+        "pull_request",
+    )
+    assert workflow_changes.ci_profile == "full"
+    assert workflow_changes.run_fixture
+    assert workflow_changes.run_go
+    assert workflow_changes.run_helper_build
+    assert workflow_changes.run_windows_plugin
+    assert workflow_changes.run_guardian_lifecycle
+    assert workflow_changes.run_macos_signing
+    assert workflow_changes.run_windows_signing
+    assert workflow_changes.run_full
+    assert not workflow_changes.run_complete_full
 
     assert_real_pr_diff_graph("go.mod")
     assert changed_paths("0" * 40, "b" * 40) is None
