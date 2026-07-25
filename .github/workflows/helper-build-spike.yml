@@ -1,26 +1,6 @@
 name: Helper Cross-Platform Build Spike
 
 on:
-  pull_request:
-    paths:
-      - ".github/workflows/helper-build-spike.yml"
-      - "cmd/codex-skin/**"
-      - "go.mod"
-      - "go.sum"
-      - "internal/bootstrap/**"
-      - "internal/buildinfo/**"
-      - "internal/cli/**"
-      - "internal/credentials/**"
-      - "internal/deviceauth/**"
-      - "internal/protocol/**"
-      - "internal/release/**"
-      - "contracts/device-authorization-poll-v1.schema.json"
-      - "contracts/helper-protocol-v1.schema.json"
-      - "contracts/helper-release-descriptor-v1.schema.json"
-      - "tools/build_helper.py"
-      - "tools/create_release_descriptor.py"
-      - "tools/test_helper_builds.py"
-      - "tools/test_release_descriptor.py"
   workflow_dispatch:
   workflow_call:
 
@@ -75,7 +55,7 @@ jobs:
         shell: pwsh
         run: |
           $env:CODEX_SKIN_TEST_HELPER = (Resolve-Path 'dist/helper/codex-skin-helper_0.1.0-s3_windows_x64.exe').Path
-          go test ./...
+          go test ./cmd/codex-skin ./internal/bootstrap ./internal/buildinfo ./internal/cli ./internal/credentials ./internal/deviceauth ./internal/protocol ./internal/release
       - name: Execute without Node, Python, or Go on PATH
         shell: pwsh
         run: |
@@ -94,3 +74,42 @@ jobs:
           if (-not $doctor.ok -or $doctor.data.platform -ne 'windows' -or $doctor.data.architecture -ne 'x64' -or $doctor.data.nodeRequired) {
             throw 'Windows Helper doctor contract failed'
           }
+
+  macos-no-node-smoke:
+    runs-on: macos-14
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - name: Test native Keychain storage and token rotation client
+        run: go test -count=1 ./internal/credentials ./internal/deviceauth
+      - name: Build the native macOS Helper
+        id: native
+        run: |
+          if [[ "$(uname -m)" == "arm64" ]]; then
+            target="macos-arm64"
+            suffix="macos_arm64"
+          else
+            target="macos-x64"
+            suffix="macos_x64"
+          fi
+          python3 tools/build_helper.py --target "$target"
+          echo "helper=dist/helper/codex-skin-helper_0.1.0-s3_$suffix" >> "$GITHUB_OUTPUT"
+      - name: Execute without Node or Go on PATH
+        env:
+          HELPER_PATH: ${{ steps.native.outputs.helper }}
+        run: |
+          export PATH="/usr/bin:/bin"
+          if command -v node >/dev/null; then
+            echo "Node remained on the smoke-test PATH" >&2
+            exit 1
+          fi
+          if command -v go >/dev/null; then
+            echo "Go remained on the smoke-test PATH" >&2
+            exit 1
+          fi
+          "$HELPER_PATH" version --json | grep -F '"helperVersion":"0.1.0-s3"'
+          "$HELPER_PATH" doctor --json | grep -F '"nodeRequired":false'

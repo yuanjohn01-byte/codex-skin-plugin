@@ -29,17 +29,24 @@ FIXTURE_PATHS = {
     "tools/test_public_repository.py",
     "tools/validate_public_repo.py",
 }
-GO_TOOL_PATHS = {
-    "tools/build_guardian.py",
+HELPER_TOOL_PATHS = {
     "tools/build_helper.py",
     "tools/create_release_descriptor.py",
+    "tools/test_helper_builds.py",
+    "tools/test_release_descriptor.py",
+}
+GUARDIAN_TOOL_PATHS = {
+    "tools/build_guardian.py",
     "tools/test_guardian_builds.py",
     "tools/test_guardian_macos.py",
     "tools/test_guardian_windows.ps1",
-    "tools/test_helper_builds.py",
-    "tools/test_macos_signing.py",
-    "tools/test_release_descriptor.py",
-    "tools/test_windows_signing.ps1",
+}
+SPECIALIZED_WORKFLOW_GROUPS = {
+    ".github/workflows/helper-build-spike.yml": {"go", "helper_build"},
+    ".github/workflows/guardian-lifecycle-spike.yml": {"guardian_lifecycle"},
+    ".github/workflows/macos-signing-spike.yml": {"macos_signing"},
+    ".github/workflows/windows-signing-spike.yml": {"windows_signing"},
+    ".github/workflows/windows-plugin-spike.yml": {"windows_plugin"},
 }
 
 
@@ -48,7 +55,13 @@ class CISelection:
     ci_profile: str
     run_fixture: bool = False
     run_go: bool = False
+    run_helper_build: bool = False
+    run_guardian_lifecycle: bool = False
+    run_macos_signing: bool = False
+    run_windows_signing: bool = False
+    run_windows_plugin: bool = False
     run_full: bool = False
+    run_complete_full: bool = False
     lightweight_main: bool = False
 
     def outputs(self) -> tuple[tuple[str, bool | str], ...]:
@@ -56,14 +69,38 @@ class CISelection:
             ("ci_profile", self.ci_profile),
             ("run_fixture", self.run_fixture),
             ("run_go", self.run_go),
+            ("run_helper_build", self.run_helper_build),
+            ("run_guardian_lifecycle", self.run_guardian_lifecycle),
+            ("run_macos_signing", self.run_macos_signing),
+            ("run_windows_signing", self.run_windows_signing),
+            ("run_windows_plugin", self.run_windows_plugin),
             ("run_full", self.run_full),
+            ("run_complete_full", self.run_complete_full),
             ("lightweight_main", self.lightweight_main),
         )
 
 
-FULL_SELECTION = CISelection(
-    ci_profile="full", run_fixture=True, run_go=True, run_full=True
+PAID_ALPHA_FULL_SELECTION = CISelection(
+    ci_profile="full",
+    run_fixture=True,
+    run_go=True,
+    run_helper_build=True,
+    run_windows_plugin=True,
+    run_full=True,
 )
+COMPLETE_FULL_SELECTION = CISelection(
+    ci_profile="full",
+    run_fixture=True,
+    run_go=True,
+    run_helper_build=True,
+    run_guardian_lifecycle=True,
+    run_macos_signing=True,
+    run_windows_signing=True,
+    run_windows_plugin=True,
+    run_full=True,
+    run_complete_full=True,
+)
+FULL_SELECTION = PAID_ALPHA_FULL_SELECTION
 
 
 def normalize_path(path: str) -> str:
@@ -83,20 +120,48 @@ def _is_durable_text(path: str) -> bool:
 
 
 def _component_for_path(path: str) -> set[str] | None:
-    if path.startswith(".github/workflows/") or path in MACHINE_RULE_PATHS:
-        return {"full"}
+    if path in MACHINE_RULE_PATHS or path == ".github/workflows/ci.yml":
+        return {"paid_alpha_full"}
+    if path in SPECIALIZED_WORKFLOW_GROUPS:
+        return SPECIALIZED_WORKFLOW_GROUPS[path]
+    if path.startswith(".github/workflows/"):
+        return {"paid_alpha_full"}
     if path in {"go.mod", "go.sum"}:
-        return {"full"}
+        return {"paid_alpha_full"}
     if _is_durable_text(path) or path in FAST_GOVERNANCE_PATHS:
         return set()
     if path in PLUGIN_BOUNDARY_PATHS or path.startswith("plugins/"):
-        return {"boundary"}
+        return {"windows_plugin"}
     if path.startswith("fixtures/") or path in FIXTURE_PATHS:
         return {"fixture"}
     if path.startswith("contracts/"):
-        return {"go"}
-    if path.startswith(("cmd/", "internal/")) or path in GO_TOOL_PATHS:
-        return {"go"}
+        return {"go", "helper_build"}
+    if path.startswith(("cmd/codex-skin-guardian/", "internal/guardian/")):
+        return {"guardian_lifecycle"}
+    if path.startswith("internal/guardiancli/") or path in GUARDIAN_TOOL_PATHS:
+        return {"guardian_lifecycle"}
+    if (
+        path.startswith(
+            (
+                "cmd/codex-skin/",
+                "internal/bootstrap/",
+                "internal/buildinfo/",
+                "internal/cli/",
+                "internal/credentials/",
+                "internal/deviceauth/",
+                "internal/protocol/",
+                "internal/release/",
+            )
+        )
+        or path in HELPER_TOOL_PATHS
+    ):
+        return {"go", "helper_build"}
+    if path == "tools/test_macos_signing.py":
+        return {"macos_signing"}
+    if path == "tools/test_windows_signing.ps1":
+        return {"windows_signing"}
+    if path.startswith(("cmd/", "internal/")):
+        return {"paid_alpha_full"}
     return None
 
 
@@ -105,28 +170,38 @@ def select_ci(
     event_name: str,
     *,
     normal_main_merge: bool = False,
+    manual_profile: str = "full",
 ) -> CISelection:
-    if event_name in {"workflow_dispatch", "release"}:
-        return FULL_SELECTION
+    if event_name == "release":
+        return COMPLETE_FULL_SELECTION
+    if event_name == "workflow_dispatch":
+        if manual_profile == "paid-alpha":
+            return PAID_ALPHA_FULL_SELECTION
+        return COMPLETE_FULL_SELECTION
     if event_name == "push":
         if normal_main_merge:
             return CISelection(ci_profile="fast", lightweight_main=True)
-        return FULL_SELECTION
+        return COMPLETE_FULL_SELECTION
     if event_name != "pull_request" or not paths:
-        return FULL_SELECTION
+        return PAID_ALPHA_FULL_SELECTION
 
     groups: set[str] = set()
     for raw_path in paths:
         selected = _component_for_path(normalize_path(raw_path))
-        if selected is None or "full" in selected:
-            return FULL_SELECTION
-        groups.update(selected)
+        groups.update({"paid_alpha_full"} if selected is None else selected)
     if not groups:
         return CISelection(ci_profile="fast")
+    paid_alpha_full = "paid_alpha_full" in groups
     return CISelection(
-        ci_profile="standard",
-        run_fixture="fixture" in groups,
-        run_go="go" in groups,
+        ci_profile="full" if paid_alpha_full else "standard",
+        run_fixture=paid_alpha_full or "fixture" in groups,
+        run_go=paid_alpha_full or "go" in groups,
+        run_helper_build=paid_alpha_full or "helper_build" in groups,
+        run_guardian_lifecycle="guardian_lifecycle" in groups,
+        run_macos_signing="macos_signing" in groups,
+        run_windows_signing="windows_signing" in groups,
+        run_windows_plugin=paid_alpha_full or "windows_plugin" in groups,
+        run_full=paid_alpha_full,
     )
 
 
@@ -206,13 +281,23 @@ def main() -> int:
     parser.add_argument("--ref", default="")
     parser.add_argument("--base", default="")
     parser.add_argument("--head", required=True)
+    parser.add_argument(
+        "--manual-profile",
+        choices=("paid-alpha", "full"),
+        default="full",
+    )
     args = parser.parse_args()
 
     normal_merge = is_normal_main_merge(
         args.event, args.ref, args.base, args.head
     )
     paths = None if args.event != "pull_request" else changed_paths(args.base, args.head)
-    selection = select_ci(paths, args.event, normal_main_merge=normal_merge)
+    selection = select_ci(
+        paths,
+        args.event,
+        normal_main_merge=normal_merge,
+        manual_profile=args.manual_profile,
+    )
     for name, value in selection.outputs():
         rendered = str(value).lower() if isinstance(value, bool) else value
         print(f"{name}={rendered}")

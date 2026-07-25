@@ -5,7 +5,19 @@ on:
   push:
     branches:
       - main
+  release:
+    types:
+      - published
   workflow_dispatch:
+    inputs:
+      profile:
+        description: Checks to run
+        required: true
+        type: choice
+        default: paid-alpha
+        options:
+          - paid-alpha
+          - full
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
@@ -19,7 +31,15 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       ci_profile: ${{ steps.scope.outputs.ci_profile }}
+      run_fixture: ${{ steps.scope.outputs.run_fixture }}
+      run_go: ${{ steps.scope.outputs.run_go }}
+      run_helper_build: ${{ steps.scope.outputs.run_helper_build }}
+      run_guardian_lifecycle: ${{ steps.scope.outputs.run_guardian_lifecycle }}
+      run_macos_signing: ${{ steps.scope.outputs.run_macos_signing }}
+      run_windows_signing: ${{ steps.scope.outputs.run_windows_signing }}
+      run_windows_plugin: ${{ steps.scope.outputs.run_windows_plugin }}
       run_full: ${{ steps.scope.outputs.run_full }}
+      run_complete_full: ${{ steps.scope.outputs.run_complete_full }}
       lightweight_main: ${{ steps.scope.outputs.lightweight_main }}
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +56,7 @@ jobs:
           --ref "$GITHUB_REF"
           --base "$BASE_SHA"
           --head "$HEAD_SHA"
+          --manual-profile "${{ inputs.profile || 'full' }}"
           >> "$GITHUB_OUTPUT"
       - name: Compile repository validators
         run: python3 -m compileall -q tools
@@ -58,55 +79,72 @@ jobs:
           cache: true
       - name: Check Go formatting
         if: steps.scope.outputs.run_go == 'true'
-        run: test -z "$(gofmt -l cmd internal)"
+        run: >-
+          test -z "$(gofmt -l
+          cmd/codex-skin
+          internal/bootstrap
+          internal/buildinfo
+          internal/cli
+          internal/credentials
+          internal/deviceauth
+          internal/protocol
+          internal/release)"
       - name: Vet the Helper
         if: steps.scope.outputs.run_go == 'true'
-        run: go vet ./...
+        run: >-
+          go vet
+          ./cmd/codex-skin
+          ./internal/bootstrap
+          ./internal/buildinfo
+          ./internal/cli
+          ./internal/credentials
+          ./internal/deviceauth
+          ./internal/protocol
+          ./internal/release
       - name: Test the Helper and JSONL contract
         if: steps.scope.outputs.run_go == 'true'
-        run: go test ./...
+        run: >-
+          go test
+          ./cmd/codex-skin
+          ./internal/bootstrap
+          ./internal/buildinfo
+          ./internal/cli
+          ./internal/credentials
+          ./internal/deviceauth
+          ./internal/protocol
+          ./internal/release
 
   full-helper-build:
     needs: repository-boundary
-    if: >-
-      needs.repository-boundary.outputs.run_full == 'true' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: needs.repository-boundary.outputs.run_helper_build == 'true'
     uses: ./.github/workflows/helper-build-spike.yml
     permissions:
       contents: read
 
   full-guardian-lifecycle:
     needs: repository-boundary
-    if: >-
-      needs.repository-boundary.outputs.run_full == 'true' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: needs.repository-boundary.outputs.run_guardian_lifecycle == 'true'
     uses: ./.github/workflows/guardian-lifecycle-spike.yml
     permissions:
       contents: read
 
   full-macos-signing:
     needs: repository-boundary
-    if: >-
-      needs.repository-boundary.outputs.run_full == 'true' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: needs.repository-boundary.outputs.run_macos_signing == 'true'
     uses: ./.github/workflows/macos-signing-spike.yml
     permissions:
       contents: read
 
   full-windows-signing:
     needs: repository-boundary
-    if: >-
-      needs.repository-boundary.outputs.run_full == 'true' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: needs.repository-boundary.outputs.run_windows_signing == 'true'
     uses: ./.github/workflows/windows-signing-spike.yml
     permissions:
       contents: read
 
   full-windows-plugin:
     needs: repository-boundary
-    if: >-
-      needs.repository-boundary.outputs.run_full == 'true' &&
-      (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    if: needs.repository-boundary.outputs.run_windows_plugin == 'true'
     uses: ./.github/workflows/windows-plugin-spike.yml
     permissions:
       contents: read
