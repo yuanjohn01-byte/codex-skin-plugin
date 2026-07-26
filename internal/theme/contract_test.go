@@ -14,6 +14,7 @@ import (
 	"image/png"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -63,7 +64,11 @@ func TestVerifyAndExtractUsesVerifiedBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS == "windows" {
+		if info.Mode().Perm()&0o111 != 0 {
+			t.Fatalf("manifest mode = %o, must not be executable", info.Mode().Perm())
+		}
+	} else if info.Mode().Perm() != 0o600 {
 		t.Fatalf("manifest mode = %o, want 600", info.Mode().Perm())
 	}
 }
