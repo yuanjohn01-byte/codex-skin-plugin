@@ -1,0 +1,111 @@
+package engine
+
+import (
+	"context"
+	"errors"
+)
+
+const (
+	StateSchemaVersion     = 1
+	CurrentEngineVersion   = "0.2.0"
+	TemplateVersion        = 1
+	MarkerID               = "codex-skin-theme-v1"
+	RootMarkerAttribute    = "data-codex-skin"
+	ThemeMarkerAttribute   = "data-codex-skin-theme"
+	ThemeVersionAttribute  = "data-codex-skin-theme-version"
+	VersionMarkerAttribute = "data-codex-skin-template"
+)
+
+var (
+	ErrConfiguration     = errors.New("theme engine configuration is invalid")
+	ErrBusy              = errors.New("another theme operation is active")
+	ErrStateUnsafe       = errors.New("theme engine state path is unsafe")
+	ErrCapabilityBlocked = errors.New("Codex capability probes blocked theme apply")
+	ErrApplyFailed       = errors.New("theme apply failed")
+	ErrVerifyFailed      = errors.New("theme verification failed")
+	ErrRollbackFailed    = errors.New("theme rollback failed")
+	ErrRestoreFailed     = errors.New("official appearance restore failed")
+)
+
+type Identity struct {
+	Platform       string `json:"platform"`
+	AppIdentifier  string `json:"appIdentifier"`
+	Publisher      string `json:"publisher"`
+	Version        string `json:"version"`
+	ExecutableHash string `json:"executableHash"`
+	ProcessID      int    `json:"processId"`
+	ProcessStartID string `json:"processStartId"`
+}
+
+type Session struct {
+	Identity Identity
+	OpaqueID string
+}
+
+type RegionStatus string
+
+const (
+	RegionPass       RegionStatus = "pass"
+	RegionNotPresent RegionStatus = "not_present"
+	RegionFail       RegionStatus = "fail"
+)
+
+type RegionReport struct {
+	StyleMarkerCount   int                     `json:"styleMarkerCount"`
+	TemplateVersion    int                     `json:"templateVersion"`
+	ThemePublicID      string                  `json:"themePublicId"`
+	BackgroundLoaded   bool                    `json:"backgroundLoaded"`
+	BackgroundTokenSet bool                    `json:"backgroundTokenSet,omitempty"`
+	BodyBackgroundSet  bool                    `json:"bodyBackgroundSet,omitempty"`
+	Regions            map[string]RegionStatus `json:"regions"`
+}
+
+type Snapshot struct {
+	StylePresent      bool   `json:"stylePresent"`
+	StyleText         string `json:"styleText"`
+	BackgroundDataURL string `json:"backgroundDataURL"`
+	ThemePublicID     string `json:"themePublicId"`
+	ThemeVersion      string `json:"themeVersion"`
+	TemplateVersion   int    `json:"templateVersion"`
+}
+
+type CompiledTheme struct {
+	ThemePublicID     string
+	ThemeVersion      string
+	TemplateVersion   int
+	StyleText         string
+	BackgroundDataURL string
+}
+
+type Adapter interface {
+	OpenVerifiedSession(context.Context) (Session, error)
+	Probe(context.Context, Session) (RegionReport, error)
+	Capture(context.Context, Session) (Snapshot, error)
+	Apply(context.Context, Session, CompiledTheme) error
+	Verify(context.Context, Session, CompiledTheme) (RegionReport, error)
+	Restore(context.Context, Session, Snapshot) error
+	RestoreOfficial(context.Context, Session) error
+	VerifyOfficial(context.Context, Session) error
+	Close(context.Context, Session) error
+}
+
+// SessionPrimer lets an adapter re-establish trusted in-memory context from a
+// package that the engine revalidated from its offline cache.
+type SessionPrimer interface {
+	Prime(context.Context, Session, CompiledTheme) error
+}
+
+type ApplyResult struct {
+	OperationID   string
+	ThemePublicID string
+	ThemeVersion  string
+	Identity      Identity
+	Report        RegionReport
+	RecoveryPoint string
+}
+
+type RestoreResult struct {
+	OperationID string
+	Identity    Identity
+	WasThemed   bool
+}

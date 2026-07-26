@@ -107,6 +107,9 @@
               "$ref": "#/$defs/doctorData"
             },
             {
+              "$ref": "#/$defs/restoreData"
+            },
+            {
               "type": "null"
             }
           ]
@@ -305,6 +308,52 @@
             "fail",
             "not_checked"
           ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "restoreData": {
+      "type": "object",
+      "required": [
+        "command",
+        "operationId",
+        "platform",
+        "codexVersion",
+        "wasThemed",
+        "networkUsed",
+        "loginRequired",
+        "pluginRequired"
+      ],
+      "properties": {
+        "command": {
+          "const": "theme restore"
+        },
+        "operationId": {
+          "type": "string",
+          "pattern": "^op_[0-9a-f]{32}$"
+        },
+        "platform": {
+          "enum": [
+            "macos",
+            "windows"
+          ]
+        },
+        "codexVersion": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64
+        },
+        "wasThemed": {
+          "type": "boolean"
+        },
+        "networkUsed": {
+          "const": false
+        },
+        "loginRequired": {
+          "const": false
+        },
+        "pluginRequired": {
+          "const": false
         }
       },
       "additionalProperties": false

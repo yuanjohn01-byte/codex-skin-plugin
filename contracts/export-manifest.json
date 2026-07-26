@@ -2,7 +2,7 @@
   "artifacts": [
     {
       "destination": "contracts/helper-protocol-v1.schema.json",
-      "sha256": "f9ea47db262f88293eea5d86001b36d72a4cb28dfd0e84f764e2c5c0e2857b28",
+      "sha256": "d99682337ded8dde95543b6cba8fb91bba0cb2427efffc7f21b226f976cc690d",
       "source": "codex-skin/contracts/public/helper-protocol-v1.schema.json"
     },
     {
@@ -16,24 +16,64 @@
       "source": "codex-skin/contracts/public/device-authorization-poll-v1.schema.json"
     },
     {
+      "destination": "contracts/theme-manifest-v1.schema.json",
+      "sha256": "e9926ebb334cca30ae6699b0c71d561dcbe0246316e0da5f48df06f6378f7dbb",
+      "source": "codex-skin/contracts/public/theme-manifest-v1.schema.json"
+    },
+    {
+      "destination": "contracts/theme-release-descriptor-v1.schema.json",
+      "sha256": "b8622f3762efc527d2f8f5e0234116cec053936ebf38178dac353b18c5a1e010",
+      "source": "codex-skin/contracts/public/theme-release-descriptor-v1.schema.json"
+    },
+    {
+      "destination": "contracts/theme-verification-keyset-v1.schema.json",
+      "sha256": "9f89446edef4ed00447242fbf224ca9fc76e2753dc3d49331155b8350c02e66d",
+      "source": "codex-skin/contracts/public/theme-verification-keyset-v1.schema.json"
+    },
+    {
+      "destination": "contracts/theme-verification-keys-v1.json",
+      "sha256": "e205c2b2df7e4cc72875df3e110f1ce188e587cfb48fabe70a8e80b8fff0c0cb",
+      "source": "codex-skin/contracts/public/theme-verification-keys-v1.json"
+    },
+    {
+      "destination": "internal/theme/trusted-verification-keys-v1.json",
+      "sha256": "e205c2b2df7e4cc72875df3e110f1ce188e587cfb48fabe70a8e80b8fff0c0cb",
+      "source": "codex-skin/contracts/public/theme-verification-keys-v1.json"
+    },
+    {
       "destination": "fixtures/free-test-theme-v1/fixture-policy-v1.json",
-      "sha256": "3bce4fb41ac4b336694192268b1a479b42a8e3d92d074642f0657724cc685616",
+      "sha256": "2679342b91bd29efc0f4db4147deca75a5b1d99ffb11e1a8405d2f3fb9a96890",
       "source": "codex-skin/fixtures/public/free-test-theme-v1/fixture-policy-v1.json"
     },
     {
       "destination": "fixtures/free-test-theme-v1/fixture-provenance.json",
-      "sha256": "7f71a6a4581baecd9a286a7a3ff6e7c20907fe2e651741d84b93af21a7e42bf5",
+      "sha256": "39f5bb7d92edd91d8f6b2cbb878ac118871f56ecda098d07074649a4ff4b8756",
       "source": "codex-skin/fixtures/public/free-test-theme-v1/fixture-provenance.json"
     },
     {
       "destination": "fixtures/free-test-theme-v1/manifest.json",
-      "sha256": "37dd29e2a3370183350c4449450ab0a10c742b57e7b1bbe33e8362bbdbae01ea",
+      "sha256": "9c2ed54cc11ec100d1775d5c4fca529536edb11863d052c75438df7445cfee00",
       "source": "codex-skin/fixtures/public/free-test-theme-v1/manifest.json"
     },
     {
-      "destination": "fixtures/free-test-theme-v1/assets/synthetic-dawn.png",
+      "destination": "fixtures/free-test-theme-v1/assets/32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575.png",
       "sha256": "32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575",
-      "source": "codex-skin/fixtures/public/free-test-theme-v1/assets/synthetic-dawn.png"
+      "source": "codex-skin/fixtures/public/free-test-theme-v1/assets/32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575.png"
+    },
+    {
+      "destination": "fixtures/free-test-theme-v1/signed-release-v1/package.cskin",
+      "sha256": "0d68f984061b05548cb99a84ae621d5d6e6138f009e3644c8ff72e7b476cf5a3",
+      "source": "codex-skin/fixtures/public/free-test-theme-v1/signed-release-v1/package.cskin"
+    },
+    {
+      "destination": "fixtures/free-test-theme-v1/signed-release-v1/release-descriptor.json",
+      "sha256": "01179f97ddab13eb72b0b723ac6b2979545cd89015324259751a784e19116efa",
+      "source": "codex-skin/fixtures/public/free-test-theme-v1/signed-release-v1/release-descriptor.json"
+    },
+    {
+      "destination": "fixtures/free-test-theme-v1/signed-release-v1/release-descriptor.sig",
+      "sha256": "7a643d33f5e7f85dfe6e657745e4931e189596d57cf286fefddb8909ac9dc45f",
+      "source": "codex-skin/fixtures/public/free-test-theme-v1/signed-release-v1/release-descriptor.sig"
     }
   ],
   "generatedFrom": "codex-skin/contracts/public/export-allowlist.json",

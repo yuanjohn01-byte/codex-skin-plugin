@@ -148,6 +148,10 @@ func TestInstallOutsidePluginCachePreservesState(t *testing.T) {
 	if first.Reused || first.HelperVersion != "0.1.0-s3" || !pathContains(first.Root, first.Executable) || pathContains(cache, first.Executable) {
 		t.Fatalf("unexpected first install: %#v", first)
 	}
+	if first.RecoveryEntry != filepath.Join(first.Root, "recovery", "restore.command") ||
+		pathContains(cache, first.RecoveryEntry) {
+		t.Fatalf("recovery entry is missing or inside Plugin cache: %#v", first)
+	}
 
 	if err := os.RemoveAll(cache); err != nil {
 		t.Fatal(err)
@@ -162,10 +166,56 @@ func TestInstallOutsidePluginCachePreservesState(t *testing.T) {
 	if !second.Reused || second.Executable != first.Executable {
 		t.Fatalf("same release was not reused: %#v", second)
 	}
-	for _, sentinel := range []string{stateSentinel, recoverySentinel, first.Executable, filepath.Join(root, "bin", "current.json")} {
+	for _, sentinel := range []string{
+		stateSentinel,
+		recoverySentinel,
+		first.Executable,
+		first.RecoveryEntry,
+		filepath.Join(root, "recovery", "engine", "codex-skin"),
+		filepath.Join(root, "bin", "current.json"),
+	} {
 		if _, err := os.Stat(sentinel); err != nil {
 			t.Fatalf("out-of-cache file did not survive Plugin cache replacement: %s: %v", sentinel, err)
 		}
+	}
+	entry, err := os.ReadFile(first.RecoveryEntry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(entry, []byte("http")) || bytes.Contains(entry, []byte("token")) ||
+		!bytes.Contains(entry, []byte("theme restore")) {
+		t.Fatalf("recovery entry is not fixed and offline: %q", entry)
+	}
+}
+
+func TestWindowsRecoveryEntryUsesBundledBinaryWithoutPowerShellOrNetwork(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	if err := os.MkdirAll(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	helper := filepath.Join(t.TempDir(), "codex-skin.exe")
+	if err := os.WriteFile(helper, []byte("synthetic windows helper"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	entry, err := installRecovery(root, helper, "windows-x64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if entry != filepath.Join(root, "recovery", "restore.cmd") {
+		t.Fatalf("entry = %s", entry)
+	}
+	content, err := os.ReadFile(entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lower := strings.ToLower(string(content))
+	if strings.Contains(lower, "powershell") || strings.Contains(lower, "http") ||
+		!strings.Contains(lower, `engine\codex-skin.exe" theme restore`) {
+		t.Fatalf("unexpected Windows recovery entry: %q", content)
+	}
+	binary, err := os.ReadFile(filepath.Join(root, "recovery", "engine", "codex-skin.exe"))
+	if err != nil || !bytes.Equal(binary, []byte("synthetic windows helper")) {
+		t.Fatalf("recovery binary = %q, %v", binary, err)
 	}
 }
 

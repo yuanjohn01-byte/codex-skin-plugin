@@ -58,6 +58,7 @@ type Config struct {
 type Result struct {
 	Root            string
 	Executable      string
+	RecoveryEntry   string
 	HelperVersion   string
 	PreviousVersion string
 	Reused          bool
@@ -160,7 +161,14 @@ func Install(ctx context.Context, config Config) (Result, error) {
 		if err := verifyExisting(ctx, executable, selection.Artifact, config.SelfTester, timeout, platform); err != nil {
 			return Result{}, err
 		}
-		return Result{Root: root, Executable: executable, HelperVersion: current.HelperVersion, PreviousVersion: currentVersion, Reused: true}, nil
+		recoveryEntry, err := installRecovery(root, executable, platform)
+		if err != nil {
+			return Result{}, err
+		}
+		return Result{
+			Root: root, Executable: executable, RecoveryEntry: recoveryEntry,
+			HelperVersion: current.HelperVersion, PreviousVersion: currentVersion, Reused: true,
+		}, nil
 	}
 
 	artifactBytes, err := config.Source.Fetch(ctx, config.ReleaseTag, selection.Artifact.Filename, selection.Artifact.Size+1)
@@ -206,10 +214,17 @@ func Install(ctx context.Context, config Config) (Result, error) {
 		Filename:      selection.Artifact.Filename,
 		SHA256:        selection.Artifact.SHA256,
 	}
+	recoveryEntry, err := installRecovery(root, executable, platform)
+	if err != nil {
+		return Result{}, err
+	}
 	if err := writeCurrent(binRoot, pointer); err != nil {
 		return Result{}, err
 	}
-	return Result{Root: root, Executable: executable, HelperVersion: pointer.HelperVersion, PreviousVersion: currentVersion}, nil
+	return Result{
+		Root: root, Executable: executable, RecoveryEntry: recoveryEntry,
+		HelperVersion: pointer.HelperVersion, PreviousVersion: currentVersion,
+	}, nil
 }
 
 func DefaultRoot(goos, home, localAppData string) (string, error) {

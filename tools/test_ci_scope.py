@@ -26,6 +26,7 @@ def git(root: Path, *args: str) -> str:
         check=False,
         capture_output=True,
         text=True,
+        input="",
     )
     if result.returncode != 0:
         raise AssertionError(result.stdout + result.stderr)
@@ -180,6 +181,12 @@ def main() -> int:
         "tools/ci_scope.py",
         "go.mod",
         "go.sum",
+        "internal/adapter/live.go",
+        "internal/cdp/client.go",
+        "internal/codex/identity_windows.go",
+        "internal/engine/engine.go",
+        "internal/theme/contract.go",
+        "tools/gateb_calibration/main.go",
         "unknown/new-release-input.toml",
     ):
         assert select_ci([full_path], "pull_request") == PAID_ALPHA_FULL_SELECTION

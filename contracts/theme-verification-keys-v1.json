@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "keys": [
+    {
+      "keyId": "theme-alpha-2026-01",
+      "algorithm": "Ed25519",
+      "usage": "theme-release",
+      "publicKeyBase64": "GnyP+EjqeLU38MhvQAfk4cDuQnyv9mCshSfEHQiw8y4=",
+      "notBefore": "2026-07-26T05:56:17.523Z",
+      "notAfter": "2028-07-26T00:00:00.000Z",
+      "status": "active"
+    }
+  ]
+}

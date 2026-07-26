@@ -140,6 +140,17 @@ def _component_for_path(path: str) -> set[str] | None:
         return {"guardian_lifecycle"}
     if path.startswith("internal/guardiancli/") or path in GUARDIAN_TOOL_PATHS:
         return {"guardian_lifecycle"}
+    if path.startswith(
+        (
+            "internal/adapter/",
+            "internal/cdp/",
+            "internal/codex/",
+            "internal/engine/",
+            "internal/theme/",
+            "tools/gateb_calibration/",
+        )
+    ):
+        return {"paid_alpha_full"}
     if (
         path.startswith(
             (
