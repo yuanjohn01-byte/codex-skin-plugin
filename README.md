@@ -2,9 +2,9 @@
 
 This is the standalone Public Plugin repository for Codex Skin. The installable Plugin root is `plugins/codex-skin/`; the repository root contains the Git-backed Marketplace metadata and release documentation.
 
-Current status: the pre-release Marketplace exposes the Codex Skin v0.0.2 upgrade candidate from this repository. The distribution spike remains a read-only version check; no theme capability or public compatibility claim is attached.
+Current status: the pre-release Marketplace exposes the Codex Skin v0.0.2 upgrade candidate from this repository. The installed Plugin remains a read-only version check; no theme capability or public compatibility claim is attached.
 
-S3 now includes the source for a self-contained Go Helper prototype. Its `version` and runtime-only `doctor` commands emit the generated public JSON Lines v1 contract. The internal bootstrap can verify and stage a Helper outside the Plugin cache, but it is not yet exposed by the installed Plugin and does not perform theme, Codex, account, or recovery operations.
+The repository now also contains the unreleased Gate B source for a self-contained Go Helper theme engine. It verifies data-only theme packages and Ed25519 release descriptors, checks official Codex identity before using loopback-only CDP, applies a fixed engine-owned template transactionally, and keeps journals, revalidated package cache, durable last-known-good snapshots, and an offline `theme restore` entry outside the Plugin cache. These capabilities are not exposed by the installed v0.0.2 Plugin and are not a public release claim.
 
 The v0.0.1-to-v0.0.2 upgrade spike has passed macOS and Windows Desktop/CLI checks against the reviewed feature refs. The Windows distribution workflow also performs the equivalent CLI/cache upgrade on a clean GitHub-hosted runner. Every release still requires a post-merge two-platform check of the exact `main` form before its commands are published.
 
@@ -28,14 +28,14 @@ codex-skin-plugin/
       assets/
   cmd/codex-skin/              # self-contained Helper entrypoint
   cmd/codex-skin-guardian/     # fixed-surface internal Guardian spike
-  internal/                    # Helper, credential, auth, and Guardian packages
+  internal/                    # Helper, theme engine, adapter, auth, and Guardian packages
   contracts/                   # generated public contracts only
   tools/
     validate_public_repo.py
     test_public_repository.py
 ```
 
-The bundled v0.0.2 Skill is a read-only installation and upgrade check. The S3 Helper source is not exposed as an installed capability yet. The internal device-authorization client can now validate a successful token response, keep the Access Token behind a redacting in-memory value, and rotate a Refresh Token stored with its device proof in macOS Keychain or Windows Credential Manager. Its in-memory continuation validates the same-origin device-management response, preserves the original authorization proof, and invokes the caller's pending operation at most once after authorization; no theme operation is implemented here. This code still has no CLI or Skill entry and is not allowed to call the non-Production API from an installed Plugin. Production theme Skills, keys and platform adapters remain deferred to the numbered M1/M4 tasks in the Private project plan.
+The bundled v0.0.2 Skill is a read-only installation and upgrade check. The Gate B Helper source is not exposed as an installed capability yet. The internal device-authorization client can validate a successful token response, keep the Access Token behind a redacting in-memory value, and rotate a Refresh Token stored with its device proof in macOS Keychain or Windows Credential Manager. Its in-memory continuation validates the same-origin device-management response, preserves the original authorization proof, and invokes the caller's pending operation at most once after authorization. This code still has no installed CLI or Skill entry and is not allowed to call the non-Production API from an installed Plugin.
 
 ## Helper development
 
@@ -46,6 +46,7 @@ go test ./...
 go vet ./...
 go run ./cmd/codex-skin version --json
 go run ./cmd/codex-skin doctor --json
+go run ./cmd/codex-skin theme restore --json
 python3 tools/test_helper_builds.py
 python3 tools/test_release_descriptor.py
 python3 tools/test_guardian_builds.py
@@ -60,6 +61,8 @@ The build test produces unsigned internal artifacts for `macos-arm64`, `macos-x6
 `tools/create_release_descriptor.py` converts that trusted build summary into one canonical, fixed-order descriptor with the exact version, tag, UTC timestamp, platform filenames, sizes, and SHA-256 values. The Go release package rejects noncanonical JSON, unknown fields or signing key IDs, invalid detached Ed25519 signatures, missing/duplicate/mismatched platforms, unsupported runtimes, and downloaded bytes with the wrong size or digest. Tests generate ephemeral signing keys at runtime; this repository contains no release private key or Production trust-root claim. The S3 artifact remains an unsigned internal review artifact until the later signing and release gates are complete.
 
 The bootstrap library uses the fixed Public GitHub Releases origin, accepts only the descriptor, raw detached signature, and strict Helper filenames, and allows HTTPS redirects only to GitHub release-asset hosts. After signature/platform/size/SHA-256 verification it writes a per-version executable in `~/Library/Application Support/CodexSkin/bin/` on macOS or `%LOCALAPPDATA%\CodexSkin\bin\` on Windows, runs only the fixed `version --json` and `doctor --json` self-tests with a minimal environment, then atomically replaces `current.json`. Descriptor/signature tampering, wrong artifact bytes, declared-length truncation, reader interruption, downgrade, and self-test failure all stop before activation; untrusted candidates never reach the executable self-test, and the previous pointer and Helper remain reusable without staging debris. The application root must not overlap or resolve through the Plugin cache; tests replace that cache and confirm the Helper plus `state/` and `recovery/` sentinels remain. This is still internal bootstrap infrastructure: no unsigned artifact is authorized for user installation.
+
+The Gate B engine accepts only versioned manifest fields and declared local PNG/JPEG/WebP assets; theme packages cannot provide CSS, JavaScript, shell commands, selectors, or remote execution URLs. A verified package follows `validate → stage → backup → apply → verify → commit`. Cached packages are revalidated from their package, descriptor, signature, and keyset before reuse. If apply or verify fails, or a journal shows an interruption after renderer mutation began, the durable last-known-good snapshot is restored before another apply. The independent `theme restore` command removes the fixed theme marker and background without network, login, access entitlement, Node, or Plugin cache access. Formal user exposure remains deferred to the later flow/release gates.
 
 The [macOS signing feasibility note](docs/macos-signing-feasibility.md) and its CI workflow test ad-hoc signing, strict verification, and post-signing tamper rejection without using secrets. Ad-hoc signatures are explicitly not Developer ID signatures or notarization; formal macOS distribution remains blocked on a protected Apple certificate, accepted notarization, the exact Gatekeeper download path, and a decision about a staplable release container.
 
@@ -116,7 +119,7 @@ codex plugin add codex-skin@codex-skin
 codex plugin list --json
 ```
 
-If an existing Plugin still works but the upgrade does not, leave it installed and report the diagnostics instead of uninstalling it. The v0.0.2 spike has no theme operations; production removal and official-appearance restoration will be documented with the later out-of-cache recovery implementation.
+If an existing Plugin still works but the upgrade does not, leave it installed and report the diagnostics instead of uninstalling it. The installed v0.0.2 spike has no theme operations. Its unreleased Helper source includes an out-of-cache offline restore entry, but users should not invoke an unsigned internal build as a product release.
 
 ## License
 

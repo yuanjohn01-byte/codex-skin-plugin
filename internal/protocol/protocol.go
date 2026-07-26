@@ -32,6 +32,12 @@ func Success(data any) Result {
 	}
 }
 
+func SuccessWithOperation(operationID string, data any) Result {
+	result := Success(data)
+	result.OperationID = &operationID
+	return result
+}
+
 func Failure(code, action string, retryable bool) Result {
 	return Result{
 		Type:            "result",

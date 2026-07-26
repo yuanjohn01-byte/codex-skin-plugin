@@ -82,37 +82,55 @@ jobs:
         run: >-
           test -z "$(gofmt -l
           cmd/codex-skin
+          internal/adapter
           internal/bootstrap
           internal/buildinfo
+          internal/cdp
           internal/cli
+          internal/codex
           internal/credentials
           internal/deviceauth
+          internal/engine
           internal/protocol
-          internal/release)"
+          internal/release
+          internal/theme
+          tools/gateb_calibration)"
       - name: Vet the Helper
         if: steps.scope.outputs.run_go == 'true'
         run: >-
           go vet
           ./cmd/codex-skin
+          ./internal/adapter
           ./internal/bootstrap
           ./internal/buildinfo
+          ./internal/cdp
           ./internal/cli
+          ./internal/codex
           ./internal/credentials
           ./internal/deviceauth
+          ./internal/engine
           ./internal/protocol
           ./internal/release
+          ./internal/theme
+          ./tools/gateb_calibration
       - name: Test the Helper and JSONL contract
         if: steps.scope.outputs.run_go == 'true'
         run: >-
           go test
           ./cmd/codex-skin
+          ./internal/adapter
           ./internal/bootstrap
           ./internal/buildinfo
+          ./internal/cdp
           ./internal/cli
+          ./internal/codex
           ./internal/credentials
           ./internal/deviceauth
+          ./internal/engine
           ./internal/protocol
           ./internal/release
+          ./internal/theme
+          ./tools/gateb_calibration
 
   full-helper-build:
     needs: repository-boundary

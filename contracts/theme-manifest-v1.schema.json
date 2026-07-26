@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuanjohn01-byte/codex-skin-plugin/blob/main/contracts/theme-manifest-v1.schema.json",
+  "title": "Codex Skin data-only Theme Manifest v1",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "themePublicId",
+    "themeVersion",
+    "name",
+    "design",
+    "customization",
+    "assets",
+    "compatibility"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "themePublicId": {
+      "type": "string",
+      "pattern": "^[0-9]{6}$"
+    },
+    "themeVersion": {
+      "$ref": "#/$defs/semver"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 80
+    },
+    "design": {
+      "$ref": "#/$defs/design"
+    },
+    "customization": {
+      "$ref": "#/$defs/customization"
+    },
+    "assets": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": {
+        "$ref": "#/$defs/asset"
+      }
+    },
+    "compatibility": {
+      "$ref": "#/$defs/compatibility"
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$",
+      "maxLength": 64
+    },
+    "assetPath": {
+      "type": "string",
+      "pattern": "^assets/[0-9a-f]{64}\\.(?:png|jpg|webp)$",
+      "maxLength": 128
+    },
+    "color": {
+      "type": "string",
+      "pattern": "^#[0-9A-F]{6}(?:[0-9A-F]{2})?$"
+    },
+    "tokens": {
+      "type": "object",
+      "required": [
+        "backgroundImage",
+        "backgroundOverlay",
+        "surfaceOpacity",
+        "surfaceBlurPx",
+        "textPrimary",
+        "textSecondary",
+        "accent",
+        "border",
+        "radiusScale"
+      ],
+      "properties": {
+        "backgroundImage": {
+          "$ref": "#/$defs/assetPath"
+        },
+        "backgroundOverlay": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 0.85
+        },
+        "surfaceOpacity": {
+          "type": "number",
+          "minimum": 0.55,
+          "maximum": 1
+        },
+        "surfaceBlurPx": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 40
+        },
+        "textPrimary": {
+          "$ref": "#/$defs/color"
+        },
+        "textSecondary": {
+          "$ref": "#/$defs/color"
+        },
+        "accent": {
+          "$ref": "#/$defs/color"
+        },
+        "border": {
+          "$ref": "#/$defs/color"
+        },
+        "radiusScale": {
+          "type": "number",
+          "minimum": 0.5,
+          "maximum": 1.5
+        }
+      },
+      "additionalProperties": false
+    },
+    "regions": {
+      "type": "object",
+      "required": [
+        "home",
+        "sidebar",
+        "suggestionCards",
+        "projectPicker",
+        "composer"
+      ],
+      "properties": {
+        "home": {
+          "const": true
+        },
+        "sidebar": {
+          "const": true
+        },
+        "suggestionCards": {
+          "const": true
+        },
+        "projectPicker": {
+          "const": true
+        },
+        "composer": {
+          "const": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "design": {
+      "type": "object",
+      "required": ["mode", "tokens", "regions"],
+      "properties": {
+        "mode": {
+          "enum": ["light", "dark"]
+        },
+        "tokens": {
+          "$ref": "#/$defs/tokens"
+        },
+        "regions": {
+          "$ref": "#/$defs/regions"
+        }
+      },
+      "additionalProperties": false
+    },
+    "customization": {
+      "type": "object",
+      "required": ["allowed"],
+      "properties": {
+        "allowed": {
+          "type": "array",
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "backgroundOverlay",
+              "surfaceOpacity",
+              "surfaceBlurPx",
+              "accent",
+              "radiusScale"
+            ]
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "asset": {
+      "type": "object",
+      "required": ["path", "role", "contentType", "byteSize", "sha256"],
+      "properties": {
+        "path": {
+          "$ref": "#/$defs/assetPath"
+        },
+        "role": {
+          "enum": ["background", "overlay"]
+        },
+        "contentType": {
+          "enum": ["image/png", "image/jpeg", "image/webp"]
+        },
+        "byteSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 15728640
+        },
+        "sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "compatibility": {
+      "type": "object",
+      "required": ["platforms", "minEngineVersion"],
+      "properties": {
+        "platforms": {
+          "const": ["macos", "windows"]
+        },
+        "minEngineVersion": {
+          "$ref": "#/$defs/semver"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

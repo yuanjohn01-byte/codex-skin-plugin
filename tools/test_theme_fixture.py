@@ -12,7 +12,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = Path("fixtures/free-test-theme-v1")
-ASSET_PATH = "assets/synthetic-dawn.png"
+ASSET_PATH = "assets/32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575.png"
 ASSET_SHA256 = "32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575"
 EXPECTED_POLICY = {
     "schemaVersion": 1,

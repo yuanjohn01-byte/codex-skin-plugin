@@ -2,14 +2,76 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 )
+
+type restoreAdapter struct {
+	themed bool
+	fail   bool
+}
+
+func (adapter *restoreAdapter) OpenVerifiedSession(context.Context) (engine.Session, error) {
+	if adapter.fail {
+		return engine.Session{}, errors.New("identity failed")
+	}
+	return engine.Session{
+		OpaqueID: "cli-test",
+		Identity: engine.Identity{Platform: "macos", Version: "26.721.41059", AppIdentifier: "com.openai.codex"},
+	}, nil
+}
+
+func (adapter *restoreAdapter) Probe(context.Context, engine.Session) (engine.RegionReport, error) {
+	count := 0
+	if adapter.themed {
+		count = 1
+	}
+	return engine.RegionReport{StyleMarkerCount: count}, nil
+}
+
+func (adapter *restoreAdapter) Capture(context.Context, engine.Session) (engine.Snapshot, error) {
+	return engine.Snapshot{StylePresent: adapter.themed, ThemePublicID: "100001", ThemeVersion: "1.0.0", TemplateVersion: 1}, nil
+}
+
+func (*restoreAdapter) Apply(context.Context, engine.Session, engine.CompiledTheme) error {
+	return nil
+}
+
+func (*restoreAdapter) Verify(context.Context, engine.Session, engine.CompiledTheme) (engine.RegionReport, error) {
+	return engine.RegionReport{}, nil
+}
+
+func (adapter *restoreAdapter) Restore(context.Context, engine.Session, engine.Snapshot) error {
+	adapter.themed = true
+	return nil
+}
+
+func (adapter *restoreAdapter) RestoreOfficial(context.Context, engine.Session) error {
+	adapter.themed = false
+	return nil
+}
+
+func (adapter *restoreAdapter) VerifyOfficial(context.Context, engine.Session) error {
+	if adapter.themed {
+		return errors.New("marker remains")
+	}
+	return nil
+}
+
+func (*restoreAdapter) Close(context.Context, engine.Session) error {
+	return nil
+}
 
 type resultEnvelope struct {
 	Type            string          `json:"type"`
 	ProtocolVersion int             `json:"protocolVersion"`
+	OperationID     *string         `json:"operationId"`
 	OK              bool            `json:"ok"`
 	Status          string          `json:"status"`
 	Data            json.RawMessage `json:"data"`
@@ -118,5 +180,44 @@ func TestHumanUsageUsesStderrOnly(t *testing.T) {
 	code, stdout, stderr := run(t, nil, Runtime{})
 	if code != 80 || stdout != "" || !strings.HasPrefix(stderr, "usage:") {
 		t.Fatalf("unexpected human usage output: code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+}
+
+func TestThemeRestoreJSONIsOfflineAndPluginIndependent(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	fake := &restoreAdapter{themed: true}
+	code, stdout, stderr := run(t, []string{"theme", "restore", "--json"}, Runtime{
+		GOOS: "darwin", GOARCH: "arm64", Root: root, Adapter: fake,
+	})
+	if code != 0 || stderr != "" {
+		t.Fatalf("restore failed: code=%d stderr=%q", code, stderr)
+	}
+	result := decodeSingleResult(t, stdout)
+	if !result.OK || fake.themed {
+		t.Fatalf("restore result=%+v themed=%v", result, fake.themed)
+	}
+	var data restoreData
+	if err := json.Unmarshal(result.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.NetworkUsed || data.LoginRequired || data.PluginRequired || !data.WasThemed {
+		t.Fatalf("restore data = %#v", data)
+	}
+	if result.OperationID == nil || *result.OperationID != data.OperationID {
+		t.Fatalf("restore operation ids do not match: envelope=%v data=%s", result.OperationID, data.OperationID)
+	}
+}
+
+func TestThemeRestoreFailureUsesStableCodeAndExit(t *testing.T) {
+	code, stdout, stderr := run(t, []string{"theme", "restore", "--json"}, Runtime{
+		GOOS: "darwin", GOARCH: "arm64", Root: filepath.Join(t.TempDir(), "CodexSkin"),
+		Adapter: &restoreAdapter{fail: true},
+	})
+	if code != exitRestore || stderr != "" {
+		t.Fatalf("restore failure: code=%d stderr=%q", code, stderr)
+	}
+	result := decodeSingleResult(t, stdout)
+	if result.OK || !bytes.Contains(result.Error, []byte(`"code":"CS-RESTORE-001"`)) {
+		t.Fatalf("restore failure result = %+v", result)
 	}
 }

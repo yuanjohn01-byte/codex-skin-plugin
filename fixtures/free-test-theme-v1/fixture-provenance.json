@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "asset": "assets/synthetic-dawn.png",
+  "asset": "assets/32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575.png",
   "rights": "Synthetic asset generated deterministically in this repository; no third-party or source artwork is used.",
   "generator": "tools/codex-skin/generate_free_theme_fixture_asset.py",
   "generatorVersion": 1,

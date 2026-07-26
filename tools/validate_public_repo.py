@@ -191,6 +191,22 @@ EXPORTED_CONTRACTS = (
         Path("contracts/device-authorization-poll-v1.schema.json"),
         "codex-skin/contracts/public/device-authorization-poll-v1.schema.json",
     ),
+    (
+        Path("contracts/theme-manifest-v1.schema.json"),
+        "codex-skin/contracts/public/theme-manifest-v1.schema.json",
+    ),
+    (
+        Path("contracts/theme-release-descriptor-v1.schema.json"),
+        "codex-skin/contracts/public/theme-release-descriptor-v1.schema.json",
+    ),
+    (
+        Path("contracts/theme-verification-keyset-v1.schema.json"),
+        "codex-skin/contracts/public/theme-verification-keyset-v1.schema.json",
+    ),
+    (
+        Path("contracts/theme-verification-keys-v1.json"),
+        "codex-skin/contracts/public/theme-verification-keys-v1.json",
+    ),
 )
 EXPORTED_FIXTURES = (
     (
@@ -206,8 +222,12 @@ EXPORTED_FIXTURES = (
         "codex-skin/fixtures/public/free-test-theme-v1/manifest.json",
     ),
     (
-        Path("fixtures/free-test-theme-v1/assets/synthetic-dawn.png"),
-        "codex-skin/fixtures/public/free-test-theme-v1/assets/synthetic-dawn.png",
+        Path(
+            "fixtures/free-test-theme-v1/assets/"
+            "32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575.png"
+        ),
+        "codex-skin/fixtures/public/free-test-theme-v1/assets/"
+        "32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575.png",
     ),
 )
 EXPECTED_PLUGIN_VERSION = "0.0.2"

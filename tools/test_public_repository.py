@@ -184,6 +184,54 @@ def write_baseline(fixture: Path) -> None:
                 "logoutErrorEnvelope": {},
             },
         },
+        "theme-manifest-v1.schema.json": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "required": [
+                "schemaVersion",
+                "themePublicId",
+                "themeVersion",
+                "name",
+                "design",
+                "customization",
+                "assets",
+                "compatibility",
+            ],
+            "additionalProperties": False,
+        },
+        "theme-release-descriptor-v1.schema.json": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "required": [
+                "descriptorVersion",
+                "themePublicId",
+                "themeVersion",
+                "schemaVersion",
+                "manifestSha256",
+                "packageSha256",
+                "packageByteSize",
+                "publishedAt",
+                "signingKeyId",
+            ],
+            "additionalProperties": False,
+        },
+        "theme-verification-keyset-v1.schema.json": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "required": ["schemaVersion", "keys"],
+            "additionalProperties": False,
+        },
+        "theme-verification-keys-v1.json": {
+            "schemaVersion": 1,
+            "keys": [
+                {
+                    "keyId": "theme-fixture-2026-01",
+                    "algorithm": "Ed25519",
+                    "usage": "theme-release",
+                    "publicKeyBase64": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+                    "notBefore": "2026-01-01T00:00:00.000Z",
+                    "notAfter": "2028-01-01T00:00:00.000Z",
+                    "status": "active",
+                }
+            ],
+        },
     }
     contract_root = fixture / "contracts"
     contract_root.mkdir(parents=True)
@@ -202,7 +250,7 @@ def write_baseline(fixture: Path) -> None:
         "fixtures/free-test-theme-v1/fixture-policy-v1.json": b"{}\n",
         "fixtures/free-test-theme-v1/fixture-provenance.json": b"{}\n",
         "fixtures/free-test-theme-v1/manifest.json": b"{}\n",
-        "fixtures/free-test-theme-v1/assets/synthetic-dawn.png": b"fixture-png",
+        "fixtures/free-test-theme-v1/assets/32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575.png": b"fixture-png",
     }
     for destination, content in fixtures.items():
         target = fixture / destination
