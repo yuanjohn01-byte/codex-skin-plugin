@@ -246,11 +246,27 @@ def write_baseline(fixture: Path) -> None:
                 "source": f"codex-skin/contracts/public/{filename}",
             }
         )
+    trusted_key_bytes = (
+        contract_root / "theme-verification-keys-v1.json"
+    ).read_bytes()
+    trusted_embed = fixture / "internal/theme/trusted-verification-keys-v1.json"
+    trusted_embed.parent.mkdir(parents=True)
+    trusted_embed.write_bytes(trusted_key_bytes)
+    manifest_artifacts.append(
+        {
+            "destination": "internal/theme/trusted-verification-keys-v1.json",
+            "sha256": hashlib.sha256(trusted_key_bytes).hexdigest(),
+            "source": "codex-skin/contracts/public/theme-verification-keys-v1.json",
+        }
+    )
     fixtures = {
         "fixtures/free-test-theme-v1/fixture-policy-v1.json": b"{}\n",
         "fixtures/free-test-theme-v1/fixture-provenance.json": b"{}\n",
         "fixtures/free-test-theme-v1/manifest.json": b"{}\n",
         "fixtures/free-test-theme-v1/assets/32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575.png": b"fixture-png",
+        "fixtures/free-test-theme-v1/signed-release-v1/package.cskin": b"fixture-package",
+        "fixtures/free-test-theme-v1/signed-release-v1/release-descriptor.json": b"{}\n",
+        "fixtures/free-test-theme-v1/signed-release-v1/release-descriptor.sig": b"fixture-signature\n",
     }
     for destination, content in fixtures.items():
         target = fixture / destination

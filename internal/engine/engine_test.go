@@ -1,19 +1,8 @@
 package engine
 
 import (
-	"archive/zip"
-	"bytes"
 	"context"
-	"crypto/ed25519"
-	"crypto/rand"
-	"crypto/sha256"
-	"encoding/base64"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
-	"image"
-	imagecolor "image/color"
-	"image/png"
 	"os"
 	"path/filepath"
 	"strings"
@@ -23,15 +12,18 @@ import (
 )
 
 type fakeAdapter struct {
-	state              Snapshot
-	probe              RegionReport
-	events             []string
-	failOpen           bool
-	failApply          bool
-	failVerify         bool
-	failRestore        bool
-	failOfficial       bool
-	failVerifyOfficial bool
+	state               Snapshot
+	probe               RegionReport
+	events              []string
+	cancelOnApply       context.CancelFunc
+	failOpen            bool
+	failApply           bool
+	mutateBeforeFailure bool
+	failVerify          bool
+	failRestore         bool
+	failOfficial        bool
+	failVerifyOfficial  bool
+	requireLiveRestore  bool
 }
 
 type primingAdapter struct {
@@ -89,14 +81,23 @@ func (adapter *fakeAdapter) Capture(context.Context, Session) (Snapshot, error) 
 
 func (adapter *fakeAdapter) Apply(_ context.Context, _ Session, compiled CompiledTheme) error {
 	adapter.events = append(adapter.events, "apply")
-	if adapter.failApply {
-		return errors.New("apply rejected")
-	}
-	adapter.state = Snapshot{
+	next := Snapshot{
 		StylePresent: true, StyleText: compiled.StyleText, ThemePublicID: compiled.ThemePublicID,
 		ThemeVersion: compiled.ThemeVersion, TemplateVersion: compiled.TemplateVersion,
 		BackgroundDataURL: compiled.BackgroundDataURL,
 	}
+	if adapter.cancelOnApply != nil {
+		adapter.state = next
+		adapter.cancelOnApply()
+		return context.Canceled
+	}
+	if adapter.failApply {
+		if adapter.mutateBeforeFailure {
+			adapter.state = next
+		}
+		return errors.New("apply rejected")
+	}
+	adapter.state = next
 	return nil
 }
 
@@ -113,8 +114,11 @@ func (adapter *fakeAdapter) Verify(_ context.Context, _ Session, compiled Compil
 	return report, nil
 }
 
-func (adapter *fakeAdapter) Restore(_ context.Context, _ Session, snapshot Snapshot) error {
+func (adapter *fakeAdapter) Restore(ctx context.Context, _ Session, snapshot Snapshot) error {
 	adapter.events = append(adapter.events, "rollback")
+	if adapter.requireLiveRestore && ctx.Err() != nil {
+		return ctx.Err()
+	}
 	if adapter.failRestore {
 		return errors.New("rollback rejected")
 	}
@@ -243,6 +247,165 @@ func TestRollbackFailureIsBlocking(t *testing.T) {
 	_, err := instance.ApplyVerified(context.Background(), verified)
 	if !errors.Is(err, ErrRollbackFailed) {
 		t.Fatalf("ApplyVerified() error = %v", err)
+	}
+	running, readErr := store.RunningJournals()
+	if readErr != nil || len(running) != 1 || running[0].Stage != "apply" {
+		t.Fatalf("running rollback journal = %#v, error = %v", running, readErr)
+	}
+	adapter.failRestore = false
+	if err := instance.RecoverInterrupted(context.Background()); err != nil {
+		t.Fatalf("RecoverInterrupted() error = %v", err)
+	}
+	running, readErr = store.RunningJournals()
+	if readErr != nil || len(running) != 0 {
+		t.Fatalf("running journals after recovery = %#v, error = %v", running, readErr)
+	}
+}
+
+func TestIncompleteRollbackAfterCompleteStageRemainsRecoverable(t *testing.T) {
+	store := testStore(t)
+	operationID, err := store.NewOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryID, err := store.NewRecoveryID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	snapshot := Snapshot{}
+	if err := store.WriteRecoveryPoint(RecoveryPoint{
+		RecoveryID: recoveryID, OperationID: operationID, CapturedAt: canonicalNow(),
+	}, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	journal := Journal{
+		OperationID: operationID, RecoveryID: recoveryID,
+		Kind: "apply", Stage: "complete", Status: "completed",
+	}
+	adapter := &fakeAdapter{failRestore: true}
+	instance, _ := New(store, adapter)
+	sentinel := errors.New("complete journal write failed")
+	if err := instance.failWithRollback(
+		context.Background(),
+		Session{OpaqueID: "fake-session"},
+		snapshot,
+		nil,
+		journal,
+		"CS-STATE-001",
+		sentinel,
+	); !errors.Is(err, ErrRollbackFailed) {
+		t.Fatalf("failWithRollback() error = %v", err)
+	}
+	running, err := store.RunningJournals()
+	if err != nil || len(running) != 1 || running[0].Stage != "commit" {
+		t.Fatalf("recoverable journal = %#v, error = %v", running, err)
+	}
+	adapter.failRestore = false
+	if err := instance.RecoverInterrupted(context.Background()); err != nil {
+		t.Fatalf("RecoverInterrupted() error = %v", err)
+	}
+	running, err = store.RunningJournals()
+	if err != nil || len(running) != 0 {
+		t.Fatalf("running journals after recovery = %#v, error = %v", running, err)
+	}
+}
+
+func TestCanceledApplyUsesDetachedVerifiedRollback(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	store := testStore(t)
+	ctx, cancel := context.WithCancel(context.Background())
+	adapter := &fakeAdapter{
+		probe:              passingReport(),
+		cancelOnApply:      cancel,
+		requireLiveRestore: true,
+	}
+	instance, _ := New(store, adapter)
+	_, err := instance.ApplyVerified(ctx, verified)
+	if !errors.Is(err, ErrApplyFailed) {
+		t.Fatalf("ApplyVerified() error = %v", err)
+	}
+	if adapter.state.StylePresent {
+		t.Fatalf("canceled apply left renderer mutated: %#v", adapter.state)
+	}
+	if _, found, err := store.ReadDesired(); err != nil || found {
+		t.Fatalf("desired after canceled apply found=%v error=%v", found, err)
+	}
+	running, err := store.RunningJournals()
+	if err != nil || len(running) != 0 {
+		t.Fatalf("running journals = %#v, error=%v", running, err)
+	}
+}
+
+func TestRollbackRestoresPreviousDesiredState(t *testing.T) {
+	store := testStore(t)
+	previous := DesiredTheme{
+		SchemaVersion: StateSchemaVersion,
+		ThemePublicID: "199999", ThemeVersion: "2.0.0", PackageSHA256: strings.Repeat("a", 64),
+		TemplateVersion: TemplateVersion, AppliedAt: "2026-07-26T05:00:00Z",
+	}
+	current := DesiredTheme{
+		ThemePublicID: "100001", ThemeVersion: "1.0.0", PackageSHA256: strings.Repeat("b", 64),
+		TemplateVersion: TemplateVersion, AppliedAt: "2026-07-26T06:00:00Z",
+	}
+	if err := store.WriteDesired(current); err != nil {
+		t.Fatal(err)
+	}
+	before := Snapshot{
+		StylePresent: true, StyleText: "trusted previous style",
+		BackgroundDataURL: "data:image/png;base64,AA==",
+		ThemePublicID:     "199999", ThemeVersion: "2.0.0", TemplateVersion: TemplateVersion,
+	}
+	adapter := &fakeAdapter{state: Snapshot{
+		StylePresent: true, StyleText: "partially committed style",
+		BackgroundDataURL: "data:image/png;base64,AQ==",
+		ThemePublicID:     "100001", ThemeVersion: "1.0.0", TemplateVersion: TemplateVersion,
+	}}
+	instance, _ := New(store, adapter)
+	operationID, _ := store.NewOperationID()
+	journal := Journal{
+		OperationID: operationID, Kind: "apply", Stage: "commit", Status: "running",
+		ThemePublicID: "100001", ThemeVersion: "1.0.0",
+	}
+	if err := store.WriteJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	sentinel := errors.New("post-commit state failure")
+	if err := instance.failWithRollback(
+		context.Background(),
+		Session{OpaqueID: "fake-session"},
+		before,
+		&previous,
+		journal,
+		"CS-STATE-001",
+		sentinel,
+	); !errors.Is(err, sentinel) {
+		t.Fatalf("failWithRollback() error = %v", err)
+	}
+	if adapter.state != before {
+		t.Fatalf("restored snapshot = %#v, want %#v", adapter.state, before)
+	}
+	desired, found, err := store.ReadDesired()
+	if err != nil || !found || desired != previous {
+		t.Fatalf("restored desired = %#v, found=%v, error=%v", desired, found, err)
+	}
+	running, err := store.RunningJournals()
+	if err != nil || len(running) != 0 {
+		t.Fatalf("running journals = %#v, error=%v", running, err)
+	}
+}
+
+func TestCompileRejectsUnsupportedMinimumEngineBeforeRenderer(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	verified.Manifest.Compatibility.MinEngineVersion = "999.0.0"
+	store := testStore(t)
+	adapter := &fakeAdapter{probe: passingReport()}
+	instance, _ := New(store, adapter)
+	_, err := instance.ApplyVerified(context.Background(), verified)
+	if !errors.Is(err, theme.ErrEngineIncompatible) {
+		t.Fatalf("ApplyVerified() error = %v", err)
+	}
+	if len(adapter.events) != 0 {
+		t.Fatalf("renderer opened for incompatible theme: %v", adapter.events)
 	}
 }
 
@@ -469,110 +632,22 @@ func testStore(t *testing.T) *Store {
 
 func verifiedThemeForEngine(t *testing.T) theme.Verified {
 	t.Helper()
-	imageBytes := tinyEnginePNG(t)
-	imageSum := sha256.Sum256(imageBytes)
-	imageDigest := hex.EncodeToString(imageSum[:])
-	assetPath := "assets/" + imageDigest + ".png"
-	manifestValue := theme.Manifest{
-		SchemaVersion: 1, ThemePublicID: "100001", ThemeVersion: "1.0.0", Name: "Engine Fixture",
-		Design: theme.Design{
-			Mode: "dark",
-			Tokens: theme.Tokens{
-				BackgroundImage: assetPath, BackgroundOverlay: 0.42, SurfaceOpacity: 0.82,
-				SurfaceBlurPx: 18, TextPrimary: "#F7F7FA", TextSecondary: "#C8CAD3",
-				Accent: "#A78BFA", Border: "#FFFFFF24", RadiusScale: 1,
-			},
-			Regions: theme.Regions{Home: true, Sidebar: true, SuggestionCards: true, ProjectPicker: true, Composer: true},
-		},
-		Customization: theme.Customization{Allowed: []string{"backgroundOverlay", "surfaceOpacity", "surfaceBlurPx", "accent", "radiusScale"}},
-		Assets: []theme.Asset{{
-			Path: assetPath, Role: "background", ContentType: "image/png", ByteSize: int64(len(imageBytes)), SHA256: imageDigest,
-		}},
-		Compatibility: theme.Compatibility{Platforms: []string{"macos", "windows"}, MinEngineVersion: "0.1.0"},
-	}
-	manifest := canonicalEngineJSON(t, manifestValue)
-	var packageBuffer bytes.Buffer
-	zipWriter := zip.NewWriter(&packageBuffer)
-	for _, item := range []struct {
-		name string
-		data []byte
-	}{{"manifest.json", manifest}, {assetPath, imageBytes}} {
-		header := &zip.FileHeader{Name: item.name, Method: zip.Store}
-		header.SetMode(0o600)
-		entry, err := zipWriter.CreateHeader(header)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, err := entry.Write(item.data); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := zipWriter.Close(); err != nil {
-		t.Fatal(err)
-	}
-	packageBytes := packageBuffer.Bytes()
-	packageSum := sha256.Sum256(packageBytes)
-	manifestSum := sha256.Sum256(manifest)
-	descriptorValue := theme.Descriptor{
-		DescriptorVersion: 1, ThemePublicID: "100001", ThemeVersion: "1.0.0", SchemaVersion: 1,
-		ManifestSHA256: hex.EncodeToString(manifestSum[:]), PackageSHA256: hex.EncodeToString(packageSum[:]),
-		PackageByteSize: int64(len(packageBytes)), PublishedAt: "2026-07-26T06:00:00Z", SigningKeyID: "engine-test-key",
-	}
-	descriptor := canonicalEngineJSON(t, descriptorValue)
-	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
+	fixture := filepath.Join("..", "..", "fixtures", "free-test-theme-v1", "signed-release-v1")
+	descriptor, err := os.ReadFile(filepath.Join(fixture, "release-descriptor.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	signature := ed25519.Sign(privateKey, append([]byte("codex-skin/theme-release-descriptor/v1\x00"), descriptor...))
-	keyset := prettyEngineJSON(t, theme.VerificationKeyset{
-		SchemaVersion: 1,
-		Keys: []theme.VerificationKey{{
-			KeyID: "engine-test-key", Algorithm: "Ed25519", Usage: "theme-release",
-			PublicKeyBase64: base64.StdEncoding.EncodeToString(publicKey), NotBefore: "2026-01-01T00:00:00Z",
-			NotAfter: "2028-01-01T00:00:00Z", Status: "active",
-		}},
-	})
-	packagePath := filepath.Join(t.TempDir(), "theme.cskin")
-	if err := os.WriteFile(packagePath, packageBytes, 0o600); err != nil {
+	signature, err := os.ReadFile(filepath.Join(fixture, "release-descriptor.sig"))
+	if err != nil {
 		t.Fatal(err)
 	}
 	verified, err := theme.Verify(
-		packagePath,
+		filepath.Join(fixture, "package.cskin"),
 		descriptor,
-		[]byte(base64.StdEncoding.EncodeToString(signature)+"\n"),
-		keyset,
+		signature,
 	)
 	if err != nil {
 		t.Fatalf("theme.Verify() error = %v", err)
 	}
 	return verified
-}
-
-func tinyEnginePNG(t *testing.T) []byte {
-	t.Helper()
-	picture := image.NewRGBA(image.Rect(0, 0, 2, 2))
-	picture.Set(0, 0, imagecolor.RGBA{R: 0x22, G: 0x44, B: 0x66, A: 0xff})
-	var content bytes.Buffer
-	if err := png.Encode(&content, picture); err != nil {
-		t.Fatal(err)
-	}
-	return content.Bytes()
-}
-
-func canonicalEngineJSON(t *testing.T, value any) []byte {
-	t.Helper()
-	content, err := json.Marshal(value)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return append(content, '\n')
-}
-
-func prettyEngineJSON(t *testing.T, value any) []byte {
-	t.Helper()
-	content, err := json.MarshalIndent(value, "", "  ")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return append(content, '\n')
 }

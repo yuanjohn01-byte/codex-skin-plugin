@@ -128,11 +128,10 @@ func run(args []string) (returnErr error) {
 		return err
 	}
 	indexPath := filepath.Clean(values["--index"])
-	keysetPath := filepath.Clean(values["--keyset"])
 	outputRoot := filepath.Clean(values["--out"])
 	stateRoot := filepath.Clean(values["--root"])
-	if !filepath.IsAbs(indexPath) || !filepath.IsAbs(keysetPath) ||
-		!filepath.IsAbs(outputRoot) || !filepath.IsAbs(stateRoot) {
+	if !filepath.IsAbs(indexPath) || !filepath.IsAbs(outputRoot) ||
+		!filepath.IsAbs(stateRoot) {
 		return errors.New("all paths must be absolute")
 	}
 	index := calibrationIndex{}
@@ -143,13 +142,6 @@ func run(args []string) (returnErr error) {
 		return errors.New("calibration index shape is invalid")
 	}
 	if err := selectVariants(&index, values["--only-theme"]); err != nil {
-		return err
-	}
-	keyset, err := readLimited(keysetPath, 64*1024)
-	if err != nil {
-		return err
-	}
-	if _, err := theme.ParseKeyset(keyset); err != nil {
 		return err
 	}
 	if _, err := os.Lstat(outputRoot); !errors.Is(err, os.ErrNotExist) {
@@ -213,7 +205,7 @@ func run(args []string) (returnErr error) {
 		if err != nil {
 			return err
 		}
-		verified, err := theme.Verify(packagePath, descriptor, signature, keyset)
+		verified, err := theme.Verify(packagePath, descriptor, signature)
 		if err != nil ||
 			verified.PackageSHA256 != item.PackageSHA256 ||
 			verified.Manifest.ThemePublicID != item.ThemePublicID ||
@@ -325,14 +317,14 @@ func run(args []string) (returnErr error) {
 }
 
 func parseArguments(args []string) (map[string]string, error) {
-	if len(args) != 8 && len(args) != 10 {
-		return nil, errors.New("expected --index --keyset --out --root [--only-theme]")
+	if len(args) != 6 && len(args) != 8 {
+		return nil, errors.New("expected --index --out --root [--only-theme]")
 	}
 	values := map[string]string{}
 	for index := 0; index < len(args); index += 2 {
 		name := args[index]
-		if name != "--index" && name != "--keyset" && name != "--out" &&
-			name != "--root" && name != "--only-theme" {
+		if name != "--index" && name != "--out" && name != "--root" &&
+			name != "--only-theme" {
 			return nil, errors.New("unknown argument")
 		}
 		if args[index+1] == "" || values[name] != "" {

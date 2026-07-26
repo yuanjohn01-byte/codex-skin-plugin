@@ -36,6 +36,11 @@
       "source": "codex-skin/contracts/public/theme-verification-keys-v1.json"
     },
     {
+      "destination": "internal/theme/trusted-verification-keys-v1.json",
+      "sha256": "e205c2b2df7e4cc72875df3e110f1ce188e587cfb48fabe70a8e80b8fff0c0cb",
+      "source": "codex-skin/contracts/public/theme-verification-keys-v1.json"
+    },
+    {
       "destination": "fixtures/free-test-theme-v1/fixture-policy-v1.json",
       "sha256": "2679342b91bd29efc0f4db4147deca75a5b1d99ffb11e1a8405d2f3fb9a96890",
       "source": "codex-skin/fixtures/public/free-test-theme-v1/fixture-policy-v1.json"
@@ -54,6 +59,21 @@
       "destination": "fixtures/free-test-theme-v1/assets/32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575.png",
       "sha256": "32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575",
       "source": "codex-skin/fixtures/public/free-test-theme-v1/assets/32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575.png"
+    },
+    {
+      "destination": "fixtures/free-test-theme-v1/signed-release-v1/package.cskin",
+      "sha256": "0d68f984061b05548cb99a84ae621d5d6e6138f009e3644c8ff72e7b476cf5a3",
+      "source": "codex-skin/fixtures/public/free-test-theme-v1/signed-release-v1/package.cskin"
+    },
+    {
+      "destination": "fixtures/free-test-theme-v1/signed-release-v1/release-descriptor.json",
+      "sha256": "01179f97ddab13eb72b0b723ac6b2979545cd89015324259751a784e19116efa",
+      "source": "codex-skin/fixtures/public/free-test-theme-v1/signed-release-v1/release-descriptor.json"
+    },
+    {
+      "destination": "fixtures/free-test-theme-v1/signed-release-v1/release-descriptor.sig",
+      "sha256": "7a643d33f5e7f85dfe6e657745e4931e189596d57cf286fefddb8909ac9dc45f",
+      "source": "codex-skin/fixtures/public/free-test-theme-v1/signed-release-v1/release-descriptor.sig"
     }
   ],
   "generatedFrom": "codex-skin/contracts/public/export-allowlist.json",

@@ -7,6 +7,7 @@ import (
 
 const (
 	StateSchemaVersion     = 1
+	CurrentEngineVersion   = "0.2.0"
 	TemplateVersion        = 1
 	MarkerID               = "codex-skin-theme-v1"
 	RootMarkerAttribute    = "data-codex-skin"

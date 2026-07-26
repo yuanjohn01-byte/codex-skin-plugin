@@ -40,7 +40,7 @@ type archiveEntry struct {
 
 func TestVerifyAndExtractUsesVerifiedBytes(t *testing.T) {
 	release := makeTestRelease(t, nil)
-	verified, err := Verify(release.packagePath, release.descriptor, release.signature, release.keyset)
+	verified, err := verifyWithKeyset(release.packagePath, release.descriptor, release.signature, release.keyset)
 	if err != nil {
 		t.Fatalf("Verify() error = %v", err)
 	}
@@ -73,7 +73,7 @@ func TestVerifyRejectsSignaturePackageAndKeyFailures(t *testing.T) {
 
 	tamperedSignature := append([]byte(nil), release.signature...)
 	tamperedSignature[0] = 'A'
-	if _, err := Verify(release.packagePath, release.descriptor, tamperedSignature, release.keyset); !errors.Is(err, ErrSignatureInvalid) {
+	if _, err := verifyWithKeyset(release.packagePath, release.descriptor, tamperedSignature, release.keyset); !errors.Is(err, ErrSignatureInvalid) {
 		t.Fatalf("tampered signature error = %v", err)
 	}
 
@@ -81,7 +81,7 @@ func TestVerifyRejectsSignaturePackageAndKeyFailures(t *testing.T) {
 	descriptor.PackageSHA256 = strings.Repeat("0", 64)
 	badDescriptor := canonicalForTest(t, descriptor)
 	badSignature := signForTest(release.privateKey, badDescriptor)
-	if _, err := Verify(release.packagePath, badDescriptor, badSignature, release.keyset); !errors.Is(err, ErrPackageMismatch) {
+	if _, err := verifyWithKeyset(release.packagePath, badDescriptor, badSignature, release.keyset); !errors.Is(err, ErrPackageMismatch) {
 		t.Fatalf("package mismatch error = %v", err)
 	}
 
@@ -91,8 +91,65 @@ func TestVerifyRejectsSignaturePackageAndKeyFailures(t *testing.T) {
 	}
 	keyset.Keys[0].Status = "revoked"
 	revokedKeyset := prettyForTest(t, keyset)
-	if _, err := Verify(release.packagePath, release.descriptor, release.signature, revokedKeyset); !errors.Is(err, ErrSigningKeyInvalid) {
+	if _, err := verifyWithKeyset(release.packagePath, release.descriptor, release.signature, revokedKeyset); !errors.Is(err, ErrSigningKeyInvalid) {
 		t.Fatalf("revoked key error = %v", err)
+	}
+}
+
+func TestVerifyPinsCanonicalEmbeddedTrustRoot(t *testing.T) {
+	fixture := filepath.Join("..", "..", "fixtures", "free-test-theme-v1", "signed-release-v1")
+	descriptor := readFileForTest(t, filepath.Join(fixture, "release-descriptor.json"))
+	signature := readFileForTest(t, filepath.Join(fixture, "release-descriptor.sig"))
+	verified, err := Verify(filepath.Join(fixture, "package.cskin"), descriptor, signature)
+	if err != nil {
+		t.Fatalf("Verify() trusted fixture error = %v", err)
+	}
+	if verified.Descriptor.SigningKeyID != "theme-alpha-2026-01" ||
+		!bytes.Equal(verified.KeysetBytes, trustedKeysetRaw) {
+		t.Fatalf("trusted verification result = %#v", verified.Descriptor)
+	}
+
+	selfSigned := makeTestRelease(t, nil)
+	if _, err := Verify(
+		selfSigned.packagePath,
+		selfSigned.descriptor,
+		selfSigned.signature,
+	); !errors.Is(err, ErrSigningKeyInvalid) {
+		t.Fatalf("self-signed keyset bypass error = %v", err)
+	}
+
+	var keyset VerificationKeyset
+	if err := json.Unmarshal(trustedKeysetRaw, &keyset); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ParseKeyset(canonicalForTest(t, keyset)); !errors.Is(err, ErrKeysetCanonical) {
+		t.Fatalf("non-canonical keyset error = %v", err)
+	}
+}
+
+func TestEngineCompatibilityUsesSemverPrecedence(t *testing.T) {
+	for _, test := range []struct {
+		current    string
+		minimum    string
+		compatible bool
+	}{
+		{current: "0.2.0", minimum: "0.2.0", compatible: true},
+		{current: "0.2.1", minimum: "0.2.0", compatible: true},
+		{current: "0.2.0", minimum: "0.2.1", compatible: false},
+		{current: "0.2.0", minimum: "0.2.0-rc.1", compatible: true},
+		{current: "0.2.0-rc.2", minimum: "0.2.0-rc.10", compatible: false},
+		{current: "0.2.0-rc.10", minimum: "0.2.0-rc.2", compatible: true},
+		{current: "invalid", minimum: "0.2.0", compatible: false},
+	} {
+		if got := EngineCompatible(test.current, test.minimum); got != test.compatible {
+			t.Fatalf(
+				"EngineCompatible(%q, %q) = %v, want %v",
+				test.current,
+				test.minimum,
+				got,
+				test.compatible,
+			)
+		}
 	}
 }
 
@@ -102,7 +159,7 @@ func TestVerifyRejectsSymlinkPackage(t *testing.T) {
 	if err := os.Symlink(release.packagePath, link); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := Verify(link, release.descriptor, release.signature, release.keyset); !errors.Is(err, ErrPackageInvalid) {
+	if _, err := verifyWithKeyset(link, release.descriptor, release.signature, release.keyset); !errors.Is(err, ErrPackageInvalid) {
 		t.Fatalf("symlink package error = %v", err)
 	}
 }
@@ -167,7 +224,7 @@ func TestVerifyRejectsMaliciousArchiveShapes(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			release := makeTestRelease(t, test.entries)
-			if _, err := Verify(release.packagePath, release.descriptor, release.signature, release.keyset); !errors.Is(err, ErrPackageInvalid) {
+			if _, err := verifyWithKeyset(release.packagePath, release.descriptor, release.signature, release.keyset); !errors.Is(err, ErrPackageInvalid) {
 				t.Fatalf("Verify() error = %v", err)
 			}
 		})
@@ -189,14 +246,14 @@ func TestVerifyRejectsInvalidPNGChecksum(t *testing.T) {
 		{name: release.manifest.Assets[0].Path, content: imageBytes, method: zip.Store, mode: 0o600},
 	}
 	badRelease := makeTestReleaseWithManifest(t, release.manifest, manifestBytes, entries, release.privateKey, release.keyset)
-	if _, err := Verify(badRelease.packagePath, badRelease.descriptor, badRelease.signature, badRelease.keyset); !errors.Is(err, ErrPackageInvalid) {
+	if _, err := verifyWithKeyset(badRelease.packagePath, badRelease.descriptor, badRelease.signature, badRelease.keyset); !errors.Is(err, ErrPackageInvalid) {
 		t.Fatalf("invalid PNG error = %v", err)
 	}
 }
 
 func TestExtractRejectsExistingDestination(t *testing.T) {
 	release := makeTestRelease(t, nil)
-	verified, err := Verify(release.packagePath, release.descriptor, release.signature, release.keyset)
+	verified, err := verifyWithKeyset(release.packagePath, release.descriptor, release.signature, release.keyset)
 	if err != nil {
 		t.Fatal(err)
 	}

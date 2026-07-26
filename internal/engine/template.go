@@ -12,6 +12,14 @@ import (
 
 func CompileTheme(verified theme.Verified, stagedRoot string) (CompiledTheme, error) {
 	manifest := verified.Manifest
+	if !theme.EngineCompatible(CurrentEngineVersion, manifest.Compatibility.MinEngineVersion) {
+		return CompiledTheme{}, fmt.Errorf(
+			"%w: current=%s required=%s",
+			theme.ErrEngineIncompatible,
+			CurrentEngineVersion,
+			manifest.Compatibility.MinEngineVersion,
+		)
+	}
 	background := manifest.Design.Tokens.BackgroundImage
 	target := filepath.Join(stagedRoot, filepath.FromSlash(background))
 	if err := ensureContained(stagedRoot, target); err != nil {

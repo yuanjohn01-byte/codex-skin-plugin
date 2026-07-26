@@ -14,6 +14,11 @@ ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = Path("fixtures/free-test-theme-v1")
 ASSET_PATH = "assets/32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575.png"
 ASSET_SHA256 = "32778aa571beb986c74d682ef5711dc5b8f412332538efa8e277ace8c5e41575"
+SIGNED_RELEASE_FILES = {
+    "signed-release-v1/package.cskin",
+    "signed-release-v1/release-descriptor.json",
+    "signed-release-v1/release-descriptor.sig",
+}
 EXPECTED_POLICY = {
     "schemaVersion": 1,
     "requiredRegions": ["home", "sidebar", "suggestionCards", "projectPicker", "composer"],
@@ -104,8 +109,14 @@ def main() -> int:
     fixture = args.root.resolve() / args.fixture
     if fixture.is_symlink() or not fixture.is_dir():
         raise ValueError("fixture root must be a real directory")
-    allowed_files = {"fixture-policy-v1.json", "fixture-provenance.json", "manifest.json", ASSET_PATH}
-    allowed_entries = allowed_files | {"assets"}
+    allowed_files = {
+        "fixture-policy-v1.json",
+        "fixture-provenance.json",
+        "manifest.json",
+        ASSET_PATH,
+        *SIGNED_RELEASE_FILES,
+    }
+    allowed_entries = allowed_files | {"assets", "signed-release-v1"}
     entries = list(fixture.rglob("*"))
     for path in entries:
         if path.is_symlink():
@@ -115,7 +126,10 @@ def main() -> int:
         raise ValueError(f"fixture must contain only reviewed entries: {sorted(actual_entries)}")
     actual_files = {path.relative_to(fixture).as_posix() for path in entries if path.is_file()}
     if actual_files != allowed_files:
-        raise ValueError(f"fixture must contain only reviewed JSON and the synthetic PNG: {sorted(actual_files)}")
+        raise ValueError(
+            "fixture must contain only reviewed source and signed release files: "
+            f"{sorted(actual_files)}"
+        )
     if not strictly_equal(load_json(fixture / "fixture-policy-v1.json"), EXPECTED_POLICY):
         raise ValueError("fixture policy does not match the exact reviewed v1 schema")
     if not strictly_equal(load_json(fixture / "fixture-provenance.json"), EXPECTED_PROVENANCE):

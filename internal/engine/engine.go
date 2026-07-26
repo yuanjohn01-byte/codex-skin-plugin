@@ -7,11 +7,14 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"time"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 )
 
 var themePublicIDPattern = regexp.MustCompile(`^[0-9]{6}$`)
+
+const rollbackTimeout = 20 * time.Second
 
 type Engine struct {
 	store   *Store
@@ -132,11 +135,16 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 		return ApplyResult{}, err
 	}
 
-	rollback := func(cause error) error {
-		if rollbackErr := engine.adapter.Restore(ctx, session, before); rollbackErr != nil {
-			return errors.Join(cause, fmt.Errorf("%w: %v", ErrRollbackFailed, rollbackErr))
-		}
-		return cause
+	rollback := func(code string, cause error) error {
+		return engine.failWithRollback(
+			ctx,
+			session,
+			before,
+			previousDesiredPointer,
+			journal,
+			code,
+			cause,
+		)
 	}
 
 	journal.Stage = "apply"
@@ -144,24 +152,24 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 		return ApplyResult{}, err
 	}
 	if err := engine.adapter.Apply(ctx, session, compiled); err != nil {
-		return ApplyResult{}, engine.failJournal(journal, "CS-APPLY-001", rollback(fmt.Errorf("%w: %v", ErrApplyFailed, err)))
+		return ApplyResult{}, rollback("CS-APPLY-001", fmt.Errorf("%w: %v", ErrApplyFailed, err))
 	}
 
 	journal.Stage = "verify"
 	if err := engine.store.WriteJournal(journal); err != nil {
-		return ApplyResult{}, rollback(err)
+		return ApplyResult{}, rollback("CS-STATE-001", err)
 	}
 	report, err := engine.adapter.Verify(ctx, session, compiled)
 	if err != nil || !reportAllowsCommit(report, compiled) {
 		if err == nil {
 			err = ErrVerifyFailed
 		}
-		return ApplyResult{}, engine.failJournal(journal, "CS-VERIFY-001", rollback(err))
+		return ApplyResult{}, rollback("CS-VERIFY-001", err)
 	}
 
 	journal.Stage = "commit"
 	if err := engine.store.WriteJournal(journal); err != nil {
-		return ApplyResult{}, rollback(err)
+		return ApplyResult{}, rollback("CS-STATE-001", err)
 	}
 	desired := DesiredTheme{
 		ThemePublicID:   compiled.ThemePublicID,
@@ -171,15 +179,15 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 		AppliedAt:       canonicalNow(),
 	}
 	if _, err := engine.store.CommitTheme(stage, desired); err != nil {
-		return ApplyResult{}, engine.failJournal(journal, "CS-STATE-001", rollback(err))
+		return ApplyResult{}, rollback("CS-STATE-001", err)
 	}
 	if err := engine.store.WriteDesired(desired); err != nil {
-		return ApplyResult{}, engine.failJournal(journal, "CS-STATE-001", rollback(err))
+		return ApplyResult{}, rollback("CS-STATE-001", err)
 	}
 	journal.Stage = "complete"
 	journal.Status = "completed"
 	if err := engine.store.WriteJournal(journal); err != nil {
-		return ApplyResult{}, err
+		return ApplyResult{}, rollback("CS-STATE-001", err)
 	}
 	return ApplyResult{
 		OperationID:   operationID,
@@ -386,6 +394,56 @@ func (engine *Engine) failJournal(journal Journal, code string, cause error) err
 	journal.Status = "failed"
 	journal.ErrorCode = code
 	return errors.Join(cause, engine.store.WriteJournal(journal))
+}
+
+func (engine *Engine) failWithRollback(
+	ctx context.Context,
+	session Session,
+	snapshot Snapshot,
+	previousDesired *DesiredTheme,
+	journal Journal,
+	code string,
+	cause error,
+) error {
+	// A canceled request must not cancel safety cleanup. The bounded detached
+	// context carries values but never inherits cancellation or deadlines.
+	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+	defer cancel()
+
+	restoreErr := engine.adapter.Restore(rollbackCtx, session, snapshot)
+	if restoreErr == nil {
+		if snapshot.StylePresent {
+			captured, captureErr := engine.adapter.Capture(rollbackCtx, session)
+			if captureErr != nil || captured != snapshot {
+				restoreErr = errors.Join(ErrRollbackFailed, captureErr)
+			}
+		} else if verifyErr := engine.adapter.VerifyOfficial(rollbackCtx, session); verifyErr != nil {
+			restoreErr = verifyErr
+		}
+	}
+
+	var desiredErr error
+	if previousDesired == nil {
+		desiredErr = engine.store.ClearDesired()
+	} else {
+		desiredErr = engine.store.WriteDesired(*previousDesired)
+	}
+	if restoreErr != nil || desiredErr != nil {
+		// Keep the mutation-stage journal running so the next invocation cannot
+		// skip durable recovery after an incomplete rollback.
+		if journal.Stage != "apply" && journal.Stage != "verify" && journal.Stage != "commit" {
+			journal.Stage = "commit"
+		}
+		journal.Status = "running"
+		journal.ErrorCode = code
+		persistErr := engine.store.WriteJournal(journal)
+		return errors.Join(
+			cause,
+			fmt.Errorf("%w: %v", ErrRollbackFailed, errors.Join(restoreErr, desiredErr)),
+			persistErr,
+		)
+	}
+	return engine.failJournal(journal, code, cause)
 }
 
 func capabilitiesAllowApply(report RegionReport) bool {

@@ -5,7 +5,6 @@ import "testing"
 func TestParseArgumentsAcceptsOptionalThemeFilter(t *testing.T) {
 	values, err := parseArguments([]string{
 		"--index", "/tmp/index.json",
-		"--keyset", "/tmp/keyset.json",
 		"--out", "/tmp/output",
 		"--root", "/tmp/state",
 		"--only-theme", "100001",
@@ -22,14 +21,12 @@ func TestParseArgumentsRejectsDuplicateAndUnknownOptions(t *testing.T) {
 	for _, args := range [][]string{
 		{
 			"--index", "/tmp/index.json",
-			"--keyset", "/tmp/keyset.json",
 			"--out", "/tmp/output",
 			"--root", "/tmp/state",
 			"--root", "/tmp/other",
 		},
 		{
 			"--index", "/tmp/index.json",
-			"--keyset", "/tmp/keyset.json",
 			"--out", "/tmp/output",
 			"--root", "/tmp/state",
 			"--theme", "100001",

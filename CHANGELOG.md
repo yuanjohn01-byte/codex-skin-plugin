@@ -25,9 +25,9 @@
 - Add internal macOS Keychain and Windows Credential Manager backends plus token-response persistence/refresh rotation tests; Access Tokens remain memory-only and the installed v0.0.2 surface remains unchanged.
 - Add an internal same-task authorization continuation that strictly validates device-limit management metadata, reuses the same proof after an explicit device-slot signal, and runs the caller's pending operation at most once without changing the installed v0.0.2 surface.
 - Add generated Theme Manifest, release descriptor, verification-keyset contracts and the public verification key for the unreleased Gate B engine.
-- Add strict data-only package, image, canonical archive, SHA-256, key-window, and Ed25519 verification with malicious-package rejection.
+- Add strict data-only package, image, canonical archive/keyset, SHA-256, key-window, and Ed25519 verification with malicious-package rejection and an immutable generated trust root.
 - Add official Codex identity verification, exact-loopback CDP discovery, a fixed engine-owned theme template, capability probes, transactional apply/verify/rollback, and durable revalidated theme cache.
-- Add crash-journal recovery, last-known-good snapshots, and an out-of-Plugin-cache offline `theme restore` command that requires no network, login, entitlement, Node, or Plugin.
+- Add Engine v0.2.0 minimum-version enforcement, cancellation-independent verified rollback, crash-journal recovery, last-known-good snapshots, and an out-of-Plugin-cache offline `theme restore` command that requires no network, login, entitlement, Node, or Plugin.
 - Add full shared-core macOS/Windows CI coverage while keeping the installed v0.0.2 Plugin read-only.
 
 No theme operation or public compatibility claim is attached to this version.
