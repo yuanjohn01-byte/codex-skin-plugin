@@ -231,6 +231,27 @@ func (adapter *Live) Probe(ctx context.Context, session engine.Session) (engine.
 	return report, nil
 }
 
+func (adapter *Live) WaitForCapabilities(ctx context.Context, session engine.Session) (engine.RegionReport, error) {
+	deadline := time.Now().Add(adapter.launchWait)
+	var last engine.RegionReport
+	var lastErr error
+	for time.Now().Before(deadline) {
+		last, lastErr = adapter.Probe(ctx, session)
+		if lastErr == nil && engine.CapabilitiesAllowApply(last) {
+			return last, nil
+		}
+		select {
+		case <-ctx.Done():
+			return engine.RegionReport{}, ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	if lastErr != nil {
+		return engine.RegionReport{}, lastErr
+	}
+	return last, engine.ErrCapabilityBlocked
+}
+
 func (adapter *Live) Capture(ctx context.Context, session engine.Session) (engine.Snapshot, error) {
 	live, err := adapter.verifiedLiveSession(ctx, session)
 	if err != nil {

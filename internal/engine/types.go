@@ -89,6 +89,12 @@ type Adapter interface {
 	Close(context.Context, Session) error
 }
 
+// CapabilityWaiter lets a live adapter wait for the official UI to finish
+// loading before the engine evaluates fail-closed capability probes.
+type CapabilityWaiter interface {
+	WaitForCapabilities(context.Context, Session) (RegionReport, error)
+}
+
 // SessionPrimer lets an adapter re-establish trusted in-memory context from a
 // package that the engine revalidated from its offline cache.
 type SessionPrimer interface {

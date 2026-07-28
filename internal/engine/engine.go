@@ -90,8 +90,8 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 	if err := engine.primeDesiredSession(ctx, session); err != nil {
 		return ApplyResult{}, engine.failJournal(journal, "CS-CACHE-VERIFY-001", err)
 	}
-	probe, err := engine.adapter.Probe(ctx, session)
-	if err != nil || !capabilitiesAllowApply(probe) {
+	probe, err := engine.probeCapabilities(ctx, session)
+	if err != nil || !CapabilitiesAllowApply(probe) {
 		if err == nil {
 			err = ErrCapabilityBlocked
 		}
@@ -220,7 +220,7 @@ func (engine *Engine) RestoreOfficial(ctx context.Context) (result RestoreResult
 		return RestoreResult{}, engine.failJournal(journal, "CS-CODEX-IDENTITY-001", err)
 	}
 	defer engine.adapter.Close(ctx, session)
-	probe, err := engine.adapter.Probe(ctx, session)
+	probe, err := engine.probeCapabilities(ctx, session)
 	if err != nil {
 		return RestoreResult{}, engine.failJournal(journal, "CS-COMPAT-001", err)
 	}
@@ -446,7 +446,14 @@ func (engine *Engine) failWithRollback(
 	return engine.failJournal(journal, code, cause)
 }
 
-func capabilitiesAllowApply(report RegionReport) bool {
+func (engine *Engine) probeCapabilities(ctx context.Context, session Session) (RegionReport, error) {
+	if waiter, supported := engine.adapter.(CapabilityWaiter); supported {
+		return waiter.WaitForCapabilities(ctx, session)
+	}
+	return engine.adapter.Probe(ctx, session)
+}
+
+func CapabilitiesAllowApply(report RegionReport) bool {
 	if report.StyleMarkerCount < 0 || report.StyleMarkerCount > 1 {
 		return false
 	}
@@ -476,5 +483,5 @@ func reportAllowsCommit(report RegionReport, compiled CompiledTheme) bool {
 		report.TemplateVersion == compiled.TemplateVersion &&
 		report.ThemePublicID == compiled.ThemePublicID &&
 		report.BackgroundLoaded &&
-		capabilitiesAllowApply(report)
+		CapabilitiesAllowApply(report)
 }
