@@ -36,7 +36,7 @@ jobs:
           python -m compileall -q tools
           python tools/test_public_repository.py
 
-      - name: Test Git marketplace and v0.0.1 to v0.0.2 upgrade
+      - name: Test Git marketplace upgrade to the current candidate
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
@@ -47,6 +47,11 @@ jobs:
           $cliVersion = (codex --version).Trim()
           if ($cliVersion -ne "codex-cli $env:CODEX_CLI_VERSION") {
             throw "unexpected Codex CLI version: $cliVersion"
+          }
+          $candidateManifest = Get-Content -Raw (Join-Path $env:GITHUB_WORKSPACE 'plugins/codex-skin/.codex-plugin/plugin.json') | ConvertFrom-Json
+          $candidateVersion = $candidateManifest.version
+          if ($candidateVersion -ne '0.1.0-paid-alpha') {
+            throw "unexpected candidate Plugin version: $candidateVersion"
           }
 
           $baselineMarketplace = codex plugin marketplace add yuanjohn01-byte/codex-skin-plugin --ref $env:BASELINE_REF --json | ConvertFrom-Json
@@ -83,18 +88,18 @@ jobs:
           }
 
           $upgradeInstall = codex plugin add codex-skin@codex-skin --json | ConvertFrom-Json
-          if ($upgradeInstall.version -ne '0.0.2') {
+          if ($upgradeInstall.version -ne $candidateVersion) {
             throw 'upgraded Plugin version is incorrect'
           }
 
           $repeatInstall = codex plugin add codex-skin@codex-skin --json | ConvertFrom-Json
-          if ($repeatInstall.version -ne '0.0.2') {
-            throw 'repeated v0.0.2 install returned the wrong version'
+          if ($repeatInstall.version -ne $candidateVersion) {
+            throw 'repeated candidate install returned the wrong version'
           }
 
           $installed = codex plugin list --json | ConvertFrom-Json
-          if ($installed.installed.Count -ne 1 -or $installed.installed[0].version -ne '0.0.2' -or -not $installed.installed[0].enabled) {
-            throw 'upgrade did not leave one enabled v0.0.2 Plugin entry'
+          if ($installed.installed.Count -ne 1 -or $installed.installed[0].version -ne $candidateVersion -or -not $installed.installed[0].enabled) {
+            throw 'upgrade did not leave one enabled candidate Plugin entry'
           }
 
           $sourceSkill = Join-Path $env:GITHUB_WORKSPACE 'plugins/codex-skin/skills/codex-skin-version/SKILL.md'
@@ -128,8 +133,8 @@ jobs:
             ''
             '- PASS: pinned Codex CLI installed on a clean windows-latest runner.'
             '- PASS: baseline Git ref exposed and installed exactly one enabled v0.0.1 Plugin.'
-            '- PASS: switching the marketplace to the current ref replaced it with one enabled v0.0.2 Plugin.'
-            '- PASS: repeated v0.0.2 install remained single and idempotent.'
+            "- PASS: switching the marketplace to the current ref replaced it with one enabled $candidateVersion Plugin."
+            "- PASS: repeated $candidateVersion install remained single and idempotent."
             "- PASS: upgraded Skill SHA-256 matched current source: $sourceHash."
             '- NOT TESTED: Windows Store Codex Desktop UI, app restart, authenticated new task, and video recording.'
           ) | Set-Content -Encoding utf8 (Join-Path $evidence 'summary.md')
