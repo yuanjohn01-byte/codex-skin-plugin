@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.0-paid-alpha - Code-stage candidate
+
+- Export the authoritative device-authorization start and theme release/download v1 contracts from Private.
+- Add strict same-origin device authorization start, PKCE proof generation, replay handling, native credential rotation, and one-command continuation.
+- Add authenticated theme metadata and bounded binary download clients that reject redirects, cross-origin purchase links, unknown JSON, truncation, oversize, and unexpected content types.
+- Continue a six-digit theme request through authorization and an optional bounded Pro purchase wait without asking the user to repeat the request.
+- Pass the downloaded package, canonical descriptor, and detached signature to the existing Gate B verifier and transactional engine before apply.
+- Persist only a device reference and pending six-digit theme ID outside the Plugin cache; credentials remain in Keychain or Credential Manager and Access Tokens remain memory-only.
+- Expose `theme apply`, offline `theme restore`, and local-only `status` Helper commands through dedicated Paid Alpha Skills and fixed platform wrappers.
+- Keep the wrapper fail closed until the signed Helper bootstrap has installed its fixed out-of-cache recovery-engine copy.
+
+This candidate is not a Public or Production release. The API origin, signed Helper Release, Production deployment order, and final macOS/Windows distribution gates remain required before merge/release.
+
 ## 0.0.2 - Unreleased
 
 - Bump the read-only distribution spike from v0.0.1 to v0.0.2.

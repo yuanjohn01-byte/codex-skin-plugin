@@ -176,6 +176,42 @@ PLUGIN_ROOT = Path("plugins/codex-skin")
 MANIFEST_RELATIVE = PLUGIN_ROOT / ".codex-plugin/plugin.json"
 MARKETPLACE_RELATIVE = Path(".agents/plugins/marketplace.json")
 VERSION_SKILL_RELATIVE = PLUGIN_ROOT / "skills/codex-skin-version/SKILL.md"
+REQUIRED_SKILLS = {
+    VERSION_SKILL_RELATIVE: (
+        "name: codex-skin-version\n",
+        "Plugin version: `0.1.0-paid-alpha`.",
+        "Release status: code-stage candidate",
+    ),
+    PLUGIN_ROOT / "skills/codex-skin-install-theme/SKILL.md": (
+        "name: codex-skin-install-theme\n",
+        "scripts/codex-skin.sh theme apply THEME_ID --json",
+        "do not ask the user to repeat the theme request",
+    ),
+    PLUGIN_ROOT / "skills/codex-skin-restore-theme/SKILL.md": (
+        "name: codex-skin-restore-theme\n",
+        "scripts/codex-skin.sh theme restore --json",
+        "must remain offline",
+    ),
+    PLUGIN_ROOT / "skills/codex-skin-status/SKILL.md": (
+        "name: codex-skin-status\n",
+        "scripts/codex-skin.sh status --json",
+        "durable local facts only",
+    ),
+}
+REQUIRED_SCRIPTS = {
+    PLUGIN_ROOT / "scripts/codex-skin.sh": (
+        'Library/Application Support/CodexSkin/recovery/engine/codex-skin',
+        'exec "${helper_path}" "$@"',
+    ),
+    PLUGIN_ROOT / "scripts/codex-skin.ps1": (
+        r"CodexSkin\recovery\engine\codex-skin.exe",
+        "& $helper.FullName @args",
+    ),
+    PLUGIN_ROOT / "scripts/README.md": (
+        "fixed recovery engine path",
+        "fail closed",
+    ),
+}
 README_RELATIVE = Path("README.md")
 EXPORT_MANIFEST_RELATIVE = Path("contracts/export-manifest.json")
 SIGNED_THEME_FIXTURE_PACKAGE = Path(
@@ -193,6 +229,10 @@ EXPORTED_CONTRACTS = (
     (
         Path("contracts/device-authorization-poll-v1.schema.json"),
         "codex-skin/contracts/public/device-authorization-poll-v1.schema.json",
+    ),
+    (
+        Path("contracts/theme-download-v1.schema.json"),
+        "codex-skin/contracts/public/theme-download-v1.schema.json",
     ),
     (
         Path("contracts/theme-manifest-v1.schema.json"),
@@ -253,7 +293,7 @@ EXPORTED_EMBEDS = (
         "codex-skin/contracts/public/theme-verification-keys-v1.json",
     ),
 )
-EXPECTED_PLUGIN_VERSION = "0.0.2"
+EXPECTED_PLUGIN_VERSION = "0.1.0-paid-alpha"
 INSTALL_COMMANDS = (
     "codex plugin marketplace add yuanjohn01-byte/codex-skin-plugin --ref main",
     "codex plugin add codex-skin@codex-skin",
@@ -569,45 +609,59 @@ def validate_marketplace(root: Path, candidates: set[Path], errors: list[str]) -
             errors.append(f"only marketplace.json belongs in .agents/plugins: {relative}")
 
 
-def validate_version_skill(root: Path, candidates: set[Path], errors: list[str]) -> None:
-    skill = root / VERSION_SKILL_RELATIVE
-    if VERSION_SKILL_RELATIVE not in candidates or not skill.is_file():
-        errors.append(f"missing {VERSION_SKILL_RELATIVE}")
-        return
-    try:
-        content = skill.read_text(encoding="utf-8")
-    except OSError as exc:
-        errors.append(f"cannot read version Skill: {exc}")
-        return
-    expected_frontmatter = (
-        "---\n"
-        "name: codex-skin-version\n"
-        "description: Report the installed Codex Skin v0.0.2 pre-release Plugin version "
-        "and verify that its read-only test Skill loaded after installation or upgrade. Use "
-        "for Codex Skin distribution checks only; this build cannot apply themes.\n"
-        "---\n"
-    )
-    if not content.startswith(expected_frontmatter):
-        errors.append("version Skill frontmatter must match the approved v0.0.2 contract")
-    for marker in (
-        "Plugin version: `0.0.2`.",
-        "Skill: `codex-skin-version`.",
-        "Upgrade target: replaces the v0.0.1 distribution-spike bundle.",
-        "Theme operations are not available in this test build.",
-        "After the host loads this `SKILL.md`, do not call any additional tools, execute "
-        "commands, access the network, or modify files or settings.",
-    ):
-        if marker not in content:
-            errors.append(f"version Skill is missing required marker: {marker}")
-
+def validate_skills(root: Path, candidates: set[Path], errors: list[str]) -> None:
+    for relative, markers in REQUIRED_SKILLS.items():
+        skill = root / relative
+        if relative not in candidates or not skill.is_file():
+            errors.append(f"missing required Paid Alpha Skill: {relative}")
+            continue
+        try:
+            content = skill.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"cannot read Paid Alpha Skill {relative}: {exc}")
+            continue
+        if not content.startswith("---\n") or "\n---\n" not in content[4:]:
+            errors.append(f"Paid Alpha Skill frontmatter is invalid: {relative}")
+        for marker in markers:
+            if marker not in content:
+                errors.append(f"Paid Alpha Skill is missing required marker {marker!r}: {relative}")
     skills_root = PLUGIN_ROOT / "skills"
     for relative in candidates:
         if (
             (root / relative).is_file()
             and relative.parts[: len(skills_root.parts)] == skills_root.parts
-            and relative != VERSION_SKILL_RELATIVE
+            and relative not in REQUIRED_SKILLS
         ):
-            errors.append(f"v0.0.2 may contain only the version check Skill: {relative}")
+            errors.append(f"Paid Alpha Plugin contains an unapproved Skill: {relative}")
+
+
+def validate_scripts(root: Path, candidates: set[Path], errors: list[str]) -> None:
+    for relative, markers in REQUIRED_SCRIPTS.items():
+        script = root / relative
+        if relative not in candidates or not script.is_file():
+            errors.append(f"missing required Paid Alpha wrapper: {relative}")
+            continue
+        try:
+            content = script.read_text(encoding="utf-8")
+        except OSError as exc:
+            errors.append(f"cannot read Paid Alpha wrapper {relative}: {exc}")
+            continue
+        for marker in markers:
+            if marker not in content:
+                errors.append(f"Paid Alpha wrapper is missing required marker {marker!r}: {relative}")
+        if any(value in content for value in ("curl ", "wget ", "Invoke-WebRequest", "http://", "https://")):
+            errors.append(f"Paid Alpha wrapper must not implement network access: {relative}")
+    shell = root / (PLUGIN_ROOT / "scripts/codex-skin.sh")
+    if shell.is_file() and shell.stat().st_mode & 0o111 == 0:
+        errors.append("macOS Paid Alpha wrapper must be executable")
+    scripts_root = PLUGIN_ROOT / "scripts"
+    for relative in candidates:
+        if (
+            (root / relative).is_file()
+            and relative.parts[: len(scripts_root.parts)] == scripts_root.parts
+            and relative not in REQUIRED_SCRIPTS
+        ):
+            errors.append(f"Paid Alpha Plugin contains an unapproved wrapper: {relative}")
 
 
 def validate_license(root: Path, candidates: set[Path], errors: list[str]) -> None:
@@ -681,6 +735,9 @@ def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[
             "error",
             "versionData",
             "doctorData",
+            "restoreData",
+            "applyData",
+            "statusData",
         }.issubset(definitions):
             errors.append("Helper protocol schema is missing required v1 definitions")
 
@@ -712,6 +769,9 @@ def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[
         if poll_schema.get("$schema") != "https://json-schema.org/draft/2020-12/schema":
             errors.append("Device authorization poll contract must use JSON Schema draft 2020-12")
         if not isinstance(definitions, dict) or not {
+            "startRequest",
+            "startSuccessEnvelope",
+            "startErrorEnvelope",
             "proofRequest",
             "pollErrorEnvelope",
             "cancelSuccessEnvelope",
@@ -723,12 +783,23 @@ def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[
         }.issubset(definitions):
             errors.append("Device authorization poll contract is missing required v1 definitions")
         if endpoints != {
+            "start": "/api/v1/plugin/device-authorizations",
             "poll": "/api/v1/plugin/device-authorizations/token",
             "cancel": "/api/v1/plugin/device-authorizations/cancel",
             "refresh": "/api/v1/plugin/token/refresh",
             "logout": "/api/v1/plugin/logout",
         }:
             errors.append("Device authorization poll contract endpoint paths are invalid")
+
+    theme_download_schema = schemas[EXPORTED_CONTRACTS[3][0]][1]
+    if (
+        not isinstance(theme_download_schema, dict)
+        or theme_download_schema.get("$schema")
+        != "https://json-schema.org/draft/2020-12/schema"
+        or set(theme_download_schema.get("required", []))
+        != {"schemaVersion", "metadata", "download", "errors"}
+    ):
+        errors.append("Theme download contract is missing required v1 fields")
 
     for relative in candidates:
         if relative.parts and relative.parts[0] == "contracts" and relative not in required:
@@ -780,7 +851,8 @@ def validate(root: Path) -> list[str]:
     candidates = set(candidate_list)
     validate_manifest(root, candidates, errors)
     validate_marketplace(root, candidates, errors)
-    validate_version_skill(root, candidates, errors)
+    validate_skills(root, candidates, errors)
+    validate_scripts(root, candidates, errors)
     validate_license(root, candidates, errors)
     validate_exported_contracts(root, candidates, errors)
     validate_installation_instructions(root, candidates, errors)

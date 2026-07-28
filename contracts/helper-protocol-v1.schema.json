@@ -110,6 +110,12 @@
               "$ref": "#/$defs/restoreData"
             },
             {
+              "$ref": "#/$defs/applyData"
+            },
+            {
+              "$ref": "#/$defs/statusData"
+            },
+            {
               "type": "null"
             }
           ]
@@ -357,6 +363,72 @@
         }
       },
       "additionalProperties": false
+    },
+    "applyData": {
+      "type": "object",
+      "required": [
+        "command",
+        "operationId",
+        "themePublicId",
+        "themeVersion",
+        "authorizedDuringCommand",
+        "purchaseShownDuringCommand"
+      ],
+      "properties": {
+        "command": {
+          "const": "theme apply"
+        },
+        "operationId": {
+          "type": "string",
+          "pattern": "^op_[0-9a-f]{32}$"
+        },
+        "themePublicId": {
+          "type": "string",
+          "pattern": "^[0-9]{6}$"
+        },
+        "themeVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "authorizedDuringCommand": {
+          "type": "boolean"
+        },
+        "purchaseShownDuringCommand": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "statusData": {
+      "type": "object",
+      "required": [
+        "command",
+        "deviceLinked"
+      ],
+      "properties": {
+        "command": {
+          "const": "status"
+        },
+        "deviceLinked": {
+          "type": "boolean"
+        },
+        "pendingThemePublicId": {
+          "type": "string",
+          "pattern": "^[0-9]{6}$"
+        },
+        "appliedThemePublicId": {
+          "type": "string",
+          "pattern": "^[0-9]{6}$"
+        },
+        "appliedThemeVersion": {
+          "$ref": "#/$defs/semver"
+        }
+      },
+      "additionalProperties": false
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$",
+      "maxLength": 64
     }
   }
 }

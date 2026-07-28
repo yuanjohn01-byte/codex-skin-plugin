@@ -1,0 +1,144 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/yuanjohn01-byte/codex-skin-plugin/blob/main/contracts/theme-download-v1.schema.json",
+  "title": "Codex Skin Plugin theme download contract v1",
+  "type": "object",
+  "required": ["schemaVersion", "metadata", "download", "errors"],
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "metadata": {
+      "type": "object",
+      "required": ["method", "path", "success"],
+      "properties": {
+        "method": {
+          "const": "GET"
+        },
+        "path": {
+          "const": "/api/v1/plugin/themes/{themePublicId}"
+        },
+        "success": {
+          "$ref": "#/$defs/successEnvelope"
+        }
+      },
+      "additionalProperties": false
+    },
+    "download": {
+      "type": "object",
+      "required": ["method", "path", "contentType", "maxPackageByteSize"],
+      "properties": {
+        "method": {
+          "const": "POST"
+        },
+        "path": {
+          "const": "/api/v1/plugin/themes/{themePublicId}/download"
+        },
+        "contentType": {
+          "const": "application/octet-stream"
+        },
+        "maxPackageByteSize": {
+          "const": 26214400
+        }
+      },
+      "additionalProperties": false
+    },
+    "errors": {
+      "type": "object",
+      "required": [
+        "invalidRequest",
+        "authorizationRequired",
+        "accessRequired",
+        "unavailable",
+        "temporarilyUnavailable"
+      ],
+      "properties": {
+        "invalidRequest": {
+          "const": "CS-THEME-RELEASE-001"
+        },
+        "authorizationRequired": {
+          "const": "CS-THEME-RELEASE-002"
+        },
+        "accessRequired": {
+          "const": "CS-THEME-RELEASE-003"
+        },
+        "unavailable": {
+          "const": "CS-THEME-RELEASE-004"
+        },
+        "temporarilyUnavailable": {
+          "const": "CS-THEME-RELEASE-005"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "successEnvelope": {
+      "type": "object",
+      "required": ["data", "requestId"],
+      "properties": {
+        "data": {
+          "$ref": "#/$defs/themeRelease"
+        },
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "themeRelease": {
+      "type": "object",
+      "required": [
+        "themePublicId",
+        "themeVersion",
+        "tier",
+        "releaseDescriptor",
+        "signature",
+        "minEngineVersion",
+        "downloadPath"
+      ],
+      "properties": {
+        "themePublicId": {
+          "$ref": "#/$defs/themePublicId"
+        },
+        "themeVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "tier": {
+          "enum": ["free", "pro"]
+        },
+        "releaseDescriptor": {
+          "$ref": "theme-release-descriptor-v1.schema.json"
+        },
+        "signature": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9+/]{86}==$",
+          "maxLength": 88
+        },
+        "minEngineVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "downloadPath": {
+          "type": "string",
+          "pattern": "^/api/v1/plugin/themes/[0-9]{6}/download$",
+          "maxLength": 64
+        }
+      },
+      "additionalProperties": false
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^req_[0-9a-f]{32}$"
+    },
+    "themePublicId": {
+      "type": "string",
+      "pattern": "^[0-9]{6}$"
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$",
+      "maxLength": 64
+    }
+  }
+}

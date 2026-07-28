@@ -3,24 +3,40 @@ package cli
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"runtime"
 	"strings"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/adapter"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/browseropen"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/buildinfo"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/credentials"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/deviceauth"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/flowstate"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/protocol"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/themeapi"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/userflow"
 )
 
 const (
 	exitSuccess     = 0
+	exitAuthorize   = 31
+	exitAccess      = 32
 	exitRestore     = 41
+	exitTheme       = 42
+	exitApply       = 43
 	exitLocalUnsafe = 50
 	exitInternal    = 80
 )
+
+type ApplyFlow interface {
+	Apply(context.Context, string) (userflow.ApplyResult, error)
+}
 
 type Runtime struct {
 	GOOS         string
@@ -32,6 +48,8 @@ type Runtime struct {
 	LocalAppData string
 	Adapter      engine.Adapter
 	Context      context.Context
+	HTTPClient   *http.Client
+	ApplyFlow    ApplyFlow
 }
 
 type versionData struct {
@@ -69,6 +87,23 @@ type restoreData struct {
 	PluginRequired bool   `json:"pluginRequired"`
 }
 
+type applyData struct {
+	Command       string `json:"command"`
+	OperationID   string `json:"operationId"`
+	ThemePublicID string `json:"themePublicId"`
+	ThemeVersion  string `json:"themeVersion"`
+	Authorized    bool   `json:"authorizedDuringCommand"`
+	PurchaseShown bool   `json:"purchaseShownDuringCommand"`
+}
+
+type statusData struct {
+	Command              string `json:"command"`
+	DeviceLinked         bool   `json:"deviceLinked"`
+	PendingThemePublicID string `json:"pendingThemePublicId,omitempty"`
+	AppliedThemePublicID string `json:"appliedThemePublicId,omitempty"`
+	AppliedThemeVersion  string `json:"appliedThemeVersion,omitempty"`
+}
+
 func (r Runtime) values() (string, string, string) {
 	goos := r.GOOS
 	if goos == "" {
@@ -91,12 +126,27 @@ func Run(args []string, stdout, stderr io.Writer, environment Runtime) int {
 		return usageFailure(stdout, stderr, jsonMode)
 	}
 	if args[0] == "theme" {
-		if (len(args) != 2 && len(args) != 3) ||
-			args[1] != "restore" ||
-			(len(args) == 3 && args[2] != "--json") {
+		if len(args) >= 2 && args[1] == "restore" {
+			if (len(args) != 2 && len(args) != 3) ||
+				(len(args) == 3 && args[2] != "--json") {
+				return usageFailure(stdout, stderr, jsonMode)
+			}
+			return runThemeRestore(stdout, stderr, jsonMode, environment)
+		}
+		if len(args) >= 2 && args[1] == "apply" {
+			if (len(args) != 3 && len(args) != 4) ||
+				(len(args) == 4 && args[3] != "--json") {
+				return usageFailure(stdout, stderr, jsonMode)
+			}
+			return runThemeApply(args[2], stdout, stderr, jsonMode, environment)
+		}
+		return usageFailure(stdout, stderr, jsonMode)
+	}
+	if args[0] == "status" {
+		if len(args) > 2 || (len(args) == 2 && args[1] != "--json") {
 			return usageFailure(stdout, stderr, jsonMode)
 		}
-		return runThemeRestore(stdout, stderr, jsonMode, environment)
+		return runStatus(stdout, stderr, jsonMode, environment)
 	}
 	if len(args) > 2 || (len(args) == 2 && args[1] != "--json") || args[0] == "--json" {
 		return usageFailure(stdout, stderr, jsonMode)
@@ -155,21 +205,9 @@ func Run(args []string, stdout, stderr io.Writer, environment Runtime) int {
 
 func runThemeRestore(stdout, stderr io.Writer, jsonMode bool, environment Runtime) int {
 	goos, _, _ := environment.values()
-	root := environment.Root
-	if root == "" {
-		home := environment.Home
-		if home == "" {
-			home, _ = os.UserHomeDir()
-		}
-		localAppData := environment.LocalAppData
-		if localAppData == "" {
-			localAppData = os.Getenv("LOCALAPPDATA")
-		}
-		var err error
-		root, err = engine.DefaultRoot(goos, home, localAppData)
-		if err != nil {
-			return writeRestoreFailure(stdout, stderr, jsonMode, "CS-RESTORE-ROOT-001", err)
-		}
+	root, err := resolveRoot(goos, environment)
+	if err != nil {
+		return writeRestoreFailure(stdout, stderr, jsonMode, "CS-RESTORE-ROOT-001", err)
 	}
 	store, err := engine.OpenStore(root, environment.PluginCache)
 	if err != nil {
@@ -209,6 +247,173 @@ func runThemeRestore(stdout, stderr io.Writer, jsonMode bool, environment Runtim
 		fmt.Fprintln(stdout, "Official Codex appearance is already active.")
 	}
 	return exitSuccess
+}
+
+func runThemeApply(themePublicID string, stdout, stderr io.Writer, jsonMode bool, environment Runtime) int {
+	ctx := environment.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	flow := environment.ApplyFlow
+	if flow == nil {
+		var err error
+		flow, err = buildApplyFlow(environment)
+		if err != nil {
+			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-CONFIG-001", "contact_support", exitInternal)
+		}
+	}
+	result, err := flow.Apply(ctx, themePublicID)
+	if err != nil {
+		switch {
+		case errors.Is(err, userflow.ErrAuthorization):
+			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-AUTH-001", "reauthorize", exitAuthorize)
+		case errors.Is(err, userflow.ErrAccess):
+			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-ACCESS-001", "finish_purchase", exitAccess)
+		case errors.Is(err, userflow.ErrApply):
+			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-APPLY-001", "use_offline_restore_entry", exitApply)
+		default:
+			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-THEME-001", "choose_available_theme", exitTheme)
+		}
+	}
+	data := applyData{
+		Command:       "theme apply",
+		OperationID:   result.OperationID,
+		ThemePublicID: result.ThemePublicID,
+		ThemeVersion:  result.ThemeVersion,
+		Authorized:    result.Authorized,
+		PurchaseShown: result.PurchaseShown,
+	}
+	if jsonMode {
+		if writeJSON(stdout, stderr, protocol.SuccessWithOperation(result.OperationID, data)) != exitSuccess {
+			return exitInternal
+		}
+	} else {
+		fmt.Fprintf(stdout, "Theme %s v%s applied and verified.\n", result.ThemePublicID, result.ThemeVersion)
+	}
+	return exitSuccess
+}
+
+func buildApplyFlow(environment Runtime) (ApplyFlow, error) {
+	goos, goarch, _ := environment.values()
+	platform, _, supported := normalizedPlatform(goos, goarch)
+	if !supported || buildinfo.APIBaseURL == "" {
+		return nil, userflow.ErrConfiguration
+	}
+	root, err := resolveRoot(goos, environment)
+	if err != nil {
+		return nil, err
+	}
+	store, err := engine.OpenStore(root, environment.PluginCache)
+	if err != nil {
+		return nil, err
+	}
+	state, err := flowstate.New(store.Root())
+	if err != nil {
+		return nil, err
+	}
+	credentialStore, err := credentials.New()
+	if err != nil {
+		return nil, err
+	}
+	authClient, err := deviceauth.NewClient(buildinfo.APIBaseURL, environment.HTTPClient, credentialStore)
+	if err != nil {
+		return nil, err
+	}
+	themeClient, err := themeapi.NewClient(buildinfo.APIBaseURL, environment.HTTPClient)
+	if err != nil {
+		return nil, err
+	}
+	runtimeAdapter := environment.Adapter
+	if runtimeAdapter == nil {
+		runtimeAdapter, err = adapter.NewLive(adapter.Config{Root: store.Root()})
+		if err != nil {
+			return nil, err
+		}
+	}
+	instance, err := engine.New(store, runtimeAdapter)
+	if err != nil {
+		return nil, err
+	}
+	return userflow.New(userflow.Config{
+		Root:              store.Root(),
+		BaseURL:           buildinfo.APIBaseURL,
+		Auth:              authClient,
+		Themes:            themeClient,
+		State:             state,
+		Applier:           userflow.EngineApplier{Engine: instance},
+		OpenURL:           browseropen.Open,
+		DeviceDisplayName: "Codex Skin on " + platform,
+		Platform:          platform,
+		PluginVersion:     buildinfo.PluginVersion,
+		EngineVersion:     engine.CurrentEngineVersion,
+	})
+}
+
+func runStatus(stdout, stderr io.Writer, jsonMode bool, environment Runtime) int {
+	goos, _, _ := environment.values()
+	root, err := resolveRoot(goos, environment)
+	if err != nil {
+		return writeFlowFailure(stdout, stderr, jsonMode, "CS-STATUS-001", "run_doctor", exitLocalUnsafe)
+	}
+	store, err := engine.OpenStore(root, environment.PluginCache)
+	if err != nil {
+		return writeFlowFailure(stdout, stderr, jsonMode, "CS-STATUS-001", "run_doctor", exitLocalUnsafe)
+	}
+	stateStore, err := flowstate.New(store.Root())
+	if err != nil {
+		return writeFlowFailure(stdout, stderr, jsonMode, "CS-STATUS-001", "run_doctor", exitLocalUnsafe)
+	}
+	state, err := stateStore.Read()
+	if err != nil {
+		return writeFlowFailure(stdout, stderr, jsonMode, "CS-STATUS-001", "run_doctor", exitLocalUnsafe)
+	}
+	desired, found, err := store.ReadDesired()
+	if err != nil {
+		return writeFlowFailure(stdout, stderr, jsonMode, "CS-STATUS-001", "run_doctor", exitLocalUnsafe)
+	}
+	data := statusData{
+		Command:              "status",
+		DeviceLinked:         state.DeviceID != "",
+		PendingThemePublicID: state.PendingThemePublicID,
+	}
+	if found {
+		data.AppliedThemePublicID = desired.ThemePublicID
+		data.AppliedThemeVersion = desired.ThemeVersion
+	}
+	if jsonMode {
+		if writeJSON(stdout, stderr, protocol.Success(data)) != exitSuccess {
+			return exitInternal
+		}
+	} else {
+		fmt.Fprintf(stdout, "Device linked: %t; applied theme: %s %s; pending theme: %s.\n", data.DeviceLinked, data.AppliedThemePublicID, data.AppliedThemeVersion, data.PendingThemePublicID)
+	}
+	return exitSuccess
+}
+
+func resolveRoot(goos string, environment Runtime) (string, error) {
+	if environment.Root != "" {
+		return environment.Root, nil
+	}
+	home := environment.Home
+	if home == "" {
+		home, _ = os.UserHomeDir()
+	}
+	localAppData := environment.LocalAppData
+	if localAppData == "" {
+		localAppData = os.Getenv("LOCALAPPDATA")
+	}
+	return engine.DefaultRoot(goos, home, localAppData)
+}
+
+func writeFlowFailure(stdout, stderr io.Writer, jsonMode bool, code, action string, exitCode int) int {
+	if jsonMode {
+		if writeJSON(stdout, stderr, protocol.Failure(code, action, false)) != exitSuccess {
+			return exitInternal
+		}
+	} else {
+		fmt.Fprintf(stderr, "Codex Skin flow did not complete (%s).\n", code)
+	}
+	return exitCode
 }
 
 func writeRestoreFailure(stdout, stderr io.Writer, jsonMode bool, code string, cause error) int {
@@ -255,7 +460,7 @@ func usageFailure(stdout, stderr io.Writer, jsonMode bool) int {
 			return exitInternal
 		}
 	} else {
-		fmt.Fprintln(stderr, "usage: codex-skin <version|doctor> [--json] | codex-skin theme restore [--json]")
+		fmt.Fprintln(stderr, "usage: codex-skin <version|doctor|status> [--json] | codex-skin theme <apply THEME_ID|restore> [--json]")
 	}
 	return exitInternal
 }

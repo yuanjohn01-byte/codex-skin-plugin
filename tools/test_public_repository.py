@@ -59,7 +59,7 @@ LOCAL_ONLY_COMPONENTS = (
 )
 MINIMAL_MANIFEST = {
     "name": "codex-skin",
-    "version": "0.0.2",
+    "version": "0.1.0-paid-alpha",
     "description": "fixture",
     "author": {"name": "fixture", "url": "https://example.invalid/author"},
     "homepage": "https://example.invalid/plugin",
@@ -92,14 +92,36 @@ MINIMAL_MARKETPLACE = {
 }
 VERSION_SKILL = """---
 name: codex-skin-version
-description: Report the installed Codex Skin v0.0.2 pre-release Plugin version and verify that its read-only test Skill loaded after installation or upgrade. Use for Codex Skin distribution checks only; this build cannot apply themes.
+description: Report Codex Skin Paid Alpha.
 ---
 
-After the host loads this `SKILL.md`, do not call any additional tools, execute commands, access the network, or modify files or settings.
-Plugin version: `0.0.2`.
+Plugin version: `0.1.0-paid-alpha`.
 Skill: `codex-skin-version`.
-Upgrade target: replaces the v0.0.1 distribution-spike bundle.
-Theme operations are not available in this test build.
+Release status: code-stage candidate.
+"""
+INSTALL_SKILL = """---
+name: codex-skin-install-theme
+description: Apply a theme.
+---
+
+scripts/codex-skin.sh theme apply THEME_ID --json
+Continue automatically; do not ask the user to repeat the theme request.
+"""
+RESTORE_SKILL = """---
+name: codex-skin-restore-theme
+description: Restore Codex.
+---
+
+scripts/codex-skin.sh theme restore --json
+Restore must remain offline.
+"""
+STATUS_SKILL = """---
+name: codex-skin-status
+description: Show status.
+---
+
+scripts/codex-skin.sh status --json
+Report durable local facts only.
 """
 README_CONTRACT = """# Fixture
 codex plugin marketplace add yuanjohn01-byte/codex-skin-plugin --ref main
@@ -131,9 +153,31 @@ def write_baseline(fixture: Path) -> None:
     manifest = fixture / "plugins" / "codex-skin" / ".codex-plugin" / "plugin.json"
     manifest.parent.mkdir(parents=True, exist_ok=True)
     manifest.write_text(json.dumps(MINIMAL_MANIFEST), encoding="utf-8")
-    skill = fixture / "plugins" / "codex-skin" / "skills" / "codex-skin-version" / "SKILL.md"
-    skill.parent.mkdir(parents=True)
-    skill.write_text(VERSION_SKILL, encoding="utf-8")
+    for relative, content in {
+        "codex-skin-version": VERSION_SKILL,
+        "codex-skin-install-theme": INSTALL_SKILL,
+        "codex-skin-restore-theme": RESTORE_SKILL,
+        "codex-skin-status": STATUS_SKILL,
+    }.items():
+        skill = fixture / "plugins" / "codex-skin" / "skills" / relative / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(content, encoding="utf-8")
+    scripts = fixture / "plugins" / "codex-skin" / "scripts"
+    scripts.mkdir(parents=True)
+    shell = scripts / "codex-skin.sh"
+    shell.write_text(
+        '#!/bin/sh\nhelper_path="$HOME/Library/Application Support/CodexSkin/recovery/engine/codex-skin"\nexec "${helper_path}" "$@"\n',
+        encoding="utf-8",
+    )
+    shell.chmod(0o700)
+    (scripts / "codex-skin.ps1").write_text(
+        '$helperPath = "CodexSkin\\recovery\\engine\\codex-skin.exe"\n& $helper.FullName @args\n',
+        encoding="utf-8",
+    )
+    (scripts / "README.md").write_text(
+        "Use the fixed recovery engine path and fail closed.\n",
+        encoding="utf-8",
+    )
     marketplace = fixture / ".agents" / "plugins" / "marketplace.json"
     marketplace.parent.mkdir(parents=True)
     marketplace.write_text(json.dumps(MINIMAL_MARKETPLACE), encoding="utf-8")
@@ -151,6 +195,9 @@ def write_baseline(fixture: Path) -> None:
                 "error": {},
                 "versionData": {},
                 "doctorData": {},
+                "restoreData": {},
+                "applyData": {},
+                "statusData": {},
             },
         },
         "helper-release-descriptor-v1.schema.json": {
@@ -168,12 +215,16 @@ def write_baseline(fixture: Path) -> None:
         "device-authorization-poll-v1.schema.json": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "x-endpoints": {
+                "start": "/api/v1/plugin/device-authorizations",
                 "poll": "/api/v1/plugin/device-authorizations/token",
                 "cancel": "/api/v1/plugin/device-authorizations/cancel",
                 "refresh": "/api/v1/plugin/token/refresh",
                 "logout": "/api/v1/plugin/logout",
             },
             "$defs": {
+                "startRequest": {},
+                "startSuccessEnvelope": {},
+                "startErrorEnvelope": {},
                 "proofRequest": {},
                 "pollErrorEnvelope": {},
                 "cancelSuccessEnvelope": {},
@@ -183,6 +234,10 @@ def write_baseline(fixture: Path) -> None:
                 "logoutSuccessEnvelope": {},
                 "logoutErrorEnvelope": {},
             },
+        },
+        "theme-download-v1.schema.json": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "required": ["schemaVersion", "metadata", "download", "errors"],
         },
         "theme-manifest-v1.schema.json": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -576,7 +631,7 @@ def main() -> int:
 
     stale_version = dict(MINIMAL_MANIFEST)
     stale_version["version"] = "0.0.1"
-    negative_manifest(stale_version, "version must be 0.0.2")
+    negative_manifest(stale_version, "version must be 0.1.0-paid-alpha")
 
     invalid_homepage = dict(MINIMAL_MANIFEST)
     invalid_homepage["homepage"] = "http://example.invalid/plugin"
@@ -598,12 +653,12 @@ def main() -> int:
     invalid_plugins["plugins"] = []
     negative_marketplace(invalid_plugins, "must expose exactly one plugin entry")
 
-    negative_skill(VERSION_SKILL.replace("name: codex-skin-version", "name: wrong-skill"), "frontmatter")
-    negative_skill(VERSION_SKILL.replace("Plugin version: `0.0.2`.", "Plugin version: `9.9.9`."), "missing required marker")
+    negative_skill(VERSION_SKILL.replace("name: codex-skin-version", "name: wrong-skill"), "missing required marker")
+    negative_skill(VERSION_SKILL.replace("Plugin version: `0.1.0-paid-alpha`.", "Plugin version: `9.9.9`."), "missing required marker")
     negative_fixture(
         "plugins/codex-skin/skills/extra/SKILL.md",
         b"---\nname: extra\ndescription: extra\n---\n",
-        "may contain only the version check Skill",
+        "contains an unapproved Skill",
     )
     negative_readme(
         README_CONTRACT.replace(" --ref main", " --ref codex/test-branch"),

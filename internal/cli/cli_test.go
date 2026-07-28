@@ -10,11 +10,23 @@ import (
 	"testing"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/userflow"
 )
 
 type restoreAdapter struct {
 	themed bool
 	fail   bool
+}
+
+type fakeApplyFlow struct {
+	result userflow.ApplyResult
+	err    error
+	id     string
+}
+
+func (flow *fakeApplyFlow) Apply(_ context.Context, themePublicID string) (userflow.ApplyResult, error) {
+	flow.id = themePublicID
+	return flow.result, flow.err
 }
 
 func (adapter *restoreAdapter) OpenVerifiedSession(context.Context) (engine.Session, error) {
@@ -219,5 +231,78 @@ func TestThemeRestoreFailureUsesStableCodeAndExit(t *testing.T) {
 	result := decodeSingleResult(t, stdout)
 	if result.OK || !bytes.Contains(result.Error, []byte(`"code":"CS-RESTORE-001"`)) {
 		t.Fatalf("restore failure result = %+v", result)
+	}
+}
+
+func TestThemeApplyJSONUsesOneContinuousFlow(t *testing.T) {
+	flow := &fakeApplyFlow{result: userflow.ApplyResult{
+		OperationID:   "op_flow",
+		ThemePublicID: "100001",
+		ThemeVersion:  "1.0.0",
+		Authorized:    true,
+		PurchaseShown: true,
+	}}
+	code, stdout, stderr := run(t, []string{"theme", "apply", "100001", "--json"}, Runtime{
+		ApplyFlow: flow,
+	})
+	if code != exitSuccess || stderr != "" || flow.id != "100001" {
+		t.Fatalf("apply failed: code=%d stderr=%q id=%q", code, stderr, flow.id)
+	}
+	result := decodeSingleResult(t, stdout)
+	if !result.OK || result.OperationID == nil || *result.OperationID != "op_flow" {
+		t.Fatalf("unexpected apply result: %+v", result)
+	}
+	var data applyData
+	if err := json.Unmarshal(result.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !data.Authorized || !data.PurchaseShown || data.ThemePublicID != "100001" {
+		t.Fatalf("unexpected apply data: %+v", data)
+	}
+}
+
+func TestThemeApplyMapsStableFailureActions(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		exit int
+		code string
+	}{
+		{name: "authorization", err: userflow.ErrAuthorization, exit: exitAuthorize, code: "CS-FLOW-AUTH-001"},
+		{name: "access", err: userflow.ErrAccess, exit: exitAccess, code: "CS-FLOW-ACCESS-001"},
+		{name: "theme", err: userflow.ErrTheme, exit: exitTheme, code: "CS-FLOW-THEME-001"},
+		{name: "apply", err: userflow.ErrApply, exit: exitApply, code: "CS-FLOW-APPLY-001"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			code, stdout, stderr := run(t, []string{"theme", "apply", "100001", "--json"}, Runtime{
+				ApplyFlow: &fakeApplyFlow{err: test.err},
+			})
+			if code != test.exit || stderr != "" {
+				t.Fatalf("failure code=%d stderr=%q", code, stderr)
+			}
+			result := decodeSingleResult(t, stdout)
+			if result.OK || !bytes.Contains(result.Error, []byte(`"code":"`+test.code+`"`)) {
+				t.Fatalf("unexpected failure result: %+v", result)
+			}
+		})
+	}
+}
+
+func TestStatusReportsOnlyDurableLocalState(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	code, stdout, stderr := run(t, []string{"status", "--json"}, Runtime{
+		GOOS: "darwin", GOARCH: "arm64", Root: root,
+	})
+	if code != exitSuccess || stderr != "" {
+		t.Fatalf("status failed: code=%d stderr=%q", code, stderr)
+	}
+	result := decodeSingleResult(t, stdout)
+	var data statusData
+	if err := json.Unmarshal(result.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.DeviceLinked || data.AppliedThemePublicID != "" || data.PendingThemePublicID != "" {
+		t.Fatalf("unexpected status data: %+v", data)
 	}
 }
