@@ -342,6 +342,21 @@ def write_baseline(fixture: Path) -> None:
     (fixture / "contracts" / "export-manifest.json").write_text(
         json.dumps(export_manifest), encoding="utf-8"
     )
+    if (fixture / ".git").is_dir():
+        added = run(["git", "add", "--force", "."], fixture)
+        if added.returncode != 0:
+            raise AssertionError(added.stderr)
+        executable = run(
+            [
+                "git",
+                "update-index",
+                "--chmod=+x",
+                "plugins/codex-skin/scripts/codex-skin.sh",
+            ],
+            fixture,
+        )
+        if executable.returncode != 0:
+            raise AssertionError(executable.stderr)
 
 
 def negative_fixture(relative: str, content: bytes, expected_message: str) -> None:
@@ -361,6 +376,31 @@ def negative_fixture(relative: str, content: bytes, expected_message: str) -> No
         combined = checked.stdout + checked.stderr
         if checked.returncode == 0 or expected_message not in combined:
             raise AssertionError(f"validator did not reject {relative}:\n{combined}")
+
+
+def negative_non_executable_shell() -> None:
+    with tempfile.TemporaryDirectory(prefix="codex-skin-public-wrapper-") as directory:
+        fixture = Path(directory)
+        initialized = run(["git", "init", "--quiet"], fixture)
+        if initialized.returncode != 0:
+            raise AssertionError(initialized.stderr)
+        write_baseline(fixture)
+        non_executable = run(
+            [
+                "git",
+                "update-index",
+                "--chmod=-x",
+                "plugins/codex-skin/scripts/codex-skin.sh",
+            ],
+            fixture,
+        )
+        if non_executable.returncode != 0:
+            raise AssertionError(non_executable.stderr)
+        checked = run([sys.executable, str(VALIDATOR), "--root", str(fixture)], fixture)
+        combined = checked.stdout + checked.stderr
+        expected = "macOS Paid Alpha wrapper must be executable"
+        if checked.returncode == 0 or expected not in combined:
+            raise AssertionError(f"validator accepted a non-executable wrapper:\n{combined}")
 
 
 def negative_symlink(relative: str, directory: bool) -> None:
@@ -544,6 +584,7 @@ def main() -> int:
             raise AssertionError(f"validator rejected durable Public content: {relative}")
 
     negative_fixture(".env", b"EXAMPLE=value\n", "environment file")
+    negative_non_executable_shell()
     negative_fixture("notes/private.md", b"local note\n", "local-only evidence path")
     negative_fixture("docs/internal/plan.md", b"internal plan\n", "documentation path")
     negative_fixture("docs/planning/plan.md", b"internal plan\n", "documentation path")

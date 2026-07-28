@@ -359,6 +359,22 @@ def repository_candidates(root: Path) -> tuple[list[Path], str | None]:
     return sorted(set(paths), key=lambda item: item.as_posix()), None
 
 
+def repository_index_mode(root: Path, relative: Path) -> str | None:
+    result = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "--stage", "--", relative.as_posix()],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        return None
+    for line in result.stdout.splitlines():
+        metadata, separator, tracked_path = line.partition("\t")
+        if separator and tracked_path == relative.as_posix():
+            return metadata.split(" ", 1)[0]
+    return None
+
+
 def load_strict_json(path: Path) -> object:
     def reject_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
         payload: dict[str, object] = {}
@@ -651,8 +667,9 @@ def validate_scripts(root: Path, candidates: set[Path], errors: list[str]) -> No
                 errors.append(f"Paid Alpha wrapper is missing required marker {marker!r}: {relative}")
         if any(value in content for value in ("curl ", "wget ", "Invoke-WebRequest", "http://", "https://")):
             errors.append(f"Paid Alpha wrapper must not implement network access: {relative}")
-    shell = root / (PLUGIN_ROOT / "scripts/codex-skin.sh")
-    if shell.is_file() and shell.stat().st_mode & 0o111 == 0:
+    shell_relative = PLUGIN_ROOT / "scripts/codex-skin.sh"
+    shell = root / shell_relative
+    if shell.is_file() and repository_index_mode(root, shell_relative) != "100755":
         errors.append("macOS Paid Alpha wrapper must be executable")
     scripts_root = PLUGIN_ROOT / "scripts"
     for relative in candidates:
