@@ -5,6 +5,7 @@ package themeapi
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -18,6 +19,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 )
@@ -36,6 +38,7 @@ var (
 	ErrNetwork              = errors.New("theme API request failed")
 	ErrProtocol             = errors.New("theme API response is invalid")
 	ErrDownload             = errors.New("theme package download failed")
+	ErrEvent                = errors.New("theme apply event could not be recorded")
 
 	publicIDPattern   = regexp.MustCompile(`^[0-9]{6}$`)
 	requestIDPattern  = regexp.MustCompile(`^req_[0-9a-f]{32}$`)
@@ -99,6 +102,13 @@ type errorEnvelope struct {
 			PricingPath   string `json:"pricingPath"`
 		} `json:"details"`
 	} `json:"error"`
+	RequestID string `json:"requestId"`
+}
+
+type eventSuccessEnvelope struct {
+	Data struct {
+		Accepted int `json:"accepted"`
+	} `json:"data"`
 	RequestID string `json:"requestId"`
 }
 
@@ -344,6 +354,96 @@ func (client *Client) Download(ctx context.Context, release Release, accessToken
 	}
 	cleanup = false
 	return nil
+}
+
+func (client *Client) RecordApply(
+	ctx context.Context,
+	release Release,
+	accessToken string,
+	occurredAt time.Time,
+	duration time.Duration,
+) error {
+	if !validAccessToken(accessToken) ||
+		!publicIDPattern.MatchString(release.ThemePublicID) ||
+		!semverPattern.MatchString(release.ThemeVersion) ||
+		occurredAt.IsZero() ||
+		duration < 0 ||
+		duration > 24*time.Hour {
+		return ErrInvalidRequest
+	}
+	eventID, err := randomEventID()
+	if err != nil {
+		return ErrEvent
+	}
+	body, err := json.Marshal(struct {
+		Events []struct {
+			ID            string `json:"id"`
+			EventName     string `json:"eventName"`
+			OccurredAt    string `json:"occurredAt"`
+			ThemePublicID string `json:"themePublicId"`
+			ThemeVersion  string `json:"themeVersion"`
+			Result        string `json:"result"`
+			DurationMS    int64  `json:"durationMs"`
+		} `json:"events"`
+	}{
+		Events: []struct {
+			ID            string `json:"id"`
+			EventName     string `json:"eventName"`
+			OccurredAt    string `json:"occurredAt"`
+			ThemePublicID string `json:"themePublicId"`
+			ThemeVersion  string `json:"themeVersion"`
+			Result        string `json:"result"`
+			DurationMS    int64  `json:"durationMs"`
+		}{
+			{
+				ID:            eventID,
+				EventName:     "theme_apply_succeeded",
+				OccurredAt:    occurredAt.UTC().Format("2006-01-02T15:04:05.000Z"),
+				ThemePublicID: release.ThemePublicID,
+				ThemeVersion:  release.ThemeVersion,
+				Result:        "succeeded",
+				DurationMS:    duration.Milliseconds(),
+			},
+		},
+	})
+	if err != nil {
+		return ErrEvent
+	}
+	endpoint := client.baseURL.ResolveReference(&url.URL{Path: "/api/v1/plugin/events"})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
+	if err != nil {
+		return ErrEvent
+	}
+	setHeaders(request, accessToken)
+	request.Header.Set("Content-Type", "application/json")
+	response, err := client.httpClient.Do(request)
+	if err != nil {
+		return ErrEvent
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK ||
+		response.Header.Get("Content-Encoding") != "" {
+		return ErrEvent
+	}
+	raw, err := readBounded(response.Body, maxResponseBytes)
+	if err != nil {
+		return ErrEvent
+	}
+	var envelope eventSuccessEnvelope
+	if err := decodeStrict(raw, &envelope); err != nil ||
+		envelope.Data.Accepted != 1 ||
+		!requestIDPattern.MatchString(envelope.RequestID) {
+		return ErrEvent
+	}
+	return nil
+}
+
+func randomEventID() (string, error) {
+	value := make([]byte, 18)
+	if _, err := rand.Read(value); err != nil {
+		return "", err
+	}
+	return "evt_" + base64.RawURLEncoding.EncodeToString(value), nil
 }
 
 func setHeaders(request *http.Request, accessToken string) {

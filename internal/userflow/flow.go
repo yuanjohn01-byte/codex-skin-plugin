@@ -16,6 +16,7 @@ import (
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/deviceauth"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/flowstate"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/restartflow"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/themeapi"
 )
@@ -30,6 +31,7 @@ var (
 	ErrAuthorization = errors.New("Plugin authorization did not complete")
 	ErrAccess        = errors.New("theme access did not become ready")
 	ErrTheme         = errors.New("theme could not be downloaded or verified")
+	ErrRestart       = errors.New("Codex restart confirmation is required")
 	ErrApply         = errors.New("theme could not be applied")
 )
 
@@ -42,6 +44,7 @@ type AuthClient interface {
 type ThemeClient interface {
 	Metadata(context.Context, string, string) (themeapi.Result, error)
 	Download(context.Context, themeapi.Release, string, string) error
+	RecordApply(context.Context, themeapi.Release, string, time.Time, time.Duration) error
 }
 
 type StateStore interface {
@@ -153,10 +156,22 @@ func (runner *Runner) Apply(ctx context.Context, themePublicID string) (ApplyRes
 	if err := runner.config.Themes.Download(ctx, release, accessToken, temporaryPath); err != nil {
 		return ApplyResult{}, errors.Join(ErrTheme, err)
 	}
+	applyStartedAt := runner.config.Now()
 	applied, err := runner.config.Applier.Apply(ctx, release, temporaryPath)
 	if err != nil {
+		if errors.Is(err, ErrRestart) {
+			return ApplyResult{}, err
+		}
 		return ApplyResult{}, errors.Join(ErrApply, err)
 	}
+	applyCompletedAt := runner.config.Now()
+	_ = runner.config.Themes.RecordApply(
+		ctx,
+		release,
+		accessToken,
+		applyCompletedAt,
+		applyCompletedAt.Sub(applyStartedAt),
+	)
 	state.PendingThemePublicID = ""
 	if err := runner.config.State.Write(state); err != nil {
 		return ApplyResult{}, ErrAuthorization
@@ -288,7 +303,8 @@ func waitForContext(ctx context.Context, duration time.Duration) error {
 }
 
 type EngineApplier struct {
-	Engine *engine.Engine
+	Engine  *engine.Engine
+	Restart *restartflow.Store
 }
 
 func (applier EngineApplier) Apply(ctx context.Context, release themeapi.Release, packagePath string) (engine.ApplyResult, error) {
@@ -306,5 +322,12 @@ func (applier EngineApplier) Apply(ctx context.Context, release themeapi.Release
 		strings.TrimSpace(release.MinEngineVersion) != release.MinEngineVersion {
 		return engine.ApplyResult{}, theme.ErrEngineIncompatible
 	}
-	return applier.Engine.ApplyVerified(ctx, verified)
+	result, err := applier.Engine.ApplyVerified(ctx, verified)
+	if errors.Is(err, engine.ErrRestartConsent) && applier.Restart != nil {
+		if _, stageErr := applier.Restart.StageApply(verified); stageErr != nil {
+			return engine.ApplyResult{}, errors.Join(err, stageErr)
+		}
+		return engine.ApplyResult{}, errors.Join(ErrRestart, err)
+	}
+	return result, err
 }

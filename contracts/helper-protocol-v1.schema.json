@@ -113,6 +113,9 @@
               "$ref": "#/$defs/applyData"
             },
             {
+              "$ref": "#/$defs/restartData"
+            },
+            {
               "$ref": "#/$defs/statusData"
             },
             {
@@ -421,6 +424,57 @@
         },
         "appliedThemeVersion": {
           "$ref": "#/$defs/semver"
+        },
+        "restartKind": {
+          "enum": [
+            "apply",
+            "restore"
+          ]
+        },
+        "restartStatus": {
+          "enum": [
+            "pending_confirmation",
+            "restart_approved",
+            "running",
+            "completed",
+            "failed"
+          ]
+        },
+        "restartThemePublicId": {
+          "type": "string",
+          "pattern": "^[0-9]{6}$"
+        },
+        "restartErrorCode": {
+          "type": "string",
+          "pattern": "^CS-[A-Z0-9]+(?:-[A-Z0-9]+)+$",
+          "maxLength": 64
+        }
+      },
+      "additionalProperties": false
+    },
+    "restartData": {
+      "type": "object",
+      "required": [
+        "command",
+        "restartAccepted",
+        "kind"
+      ],
+      "properties": {
+        "command": {
+          "const": "theme continue"
+        },
+        "restartAccepted": {
+          "const": true
+        },
+        "kind": {
+          "enum": [
+            "apply",
+            "restore"
+          ]
+        },
+        "themePublicId": {
+          "type": "string",
+          "pattern": "^[0-9]{6}$"
         }
       },
       "additionalProperties": false

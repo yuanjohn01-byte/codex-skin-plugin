@@ -2,13 +2,18 @@
   "artifacts": [
     {
       "destination": "contracts/helper-protocol-v1.schema.json",
-      "sha256": "1639125bf6811ac6a8c6cb9e3d09eeb80016947fdbbedf0088e7f07b02870969",
+      "sha256": "26e3c97991c69ea051b1035dcffdb428066009ca8b974b1de36bd216568d490d",
       "source": "codex-skin/contracts/public/helper-protocol-v1.schema.json"
     },
     {
       "destination": "contracts/helper-release-descriptor-v1.schema.json",
       "sha256": "dcb65b1a40be4c33d2035cfdfe05364f69dca772ba224e7791f6103aca6cd760",
       "source": "codex-skin/contracts/public/helper-release-descriptor-v1.schema.json"
+    },
+    {
+      "destination": "contracts/plugin-event-v1.schema.json",
+      "sha256": "f124ea7b3369f93695e70eac498e20c29e0ec4822b2d211f00e145a00bdda314",
+      "source": "codex-skin/contracts/public/plugin-event-v1.schema.json"
     },
     {
       "destination": "contracts/device-authorization-poll-v1.schema.json",

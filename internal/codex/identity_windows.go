@@ -13,6 +13,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 )
 
 var packageIdentityPattern = regexp.MustCompile(`^OpenAI\.Codex_[A-Za-z0-9._-]{1,110}$`)
@@ -153,6 +154,57 @@ if ($pid -le 0) { throw 'activation did not return a process id' }
 	return result.ProcessID, nil
 }
 
+func LaunchOrdinary(ctx context.Context, installation Installation) error {
+	if err := verifyInstallationFresh(ctx, installation); err != nil {
+		return err
+	}
+	const script = `
+$ErrorActionPreference = 'Stop'
+if (-not ('CodexSkin.OrdinaryPackageLauncher' -as [type])) {
+Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace CodexSkin {
+  [ComImport, Guid("2e941141-7f97-4756-ba1d-9decde894a3d"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IOrdinaryApplicationActivationManager {
+    [PreserveSig] int ActivateApplication(
+      [MarshalAs(UnmanagedType.LPWStr)] string appUserModelId,
+      [MarshalAs(UnmanagedType.LPWStr)] string arguments,
+      uint options,
+      out uint processId);
+  }
+  [ComImport, Guid("45ba127d-10a8-46ea-8ab7-56ea9078943c")]
+  class OrdinaryApplicationActivationManager {}
+  public static class OrdinaryPackageLauncher {
+    public static uint Launch(string appUserModelId) {
+      var manager = (IOrdinaryApplicationActivationManager)new OrdinaryApplicationActivationManager();
+      uint processId;
+      int result = manager.ActivateApplication(appUserModelId, "", 0, out processId);
+      Marshal.ThrowExceptionForHR(result);
+      return processId;
+    }
+  }
+}
+'@
+}
+$pid = [CodexSkin.OrdinaryPackageLauncher]::Launch($args[0])
+if ($pid -le 0) { throw 'activation did not return a process id' }
+[pscustomobject]@{ processId = [int]$pid } | ConvertTo-Json -Compress
+`
+	var result struct {
+		ProcessID int `json:"processId"`
+	}
+	if err := runPowerShellJSON(
+		ctx,
+		script,
+		[]string{installation.AppUserModelID},
+		&result,
+	); err != nil || result.ProcessID < 1 {
+		return ErrLaunchFailed
+	}
+	return nil
+}
+
 func VerifyListener(ctx context.Context, installation Installation, launchedPID, port int, profile string) (ProcessIdentity, error) {
 	const script = `
 $ErrorActionPreference = 'Stop'
@@ -234,6 +286,141 @@ if (-not $process.WaitForExit(10000)) { throw 'controlled process did not exit' 
 		Stopped bool `json:"stopped"`
 	}
 	if err := runPowerShellJSON(ctx, script, []string{strconv.Itoa(expected.ProcessID)}, &result); err != nil || !result.Stopped {
+		return ErrLaunchFailed
+	}
+	return nil
+}
+
+func DefaultUserProfile(installation Installation) (string, error) {
+	if installation.Platform != "windows" ||
+		!packageIdentityPattern.MatchString(installation.PackageFamilyName) {
+		return "", ErrCurrentUnsafe
+	}
+	localAppData := os.Getenv("LOCALAPPDATA")
+	if localAppData == "" {
+		return "", ErrCurrentUnsafe
+	}
+	expected := filepath.Join(
+		localAppData,
+		"Packages",
+		installation.PackageFamilyName,
+		"LocalCache",
+		"Roaming",
+		"Codex",
+	)
+	return validateCurrentProfile(expected, expected)
+}
+
+func DiscoverCurrentInstance(ctx context.Context, installation Installation) (CurrentInstance, error) {
+	if err := verifyInstallationFresh(ctx, installation); err != nil {
+		return CurrentInstance{}, err
+	}
+	profile, err := DefaultUserProfile(installation)
+	if err != nil {
+		return CurrentInstance{}, err
+	}
+	const script = `
+$ErrorActionPreference = 'Stop'
+$expected = "$($args[0])"
+$matches = @()
+foreach ($process in @(Get-CimInstance Win32_Process | Where-Object {
+  "$($_.ExecutablePath)" -ieq $expected -and
+  "$($_.CommandLine)" -notmatch '(?i)(?:^|\s)--type(?:=|\s)'
+})) {
+  $native = Get-Process -Id ([int]$process.ProcessId)
+  $signature = Get-AuthenticodeSignature -LiteralPath $native.Path
+  $matches += [pscustomobject]@{
+    processId = [int]$process.ProcessId
+    path = "$($native.Path)"
+    commandLine = "$($process.CommandLine)"
+    creationDate = "$($process.CreationDate)"
+    signerStatus = "$($signature.Status)"
+  }
+}
+ConvertTo-Json -InputObject @($matches) -Compress
+`
+	var processes []windowsProcess
+	if err := runPowerShellJSON(ctx, script, []string{installation.Executable}, &processes); err != nil {
+		return CurrentInstance{}, ErrCurrentUnsafe
+	}
+	if len(processes) == 0 {
+		return CurrentInstance{}, ErrCurrentMissing
+	}
+	if len(processes) != 1 {
+		return CurrentInstance{}, ErrCurrentAmbiguous
+	}
+	process := processes[0]
+	if process.ProcessID < 1 ||
+		process.SignerStatus != "Valid" ||
+		!samePath(process.Path, installation.Executable) ||
+		process.CreationDate == "" {
+		return CurrentInstance{}, ErrCurrentUnsafe
+	}
+	digest, err := hashOrdinaryFile(process.Path)
+	if err != nil || digest != installation.ExecutableSHA256 {
+		return CurrentInstance{}, ErrCurrentUnsafe
+	}
+	port, controlled, err := controlledFlags(process.CommandLine, profile)
+	if err != nil {
+		return CurrentInstance{}, ErrCurrentUnsafe
+	}
+	identity := ProcessIdentity{
+		ProcessID: process.ProcessID, ProcessStartID: process.CreationDate,
+		Executable: process.Path, ExecutableSHA256: digest,
+		CommandLine: process.CommandLine,
+	}
+	if controlled {
+		verified, verifyErr := VerifyListener(
+			ctx,
+			installation,
+			process.ProcessID,
+			port,
+			profile,
+		)
+		if verifyErr != nil ||
+			verified.ProcessStartID != identity.ProcessStartID ||
+			verified.ExecutableSHA256 != identity.ExecutableSHA256 {
+			return CurrentInstance{}, ErrCurrentUnsafe
+		}
+		identity = verified
+	}
+	return CurrentInstance{
+		Process: identity, Profile: profile, ControlledPort: port,
+	}, nil
+}
+
+func StopCurrentInstance(
+	ctx context.Context,
+	installation Installation,
+	expected CurrentInstance,
+) error {
+	current, err := DiscoverCurrentInstance(ctx, installation)
+	if err != nil ||
+		current.Process.ProcessID != expected.Process.ProcessID ||
+		current.Process.ProcessStartID != expected.Process.ProcessStartID ||
+		current.Process.ExecutableSHA256 != expected.Process.ExecutableSHA256 ||
+		!samePath(current.Profile, expected.Profile) ||
+		current.ControlledPort != expected.ControlledPort {
+		return ErrCurrentUnsafe
+	}
+	const script = `
+$ErrorActionPreference = 'Stop'
+$process = Get-Process -Id ([int]$args[0])
+if (-not $process.CloseMainWindow()) { throw 'current Codex has no closeable main window' }
+if (-not $process.WaitForExit(15000)) { throw 'current Codex did not exit normally' }
+[pscustomobject]@{ stopped = $true } | ConvertTo-Json -Compress
+`
+	var result struct {
+		Stopped bool `json:"stopped"`
+	}
+	stopCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	if err := runPowerShellJSON(
+		stopCtx,
+		script,
+		[]string{strconv.Itoa(expected.Process.ProcessID)},
+		&result,
+	); err != nil || !result.Stopped {
 		return ErrLaunchFailed
 	}
 	return nil

@@ -8,7 +8,8 @@ import (
 const (
 	StateSchemaVersion     = 1
 	CurrentEngineVersion   = "0.2.0"
-	TemplateVersion        = 1
+	MinimumTemplateVersion = 1
+	TemplateVersion        = 5
 	MarkerID               = "codex-skin-theme-v1"
 	RootMarkerAttribute    = "data-codex-skin"
 	ThemeMarkerAttribute   = "data-codex-skin-theme"
@@ -21,6 +22,7 @@ var (
 	ErrBusy              = errors.New("another theme operation is active")
 	ErrStateUnsafe       = errors.New("theme engine state path is unsafe")
 	ErrCapabilityBlocked = errors.New("Codex capability probes blocked theme apply")
+	ErrRestartConsent    = errors.New("current Codex requires an explicit restart confirmation")
 	ErrApplyFailed       = errors.New("theme apply failed")
 	ErrVerifyFailed      = errors.New("theme verification failed")
 	ErrRollbackFailed    = errors.New("theme rollback failed")
@@ -67,13 +69,17 @@ type Snapshot struct {
 	ThemePublicID     string `json:"themePublicId"`
 	ThemeVersion      string `json:"themeVersion"`
 	TemplateVersion   int    `json:"templateVersion"`
+	AppearanceMode    string `json:"appearanceMode"`
 }
 
 type CompiledTheme struct {
 	ThemePublicID     string
 	ThemeVersion      string
 	TemplateVersion   int
+	AppearanceMode    string
 	StyleText         string
+	PreviousStyleText string
+	LegacyStyleText   string
 	BackgroundDataURL string
 }
 
@@ -99,6 +105,19 @@ type CapabilityWaiter interface {
 // package that the engine revalidated from its offline cache.
 type SessionPrimer interface {
 	Prime(context.Context, Session, CompiledTheme) error
+}
+
+// ThemeSessionOpener lets the live adapter synchronize Codex's native
+// appearance before opening the verified renderer used for a theme apply.
+// Test/fake adapters keep using Adapter.OpenVerifiedSession.
+type ThemeSessionOpener interface {
+	OpenVerifiedThemeSession(context.Context, CompiledTheme) (Session, error)
+}
+
+// OfficialSessionOpener lets the live adapter restore the exact native
+// appearance backup before the official renderer is verified.
+type OfficialSessionOpener interface {
+	OpenVerifiedOfficialSession(context.Context) (Session, error)
 }
 
 type ApplyResult struct {

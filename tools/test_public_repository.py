@@ -197,6 +197,7 @@ def write_baseline(fixture: Path) -> None:
                 "doctorData": {},
                 "restoreData": {},
                 "applyData": {},
+                "restartData": {},
                 "statusData": {},
             },
         },
@@ -211,6 +212,21 @@ def write_baseline(fixture: Path) -> None:
                 "artifacts",
             ],
             "additionalProperties": False,
+        },
+        "plugin-event-v1.schema.json": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "required": ["events"],
+            "additionalProperties": False,
+            "properties": {
+                "events": {
+                    "items": {
+                        "additionalProperties": False,
+                        "properties": {
+                            "eventName": {"const": "theme_apply_succeeded"}
+                        },
+                    }
+                }
+            },
         },
         "device-authorization-poll-v1.schema.json": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -727,12 +743,17 @@ def main() -> int:
         "export manifest or SHA-256",
     )
     negative_fixture(
+        "contracts/plugin-event-v1.schema.json",
+        b"{}\n",
+        "export manifest or SHA-256",
+    )
+    negative_fixture(
         "contracts/device-authorization-poll-v1.schema.json",
         b"{}\n",
         "export manifest or SHA-256",
     )
 
-    print("Public repository tests passed (positive scan + 41 negative fixtures).")
+    print("Public repository tests passed (positive scan + 42 negative fixtures).")
     return 0
 
 

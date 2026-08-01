@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://codexskin.ai/contracts/plugin-event-v1.schema.json",
+  "title": "Codex Skin Plugin Event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["events"],
+  "properties": {
+    "events": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 10,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "eventName",
+          "occurredAt",
+          "themePublicId",
+          "themeVersion",
+          "result"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^evt_[A-Za-z0-9_-]{24}$"
+          },
+          "eventName": {
+            "const": "theme_apply_succeeded"
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "themePublicId": {
+            "type": "string",
+            "pattern": "^[0-9]{6}$"
+          },
+          "themeVersion": {
+            "type": "string",
+            "minLength": 5,
+            "maxLength": 128
+          },
+          "result": {
+            "const": "succeeded"
+          },
+          "durationMs": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 86400000
+          }
+        }
+      }
+    }
+  }
+}

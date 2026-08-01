@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 )
@@ -55,6 +56,7 @@ func TestMetadataDownloadAndVerify(t *testing.T) {
 	signatureRaw := fixture(t, "release-descriptor.sig")
 	packageRaw := fixture(t, "package.cskin")
 	metadataRaw := successPayload(t, descriptorRaw, signatureRaw)
+	eventSeen := false
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
 		if request.Header.Get("Authorization") != "Bearer "+testBearer ||
@@ -81,6 +83,35 @@ func TestMetadataDownloadAndVerify(t *testing.T) {
 			writer.Header().Set("Content-Type", "application/octet-stream")
 			writer.Header().Set("Content-Length", "1933")
 			_, _ = writer.Write(packageRaw)
+		case "/api/v1/plugin/events":
+			if request.Method != http.MethodPost {
+				t.Errorf("event method = %s", request.Method)
+			}
+			var body struct {
+				Events []struct {
+					ID            string `json:"id"`
+					EventName     string `json:"eventName"`
+					OccurredAt    string `json:"occurredAt"`
+					ThemePublicID string `json:"themePublicId"`
+					ThemeVersion  string `json:"themeVersion"`
+					Result        string `json:"result"`
+					DurationMS    int64  `json:"durationMs"`
+				} `json:"events"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&body); err != nil ||
+				len(body.Events) != 1 ||
+				!strings.HasPrefix(body.Events[0].ID, "evt_") ||
+				body.Events[0].EventName != "theme_apply_succeeded" ||
+				body.Events[0].OccurredAt != "2026-07-30T12:00:00.000Z" ||
+				body.Events[0].ThemePublicID != "100001" ||
+				body.Events[0].ThemeVersion != "1.0.0" ||
+				body.Events[0].Result != "succeeded" ||
+				body.Events[0].DurationMS != 1250 {
+				t.Errorf("event body invalid: %v, %+v", err, body)
+			}
+			eventSeen = true
+			writer.Header().Set("Content-Type", "application/json")
+			_, _ = writer.Write([]byte(`{"data":{"accepted":1},"requestId":"req_ffffffffffffffffffffffffffffffff"}`))
 		default:
 			http.NotFound(writer, request)
 		}
@@ -108,6 +139,18 @@ func TestMetadataDownloadAndVerify(t *testing.T) {
 	}
 	if verified.Manifest.ThemePublicID != "100001" || verified.Manifest.ThemeVersion != "1.0.0" {
 		t.Fatalf("unexpected verified fixture: %+v", verified.Manifest)
+	}
+	if err := client.RecordApply(
+		context.Background(),
+		*result.Release,
+		testBearer,
+		time.Date(2026, 7, 30, 12, 0, 0, 0, time.UTC),
+		1250*time.Millisecond,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !eventSeen {
+		t.Fatal("apply event was not recorded")
 	}
 }
 

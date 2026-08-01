@@ -100,6 +100,28 @@ func TestTargetValidationRejectsNonLoopbackAndAmbiguity(t *testing.T) {
 	}
 }
 
+func TestSelectPageIgnoresOfficialOverlayAndRequiresOneMainSurface(t *testing.T) {
+	main := Target{
+		ID: "main-page", Type: "page", URL: "app://-/index.html",
+		WebSocketDebuggerURL: "ws://127.0.0.1:9222/devtools/page/main-page",
+	}
+	overlay := Target{
+		ID: "avatar-overlay", Type: "page",
+		URL:                  "app://-/index.html?initialRoute=%2Favatar-overlay",
+		WebSocketDebuggerURL: "ws://127.0.0.1:9222/devtools/page/avatar-overlay",
+	}
+	got, err := SelectPage([]Target{overlay, main})
+	if err != nil {
+		t.Fatalf("SelectPage() error = %v", err)
+	}
+	if got != main {
+		t.Fatalf("SelectPage() = %#v, want %#v", got, main)
+	}
+	if _, err := SelectPage([]Target{overlay}); !errors.Is(err, ErrTargetInvalid) {
+		t.Fatalf("overlay-only SelectPage() error = %v", err)
+	}
+}
+
 func TestCallReturnsProtocolErrorWithoutLeakingRemoteMessage(t *testing.T) {
 	upgrader := websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 	mux := http.NewServeMux()

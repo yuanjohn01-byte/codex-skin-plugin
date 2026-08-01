@@ -143,6 +143,7 @@ def _component_for_path(path: str) -> set[str] | None:
     if path.startswith(
         (
             "internal/adapter/",
+            "internal/appearance/",
             "internal/cdp/",
             "internal/codex/",
             "internal/engine/",

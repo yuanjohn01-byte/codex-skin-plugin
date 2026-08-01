@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 )
 
 func TestCurrentOfficialCodexLoopbackSession(t *testing.T) {
@@ -205,4 +206,243 @@ func TestCurrentOfficialCodexLoopbackSession(t *testing.T) {
 		session.Identity.ProcessID,
 		report.Regions,
 	)
+}
+
+func TestCurrentOfficialCodexCurrentProfileCapabilities(t *testing.T) {
+	if os.Getenv("CODEX_SKIN_REAL_CODEX") != "1" {
+		t.Skip("set CODEX_SKIN_REAL_CODEX=1 for the local current-profile Gate B probe")
+	}
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	if _, err := engine.OpenStore(root, ""); err != nil {
+		t.Fatal(err)
+	}
+	live, err := NewLive(Config{
+		Root: root, CurrentProfile: true, LaunchWait: 45 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	session, err := live.OpenVerifiedSession(ctx)
+	if err != nil {
+		t.Fatalf("OpenVerifiedSession() error = %v", err)
+	}
+	defer live.Close(context.Background(), session)
+	report, err := live.WaitForCapabilities(ctx, session)
+	t.Logf("current-profile capability report = %#v", report)
+	if os.Getenv("CODEX_SKIN_ACTIVITY_DIAGNOSTICS") == "1" {
+		live.mu.Lock()
+		active := live.sessions[session.OpaqueID]
+		live.mu.Unlock()
+		if active == nil {
+			t.Fatal("verified session disappeared before activity diagnostics")
+		}
+		var diagnostics []map[string]any
+		if err := callFunction(ctx, active.client, `function () {
+		  const visible = (node) => {
+		    const rect = node.getBoundingClientRect();
+		    const style = getComputedStyle(node);
+		    return rect.width > 1 && rect.height > 1 &&
+		      style.display !== "none" && style.visibility !== "hidden";
+		  };
+		  const describe = (node) => {
+		    const rect = node.getBoundingClientRect();
+		    const style = getComputedStyle(node);
+		    const parent = node.parentElement;
+		    const child = [...node.children].find(visible) || null;
+		    return {
+		      tag: node.tagName.toLowerCase(),
+		      classes: typeof node.className === "string" ? node.className : "",
+		      role: node.getAttribute("role") || "",
+		      ariaExpanded: node.hasAttribute("aria-expanded")
+		        ? node.getAttribute("aria-expanded") : "",
+		      color: style.color,
+		      textShadow: style.textShadow,
+		      rect: [Math.round(rect.x), Math.round(rect.y),
+		        Math.round(rect.width), Math.round(rect.height)],
+		      parentTag: parent ? parent.tagName.toLowerCase() : "",
+		      parentClasses: parent && typeof parent.className === "string"
+		        ? parent.className : "",
+		      childTag: child ? child.tagName.toLowerCase() : "",
+		      childClasses: child && typeof child.className === "string"
+		        ? child.className : "",
+		      childColor: child ? getComputedStyle(child).color : ""
+		    };
+		  };
+		  const main = document.querySelector('main[data-codex-skin-main="true"]');
+		  if (!main) return [];
+		  return [...main.querySelectorAll('button,[role="button"],[aria-expanded]')]
+		    .filter((node) => visible(node) && node.querySelector("svg"))
+		    .slice(0, 80)
+		    .map(describe);
+		}`, nil, &diagnostics); err != nil {
+			t.Fatalf("activity diagnostics error = %v", err)
+		}
+		t.Logf("sanitized activity candidates = %#v", diagnostics)
+	}
+	if os.Getenv("CODEX_SKIN_BACKGROUND_DIAGNOSTICS") == "1" {
+		live.mu.Lock()
+		active := live.sessions[session.OpaqueID]
+		live.mu.Unlock()
+		if active == nil {
+			t.Fatal("verified session disappeared before background diagnostics")
+		}
+		var diagnostics struct {
+			StyleMarkerCount       int  `json:"styleMarkerCount"`
+			StyleRuleCount         int  `json:"styleRuleCount"`
+			BackgroundRulePresent  bool `json:"backgroundRulePresent"`
+			RootActive             bool `json:"rootActive"`
+			BackgroundURLAttribute bool `json:"backgroundUrlAttribute"`
+			ThemeAttribute         bool `json:"themeAttribute"`
+			TemplateAttribute      bool `json:"templateAttribute"`
+			InlineTokenPresent     bool `json:"inlineTokenPresent"`
+			ComputedTokenPresent   bool `json:"computedTokenPresent"`
+			MainBackgroundResolved bool `json:"mainBackgroundResolved"`
+			BodyTokenInherited     bool `json:"bodyTokenInherited"`
+			BodyGradientPresent    bool `json:"bodyGradientPresent"`
+			BodyBackgroundResolved bool `json:"bodyBackgroundResolved"`
+			ShorthandResolves      bool `json:"shorthandResolves"`
+			LonghandResolves       bool `json:"longhandResolves"`
+		}
+		if err := callFunction(ctx, active.client, `function () {
+		  const root = document.documentElement;
+		  const style = document.querySelector("#codex-skin-theme-v1");
+		  const rules = style?.sheet ? [...style.sheet.cssRules] : [];
+		  const main = document.querySelector('main[data-codex-skin-main="true"]');
+		  const body = document.body;
+		  const testBackground = (longhand) => {
+		    const node = document.createElement("div");
+		    node.style.position = "fixed";
+		    node.style.width = "1px";
+		    node.style.height = "1px";
+		    node.style.visibility = "hidden";
+		    if (longhand) {
+		      node.style.backgroundImage =
+		        "linear-gradient(rgb(0 0 0 / .2), rgb(0 0 0 / .2)), var(--cs-background-image)";
+		      node.style.backgroundPosition = "0 0, center";
+		      node.style.backgroundSize = "auto, cover";
+		      node.style.backgroundAttachment = "scroll, fixed";
+		    } else {
+		      node.style.background =
+		        "linear-gradient(rgb(0 0 0 / .2), rgb(0 0 0 / .2)), " +
+		        "var(--cs-background-image) center / cover fixed";
+		    }
+		    body.appendChild(node);
+		    const resolved = getComputedStyle(node).backgroundImage.includes("blob:");
+		    node.remove();
+		    return resolved;
+		  };
+		  return {
+		    styleMarkerCount: document.querySelectorAll("#codex-skin-theme-v1").length,
+		    styleRuleCount: rules.length,
+		    backgroundRulePresent: rules.some((rule) =>
+		      rule.cssText.includes("--cs-background-image") && rule.cssText.includes("blob:")),
+		    rootActive: root.getAttribute("data-codex-skin") === "active",
+		    backgroundUrlAttribute: String(
+		      root.getAttribute("data-codex-skin-background-url") || ""
+		    ).startsWith("blob:"),
+		    themeAttribute: /^\d{6}$/.test(root.getAttribute("data-codex-skin-theme") || ""),
+		    templateAttribute: /^\d+$/.test(root.getAttribute("data-codex-skin-template") || ""),
+		    inlineTokenPresent: root.style.getPropertyValue("--cs-background-image").includes("blob:"),
+		    computedTokenPresent: getComputedStyle(root)
+		      .getPropertyValue("--cs-background-image").includes("blob:"),
+		    mainBackgroundResolved: Boolean(main && getComputedStyle(main)
+		      .backgroundImage.includes("blob:")),
+		    bodyTokenInherited: Boolean(body && getComputedStyle(body)
+		      .getPropertyValue("--cs-background-image").includes("blob:")),
+		    bodyGradientPresent: Boolean(body && getComputedStyle(body)
+		      .backgroundImage.includes("linear-gradient")),
+		    bodyBackgroundResolved: Boolean(body && getComputedStyle(body)
+		      .backgroundImage.includes("blob:")),
+		    shorthandResolves: testBackground(false),
+		    longhandResolves: testBackground(true)
+		  };
+		}`, nil, &diagnostics); err != nil {
+			t.Fatalf("background diagnostics error = %v", err)
+		}
+		t.Logf("background diagnostics = %#v", diagnostics)
+		var appliedReport engine.RegionReport
+		if err := callFunction(
+			ctx,
+			active.client,
+			verifyFunction,
+			nil,
+			&appliedReport,
+		); err != nil {
+			t.Fatalf("applied theme verification error = %v", err)
+		}
+		t.Logf("applied theme verification report = %#v", appliedReport)
+		if !appliedReport.BackgroundLoaded ||
+			!appliedReport.BackgroundTokenSet ||
+			!appliedReport.BodyBackgroundSet {
+			t.Fatalf("applied theme background did not remain resolved")
+		}
+	}
+	if err != nil {
+		t.Fatalf("WaitForCapabilities() error = %v", err)
+	}
+	if !engine.CapabilitiesAllowApply(report) {
+		t.Fatalf("current-profile capability report is not eligible for apply")
+	}
+}
+
+func TestCurrentOfficialCodexCachedThemeCandidate(t *testing.T) {
+	cachedRoot := os.Getenv("CODEX_SKIN_REAL_CODEX_APPLY_CACHED_ROOT")
+	if cachedRoot == "" {
+		t.Skip("set CODEX_SKIN_REAL_CODEX_APPLY_CACHED_ROOT for the local candidate probe")
+	}
+	verified, err := theme.VerifyCached(cachedRoot)
+	if err != nil {
+		t.Fatalf("VerifyCached() error = %v", err)
+	}
+	compiled, err := engine.CompileTheme(verified, cachedRoot)
+	if err != nil {
+		t.Fatalf("CompileTheme() error = %v", err)
+	}
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	live, err := NewLive(Config{Root: root, CurrentProfile: true, LaunchWait: 45 * time.Second})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	session, err := live.OpenVerifiedSession(ctx)
+	if err != nil {
+		t.Fatalf("OpenVerifiedSession() error = %v", err)
+	}
+	defer live.Close(context.Background(), session)
+	if err := live.Prime(ctx, session, compiled); err != nil {
+		t.Fatalf("Prime() error = %v", err)
+	}
+	snapshot, err := live.Capture(ctx, session)
+	if err != nil {
+		t.Fatalf("Capture() error = %v", err)
+	}
+	restore := true
+	defer func() {
+		if restore {
+			restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer restoreCancel()
+			if restoreErr := live.Restore(restoreCtx, session, snapshot); restoreErr != nil {
+				t.Errorf("Restore() error = %v", restoreErr)
+			}
+		}
+	}()
+	if err := live.Apply(ctx, session, compiled); err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+	report, err := live.Verify(ctx, session, compiled)
+	if err != nil {
+		t.Fatalf("Verify() error = %v", err)
+	}
+	t.Logf("candidate report = %#v", report)
+	if report.StyleMarkerCount != 1 ||
+		report.TemplateVersion != engine.TemplateVersion ||
+		report.ThemePublicID != compiled.ThemePublicID ||
+		!report.BackgroundLoaded ||
+		!engine.CapabilitiesAllowApply(report) {
+		t.Fatalf("candidate report failed closed = %#v", report)
+	}
+	restore = false
 }

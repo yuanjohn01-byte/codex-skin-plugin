@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/adapter"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/browseropen"
@@ -19,6 +21,8 @@ import (
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/flowstate"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/protocol"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/restartflow"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/themeapi"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/userflow"
 )
@@ -30,6 +34,7 @@ const (
 	exitRestore     = 41
 	exitTheme       = 42
 	exitApply       = 43
+	exitRestart     = 44
 	exitLocalUnsafe = 50
 	exitInternal    = 80
 )
@@ -50,6 +55,9 @@ type Runtime struct {
 	Context      context.Context
 	HTTPClient   *http.Client
 	ApplyFlow    ApplyFlow
+	Executable   string
+	StartWorker  func(string, string) error
+	RestartDelay time.Duration
 }
 
 type versionData struct {
@@ -96,12 +104,23 @@ type applyData struct {
 	PurchaseShown bool   `json:"purchaseShownDuringCommand"`
 }
 
+type restartData struct {
+	Command         string `json:"command"`
+	RestartAccepted bool   `json:"restartAccepted"`
+	Kind            string `json:"kind"`
+	ThemePublicID   string `json:"themePublicId,omitempty"`
+}
+
 type statusData struct {
 	Command              string `json:"command"`
 	DeviceLinked         bool   `json:"deviceLinked"`
 	PendingThemePublicID string `json:"pendingThemePublicId,omitempty"`
 	AppliedThemePublicID string `json:"appliedThemePublicId,omitempty"`
 	AppliedThemeVersion  string `json:"appliedThemeVersion,omitempty"`
+	RestartKind          string `json:"restartKind,omitempty"`
+	RestartStatus        string `json:"restartStatus,omitempty"`
+	RestartThemePublicID string `json:"restartThemePublicId,omitempty"`
+	RestartErrorCode     string `json:"restartErrorCode,omitempty"`
 }
 
 func (r Runtime) values() (string, string, string) {
@@ -125,6 +144,12 @@ func Run(args []string, stdout, stderr io.Writer, environment Runtime) int {
 	if len(args) == 0 {
 		return usageFailure(stdout, stderr, jsonMode)
 	}
+	if args[0] == "__restart-worker" {
+		if len(args) != 2 {
+			return exitInternal
+		}
+		return runRestartWorker(args[1], environment)
+	}
 	if args[0] == "theme" {
 		if len(args) >= 2 && args[1] == "restore" {
 			if (len(args) != 2 && len(args) != 3) ||
@@ -139,6 +164,13 @@ func Run(args []string, stdout, stderr io.Writer, environment Runtime) int {
 				return usageFailure(stdout, stderr, jsonMode)
 			}
 			return runThemeApply(args[2], stdout, stderr, jsonMode, environment)
+		}
+		if len(args) >= 2 && args[1] == "continue" {
+			if (len(args) != 2 && len(args) != 3) ||
+				(len(args) == 3 && args[2] != "--json") {
+				return usageFailure(stdout, stderr, jsonMode)
+			}
+			return runThemeContinue(stdout, stderr, jsonMode, environment)
 		}
 		return usageFailure(stdout, stderr, jsonMode)
 	}
@@ -215,7 +247,9 @@ func runThemeRestore(stdout, stderr io.Writer, jsonMode bool, environment Runtim
 	}
 	runtimeAdapter := environment.Adapter
 	if runtimeAdapter == nil {
-		runtimeAdapter, err = adapter.NewLive(adapter.Config{Root: store.Root()})
+		runtimeAdapter, err = adapter.NewLive(adapter.Config{
+			Root: store.Root(), CurrentProfile: true,
+		})
 		if err != nil {
 			return writeRestoreFailure(stdout, stderr, jsonMode, "CS-RESTORE-ROOT-001", err)
 		}
@@ -230,6 +264,22 @@ func runThemeRestore(stdout, stderr io.Writer, jsonMode bool, environment Runtim
 	}
 	result, err := instance.RestoreOfficial(ctx)
 	if err != nil {
+		if errors.Is(err, engine.ErrRestartConsent) {
+			restartStore, restartErr := restartflow.New(store.Root())
+			if restartErr == nil {
+				_, restartErr = restartStore.StageRestore()
+			}
+			if restartErr == nil {
+				return writeFlowFailure(
+					stdout,
+					stderr,
+					jsonMode,
+					"CS-FLOW-RESTART-001",
+					"confirm_restart",
+					exitRestart,
+				)
+			}
+		}
 		return writeRestoreFailure(stdout, stderr, jsonMode, "CS-RESTORE-001", err)
 	}
 	data := restoreData{
@@ -269,6 +319,8 @@ func runThemeApply(themePublicID string, stdout, stderr io.Writer, jsonMode bool
 			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-AUTH-001", "reauthorize", exitAuthorize)
 		case errors.Is(err, userflow.ErrAccess):
 			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-ACCESS-001", "finish_purchase", exitAccess)
+		case errors.Is(err, userflow.ErrRestart):
+			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-RESTART-001", "confirm_restart", exitRestart)
 		case errors.Is(err, userflow.ErrApply):
 			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-APPLY-001", "use_offline_restore_entry", exitApply)
 		default:
@@ -325,10 +377,16 @@ func buildApplyFlow(environment Runtime) (ApplyFlow, error) {
 	}
 	runtimeAdapter := environment.Adapter
 	if runtimeAdapter == nil {
-		runtimeAdapter, err = adapter.NewLive(adapter.Config{Root: store.Root()})
+		runtimeAdapter, err = adapter.NewLive(adapter.Config{
+			Root: store.Root(), CurrentProfile: true,
+		})
 		if err != nil {
 			return nil, err
 		}
+	}
+	restartStore, err := restartflow.New(store.Root())
+	if err != nil {
+		return nil, err
 	}
 	instance, err := engine.New(store, runtimeAdapter)
 	if err != nil {
@@ -340,13 +398,230 @@ func buildApplyFlow(environment Runtime) (ApplyFlow, error) {
 		Auth:              authClient,
 		Themes:            themeClient,
 		State:             state,
-		Applier:           userflow.EngineApplier{Engine: instance},
+		Applier:           userflow.EngineApplier{Engine: instance, Restart: restartStore},
 		OpenURL:           browseropen.Open,
 		DeviceDisplayName: "Codex Skin on " + platform,
 		Platform:          platform,
 		PluginVersion:     buildinfo.PluginVersion,
 		EngineVersion:     engine.CurrentEngineVersion,
 	})
+}
+
+func runThemeContinue(stdout, stderr io.Writer, jsonMode bool, environment Runtime) int {
+	goos, _, _ := environment.values()
+	root, err := resolveRoot(goos, environment)
+	if err != nil {
+		return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-RESTART-002", "run_theme_again", exitRestart)
+	}
+	store, err := engine.OpenStore(root, environment.PluginCache)
+	if err != nil {
+		return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-RESTART-002", "run_theme_again", exitRestart)
+	}
+	restartStore, err := restartflow.New(store.Root())
+	if err != nil {
+		return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-RESTART-002", "run_theme_again", exitRestart)
+	}
+	request, found, err := restartStore.Current()
+	if err != nil || !found {
+		return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-RESTART-002", "run_theme_again", exitRestart)
+	}
+	request, err = restartStore.Approve(request.RequestID)
+	if err != nil {
+		return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-RESTART-002", "run_theme_again", exitRestart)
+	}
+	executable, err := recoveryExecutable(store.Root(), goos, environment.Executable)
+	if err != nil {
+		_, _ = restartStore.Fail(request.RequestID, "CS-FLOW-RESTART-003")
+		return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-RESTART-003", "run_theme_again", exitRestart)
+	}
+	startWorker := environment.StartWorker
+	if startWorker == nil {
+		startWorker = restartflow.StartWorker
+	}
+	if err := startWorker(executable, request.RequestID); err != nil {
+		_, _ = restartStore.Fail(request.RequestID, "CS-FLOW-RESTART-003")
+		return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-RESTART-003", "run_theme_again", exitRestart)
+	}
+	data := restartData{
+		Command: "theme continue", RestartAccepted: true,
+		Kind: request.Kind, ThemePublicID: request.ThemePublicID,
+	}
+	if jsonMode {
+		if writeJSON(stdout, stderr, protocol.Success(data)) != exitSuccess {
+			return exitInternal
+		}
+	} else {
+		fmt.Fprintln(stdout, "Restart accepted. Codex will reopen with the same profile and finish the requested theme action.")
+	}
+	return exitSuccess
+}
+
+func runRestartWorker(requestID string, environment Runtime) int {
+	goos, _, _ := environment.values()
+	root, err := resolveRoot(goos, environment)
+	if err != nil {
+		return exitInternal
+	}
+	store, err := engine.OpenStore(root, environment.PluginCache)
+	if err != nil {
+		return exitInternal
+	}
+	restartStore, err := restartflow.New(store.Root())
+	if err != nil {
+		return exitInternal
+	}
+	request, err := restartStore.Begin(requestID)
+	if err != nil {
+		return exitInternal
+	}
+	delay := environment.RestartDelay
+	if delay == 0 {
+		delay = 2 * time.Second
+	}
+	if delay > 0 {
+		time.Sleep(delay)
+	}
+	ctx := environment.Context
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
+		defer cancel()
+	}
+	runtimeAdapter := environment.Adapter
+	if runtimeAdapter == nil {
+		runtimeAdapter, err = adapter.NewLive(adapter.Config{
+			Root: store.Root(), CurrentProfile: true, RestartApproved: true,
+		})
+		if err != nil {
+			_, _ = restartStore.Fail(requestID, "CS-FLOW-RESTART-004")
+			return exitInternal
+		}
+	}
+	instance, err := engine.New(store, runtimeAdapter)
+	if err != nil {
+		_, _ = restartStore.Fail(requestID, "CS-FLOW-RESTART-004")
+		return exitInternal
+	}
+	operationID := ""
+	resultThemeID := ""
+	resultVersion := ""
+	var completedRelease *themeapi.Release
+	applyStartedAt := time.Time{}
+	switch request.Kind {
+	case "apply":
+		verified, verifyErr := restartStore.LoadVerified(request)
+		if verifyErr != nil ||
+			!themeEngineCompatible(verified.Manifest.Compatibility.MinEngineVersion) {
+			_, _ = restartStore.Fail(requestID, "CS-FLOW-RESTART-005")
+			return exitTheme
+		}
+		applyStartedAt = time.Now()
+		result, applyErr := instance.ApplyVerified(ctx, verified)
+		if applyErr != nil {
+			_, _ = restartStore.Fail(requestID, "CS-FLOW-RESTART-006")
+			return exitApply
+		}
+		operationID = result.OperationID
+		resultThemeID = result.ThemePublicID
+		resultVersion = result.ThemeVersion
+		completedRelease = &themeapi.Release{
+			ThemePublicID:    verified.Manifest.ThemePublicID,
+			ThemeVersion:     verified.Manifest.ThemeVersion,
+			Descriptor:       verified.Descriptor,
+			DescriptorBytes:  verified.DescriptorBytes,
+			SignatureBytes:   verified.Signature,
+			MinEngineVersion: verified.Manifest.Compatibility.MinEngineVersion,
+		}
+		if flowStore, flowErr := flowstate.New(store.Root()); flowErr == nil {
+			if state, readErr := flowStore.Read(); readErr == nil &&
+				state.PendingThemePublicID == resultThemeID {
+				state.PendingThemePublicID = ""
+				_ = flowStore.Write(state)
+			}
+		}
+	case "restore":
+		result, restoreErr := instance.RestoreOfficial(ctx)
+		if restoreErr != nil {
+			_, _ = restartStore.Fail(requestID, "CS-FLOW-RESTART-007")
+			return exitRestore
+		}
+		operationID = result.OperationID
+	default:
+		_, _ = restartStore.Fail(requestID, "CS-FLOW-RESTART-004")
+		return exitInternal
+	}
+	if _, err := restartStore.Complete(
+		requestID,
+		operationID,
+		resultThemeID,
+		resultVersion,
+	); err != nil {
+		return exitInternal
+	}
+	if completedRelease != nil {
+		recordRestartApply(
+			store.Root(),
+			*completedRelease,
+			applyStartedAt,
+			time.Now(),
+			environment,
+		)
+	}
+	return exitSuccess
+}
+
+func recordRestartApply(
+	root string,
+	release themeapi.Release,
+	startedAt, completedAt time.Time,
+	environment Runtime,
+) {
+	if buildinfo.APIBaseURL == "" || completedAt.Before(startedAt) {
+		return
+	}
+	stateStore, err := flowstate.New(root)
+	if err != nil {
+		return
+	}
+	state, err := stateStore.Read()
+	if err != nil || state.DeviceID == "" {
+		return
+	}
+	credentialStore, err := credentials.New()
+	if err != nil {
+		return
+	}
+	httpClient := environment.HTTPClient
+	if httpClient == nil {
+		httpClient = &http.Client{Timeout: 5 * time.Second}
+	}
+	authClient, err := deviceauth.NewClient(
+		buildinfo.APIBaseURL,
+		httpClient,
+		credentialStore,
+	)
+	if err != nil {
+		return
+	}
+	auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	refreshed, err := authClient.Refresh(auditCtx, state.DeviceID)
+	if err != nil ||
+		refreshed.Outcome != deviceauth.OutcomeAuthorized ||
+		refreshed.AccessToken == nil {
+		return
+	}
+	themeClient, err := themeapi.NewClient(buildinfo.APIBaseURL, httpClient)
+	if err != nil {
+		return
+	}
+	_ = themeClient.RecordApply(
+		auditCtx,
+		release,
+		refreshed.AccessToken.Value(),
+		completedAt,
+		completedAt.Sub(startedAt),
+	)
 }
 
 func runStatus(stdout, stderr io.Writer, jsonMode bool, environment Runtime) int {
@@ -380,14 +655,93 @@ func runStatus(stdout, stderr io.Writer, jsonMode bool, environment Runtime) int
 		data.AppliedThemePublicID = desired.ThemePublicID
 		data.AppliedThemeVersion = desired.ThemeVersion
 	}
+	restartStore, restartErr := restartflow.New(store.Root())
+	if restartErr != nil {
+		return writeFlowFailure(stdout, stderr, jsonMode, "CS-STATUS-001", "run_doctor", exitLocalUnsafe)
+	}
+	restartRequest, restartFound, restartErr := restartStore.Current()
+	if restartErr != nil {
+		return writeFlowFailure(stdout, stderr, jsonMode, "CS-STATUS-001", "run_doctor", exitLocalUnsafe)
+	}
+	if restartFound && !failedRestartSupersededByAppliedTheme(
+		restartRequest,
+		desired,
+		found,
+		state.PendingThemePublicID,
+	) {
+		data.RestartKind = restartRequest.Kind
+		data.RestartStatus = string(restartRequest.Status)
+		data.RestartThemePublicID = restartRequest.ThemePublicID
+		data.RestartErrorCode = restartRequest.ErrorCode
+	}
 	if jsonMode {
 		if writeJSON(stdout, stderr, protocol.Success(data)) != exitSuccess {
 			return exitInternal
 		}
 	} else {
-		fmt.Fprintf(stdout, "Device linked: %t; applied theme: %s %s; pending theme: %s.\n", data.DeviceLinked, data.AppliedThemePublicID, data.AppliedThemeVersion, data.PendingThemePublicID)
+		fmt.Fprintf(
+			stdout,
+			"Device linked: %t; applied theme: %s %s; pending theme: %s; restart: %s %s.\n",
+			data.DeviceLinked,
+			data.AppliedThemePublicID,
+			data.AppliedThemeVersion,
+			data.PendingThemePublicID,
+			data.RestartKind,
+			data.RestartStatus,
+		)
 	}
 	return exitSuccess
+}
+
+func failedRestartSupersededByAppliedTheme(
+	request restartflow.Request,
+	desired engine.DesiredTheme,
+	desiredFound bool,
+	pendingThemePublicID string,
+) bool {
+	return request.Status == restartflow.StatusFailed &&
+		request.Kind == "apply" &&
+		desiredFound &&
+		pendingThemePublicID == "" &&
+		request.ThemePublicID == desired.ThemePublicID &&
+		request.ThemeVersion == desired.ThemeVersion
+}
+
+func recoveryExecutable(root, goos, supplied string) (string, error) {
+	name := "codex-skin"
+	if goos == "windows" {
+		name = "codex-skin.exe"
+	}
+	expected := filepath.Join(root, "recovery", "engine", name)
+	executable := supplied
+	if executable == "" {
+		var err error
+		executable, err = os.Executable()
+		if err != nil {
+			return "", err
+		}
+	}
+	executable, err := filepath.Abs(executable)
+	if err != nil || filepath.Clean(executable) != executable ||
+		!sameFilePath(executable, expected, goos) {
+		return "", errors.New("restart worker is not the fixed recovery Helper")
+	}
+	info, err := os.Lstat(executable)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return "", errors.New("restart worker is unsafe")
+	}
+	return executable, nil
+}
+
+func sameFilePath(left, right, goos string) bool {
+	if goos == "windows" {
+		return strings.EqualFold(filepath.Clean(left), filepath.Clean(right))
+	}
+	return filepath.Clean(left) == filepath.Clean(right)
+}
+
+func themeEngineCompatible(minimum string) bool {
+	return theme.EngineCompatible(engine.CurrentEngineVersion, minimum)
 }
 
 func resolveRoot(goos string, environment Runtime) (string, error) {
@@ -460,7 +814,7 @@ func usageFailure(stdout, stderr io.Writer, jsonMode bool) int {
 			return exitInternal
 		}
 	} else {
-		fmt.Fprintln(stderr, "usage: codex-skin <version|doctor|status> [--json] | codex-skin theme <apply THEME_ID|restore> [--json]")
+		fmt.Fprintln(stderr, "usage: codex-skin <version|doctor|status> [--json] | codex-skin theme <apply THEME_ID|restore|continue> [--json]")
 	}
 	return exitInternal
 }

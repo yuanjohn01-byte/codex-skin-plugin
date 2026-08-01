@@ -182,6 +182,7 @@ def main() -> int:
         "go.mod",
         "go.sum",
         "internal/adapter/live.go",
+        "internal/appearance/config.go",
         "internal/cdp/client.go",
         "internal/codex/identity_windows.go",
         "internal/engine/engine.go",

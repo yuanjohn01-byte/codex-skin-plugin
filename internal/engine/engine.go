@@ -82,7 +82,7 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 		return ApplyResult{}, engine.failJournal(journal, "CS-THEME-COMPILE-001", err)
 	}
 
-	session, err := engine.adapter.OpenVerifiedSession(ctx)
+	session, err := engine.openThemeSession(ctx, compiled)
 	if err != nil {
 		return ApplyResult{}, engine.failJournal(journal, "CS-CODEX-IDENTITY-001", err)
 	}
@@ -215,7 +215,7 @@ func (engine *Engine) RestoreOfficial(ctx context.Context) (result RestoreResult
 	if err := engine.store.WriteJournal(journal); err != nil {
 		return RestoreResult{}, err
 	}
-	session, err := engine.adapter.OpenVerifiedSession(ctx)
+	session, err := engine.openOfficialSession(ctx)
 	if err != nil {
 		return RestoreResult{}, engine.failJournal(journal, "CS-CODEX-IDENTITY-001", err)
 	}
@@ -247,6 +247,20 @@ func (engine *Engine) RestoreOfficial(ctx context.Context) (result RestoreResult
 		return RestoreResult{}, err
 	}
 	return RestoreResult{OperationID: operationID, Identity: session.Identity, WasThemed: wasThemed}, nil
+}
+
+func (engine *Engine) openThemeSession(ctx context.Context, compiled CompiledTheme) (Session, error) {
+	if opener, supported := engine.adapter.(ThemeSessionOpener); supported {
+		return opener.OpenVerifiedThemeSession(ctx, compiled)
+	}
+	return engine.adapter.OpenVerifiedSession(ctx)
+}
+
+func (engine *Engine) openOfficialSession(ctx context.Context) (Session, error) {
+	if opener, supported := engine.adapter.(OfficialSessionOpener); supported {
+		return opener.OpenVerifiedOfficialSession(ctx)
+	}
+	return engine.adapter.OpenVerifiedSession(ctx)
 }
 
 // RecoverInterrupted restores the last-known-good snapshot for an apply that
@@ -461,16 +475,32 @@ func CapabilitiesAllowApply(report RegionReport) bool {
 		return false
 	}
 	if report.StyleMarkerCount == 1 &&
-		(report.TemplateVersion != TemplateVersion || !themePublicIDPattern.MatchString(report.ThemePublicID)) {
+		(!supportedTemplateVersion(report.TemplateVersion) ||
+			!themePublicIDPattern.MatchString(report.ThemePublicID)) {
 		return false
 	}
-	required := []string{"home", "mainBoundary", "sidebar", "composer", "composerUtilityBar", "topFade"}
+	required := []string{
+		"home",
+		"mainBoundary",
+		"sidebar",
+		"composer",
+		"topFade",
+		"bottomFade",
+		"templateScope",
+		"themeContrast",
+	}
 	for _, name := range required {
 		if report.Regions[name] != RegionPass {
 			return false
 		}
 	}
-	for _, name := range []string{"suggestionCards", "projectPicker"} {
+	for _, name := range []string{
+		"composerUtilityBar",
+		"conversationActivity",
+		"conversationDiffResource",
+		"suggestionCards",
+		"projectPicker",
+	} {
 		if report.Regions[name] != RegionPass && report.Regions[name] != RegionNotPresent {
 			return false
 		}

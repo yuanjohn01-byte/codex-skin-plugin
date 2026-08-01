@@ -227,6 +227,10 @@ EXPORTED_CONTRACTS = (
         "codex-skin/contracts/public/helper-release-descriptor-v1.schema.json",
     ),
     (
+        Path("contracts/plugin-event-v1.schema.json"),
+        "codex-skin/contracts/public/plugin-event-v1.schema.json",
+    ),
+    (
         Path("contracts/device-authorization-poll-v1.schema.json"),
         "codex-skin/contracts/public/device-authorization-poll-v1.schema.json",
     ),
@@ -754,9 +758,45 @@ def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[
             "doctorData",
             "restoreData",
             "applyData",
+            "restartData",
             "statusData",
         }.issubset(definitions):
             errors.append("Helper protocol schema is missing required v1 definitions")
+        else:
+            restart_data = definitions.get("restartData", {})
+            restart_properties = (
+                restart_data.get("properties", {})
+                if isinstance(restart_data, dict)
+                else {}
+            )
+            status_data = definitions.get("statusData", {})
+            status_properties = (
+                status_data.get("properties", {})
+                if isinstance(status_data, dict)
+                else {}
+            )
+            if (
+                restart_data.get("additionalProperties") is not False
+                or set(restart_data.get("required", []))
+                != {"command", "restartAccepted", "kind"}
+                or restart_properties.get("command", {}).get("const")
+                != "theme continue"
+                or restart_properties.get("restartAccepted", {}).get("const")
+                is not True
+                or set(restart_properties.get("kind", {}).get("enum", []))
+                != {"apply", "restore"}
+                or set(status_properties.get("restartStatus", {}).get("enum", []))
+                != {
+                    "pending_confirmation",
+                    "restart_approved",
+                    "running",
+                    "completed",
+                    "failed",
+                }
+            ):
+                errors.append(
+                    "Helper protocol restart continuation contract is invalid"
+                )
 
     release_schema = schemas[EXPORTED_CONTRACTS[1][0]][1]
     if not isinstance(release_schema, dict):
@@ -777,7 +817,28 @@ def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[
         if release_schema.get("additionalProperties") is not False:
             errors.append("Helper release descriptor schema must reject unknown root fields")
 
-    poll_schema = schemas[EXPORTED_CONTRACTS[2][0]][1]
+    event_schema = schemas[EXPORTED_CONTRACTS[2][0]][1]
+    event_items = (
+        event_schema.get("properties", {}).get("events", {}).get("items", {})
+        if isinstance(event_schema, dict)
+        else {}
+    )
+    if (
+        not isinstance(event_schema, dict)
+        or event_schema.get("$schema")
+        != "https://json-schema.org/draft/2020-12/schema"
+        or event_schema.get("additionalProperties") is not False
+        or set(event_schema.get("required", [])) != {"events"}
+        or not isinstance(event_items, dict)
+        or event_items.get("additionalProperties") is not False
+        or event_items.get("properties", {})
+        .get("eventName", {})
+        .get("const")
+        != "theme_apply_succeeded"
+    ):
+        errors.append("Plugin event contract is missing the minimal v1 allowlist")
+
+    poll_schema = schemas[EXPORTED_CONTRACTS[3][0]][1]
     if not isinstance(poll_schema, dict):
         errors.append("Device authorization poll schema root must be an object")
     else:
@@ -808,7 +869,7 @@ def validate_exported_contracts(root: Path, candidates: set[Path], errors: list[
         }:
             errors.append("Device authorization poll contract endpoint paths are invalid")
 
-    theme_download_schema = schemas[EXPORTED_CONTRACTS[3][0]][1]
+    theme_download_schema = schemas[EXPORTED_CONTRACTS[4][0]][1]
     if (
         not isinstance(theme_download_schema, dict)
         or theme_download_schema.get("$schema")
