@@ -461,7 +461,7 @@ func atomicReplace(path string, expected, content []byte, info os.FileInfo) erro
 	if err != nil {
 		return err
 	}
-	if err := os.Rename(temporary, path); err != nil {
+	if err := replaceFile(temporary, path); err != nil {
 		return err
 	}
 	return syncDirectory(filepath.Dir(path))
@@ -499,15 +499,6 @@ func rejectSymlink(path string) error {
 		return fmt.Errorf("unsafe appearance state path")
 	}
 	return nil
-}
-
-func syncDirectory(path string) error {
-	directory, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer directory.Close()
-	return directory.Sync()
 }
 
 func pointer(value string) *string { return &value }
