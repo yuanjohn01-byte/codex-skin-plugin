@@ -24,7 +24,10 @@ import (
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 )
 
-const defaultLaunchWait = 25 * time.Second
+const (
+	defaultLaunchWait   = 25 * time.Second
+	openRollbackTimeout = 20 * time.Second
+)
 
 var sixDigitID = regexp.MustCompile(`^[0-9]{6}$`)
 
@@ -208,9 +211,9 @@ func (adapter *Live) openVerifiedSession(
 	profile := adapter.profile
 	port := adapter.port
 	launchedPID := 0
-	stoppedForRestart := false
 	appearanceChanged := false
 	appearanceRestart := false
+	mutated := false
 	var process codex.ProcessIdentity
 	if adapter.currentProfile && adapter.appearance != nil {
 		if restoreAppearance {
@@ -237,7 +240,7 @@ func (adapter *Live) openVerifiedSession(
 			if err := codex.StopCurrentInstance(ctx, installation, current); err != nil {
 				return engine.Session{}, err
 			}
-			stoppedForRestart = true
+			mutated = true
 		case errors.Is(currentErr, codex.ErrCurrentMissing):
 			profile, err = codex.DefaultUserProfile(installation)
 			if err != nil {
@@ -258,35 +261,36 @@ func (adapter *Live) openVerifiedSession(
 				appearanceChanged, err = adapter.appearance.Pin(targetAppearance)
 			}
 			if err != nil {
-				if stoppedForRestart {
-					err = reopenOrdinaryIfMissing(ctx, installation, err)
-				}
-				return engine.Session{}, errors.Join(engine.ErrStateUnsafe, err)
+				return engine.Session{}, adapter.recoverOpenFailure(
+					ctx, installation, launchedPID, port, profile, process,
+					mutated, errors.Join(engine.ErrStateUnsafe, err),
+				)
 			}
+			mutated = mutated || appearanceChanged
 		}
 		if port == 0 {
 			port, err = reserveLoopbackPort()
 			if err != nil {
-				return engine.Session{}, err
+				return engine.Session{}, adapter.recoverOpenFailure(
+					ctx, installation, launchedPID, port, profile, process, mutated, err,
+				)
 			}
 		}
 		launchedPID, err = codex.LaunchControlled(ctx, installation, profile, port)
 		if err != nil {
-			if appearanceChanged && !restoreAppearance && adapter.appearance != nil {
-				_, restoreErr := adapter.appearance.Restore()
-				err = errors.Join(err, restoreErr)
-			}
-			if stoppedForRestart {
-				err = reopenOrdinaryIfMissing(ctx, installation, err)
-			}
-			return engine.Session{}, err
+			return engine.Session{}, adapter.recoverOpenFailure(
+				ctx, installation, launchedPID, port, profile, process, true, err,
+			)
 		}
+		mutated = true
 	}
 	deadline := time.Now().Add(adapter.launchWait)
 	var targets []cdp.Target
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
-			return engine.Session{}, ctx.Err()
+			return engine.Session{}, adapter.recoverOpenFailure(
+				ctx, installation, launchedPID, port, profile, process, mutated, ctx.Err(),
+			)
 		}
 		if launchedPID > 0 {
 			process, err = codex.VerifyListener(ctx, installation, launchedPID, port, profile)
@@ -309,31 +313,40 @@ func (adapter *Live) openVerifiedSession(
 	}
 	if err != nil {
 		err = errors.Join(codex.ErrListenerUntrusted, err)
-		if stoppedForRestart {
-			err = reopenOrdinaryIfMissing(ctx, installation, err)
-		}
-		return engine.Session{}, err
+		return engine.Session{}, adapter.recoverOpenFailure(
+			ctx, installation, launchedPID, port, profile, process, mutated, err,
+		)
 	}
 	target, err := cdp.SelectPage(targets)
 	if err != nil {
-		return engine.Session{}, err
+		return engine.Session{}, adapter.recoverOpenFailure(
+			ctx, installation, launchedPID, port, profile, process, mutated, err,
+		)
 	}
 	client, err := cdp.Dial(ctx, target, port)
 	if err != nil {
-		return engine.Session{}, err
+		return engine.Session{}, adapter.recoverOpenFailure(
+			ctx, installation, launchedPID, port, profile, process, mutated, err,
+		)
 	}
 	if err := client.Call(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
 		client.Close()
-		return engine.Session{}, err
+		return engine.Session{}, adapter.recoverOpenFailure(
+			ctx, installation, launchedPID, port, profile, process, mutated, err,
+		)
 	}
 	if err := client.Call(ctx, "Page.enable", map[string]any{}, nil); err != nil {
 		client.Close()
-		return engine.Session{}, err
+		return engine.Session{}, adapter.recoverOpenFailure(
+			ctx, installation, launchedPID, port, profile, process, mutated, err,
+		)
 	}
 	opaqueID, err := randomSessionID()
 	if err != nil {
 		client.Close()
-		return engine.Session{}, err
+		return engine.Session{}, adapter.recoverOpenFailure(
+			ctx, installation, launchedPID, port, profile, process, mutated, err,
+		)
 	}
 	adapter.mu.Lock()
 	adapter.sessions[opaqueID] = &liveSession{
@@ -350,6 +363,50 @@ func (adapter *Live) openVerifiedSession(
 			ProcessStartID: process.ProcessStartID,
 		},
 	}, nil
+}
+
+func (adapter *Live) recoverOpenFailure(
+	ctx context.Context,
+	installation codex.Installation,
+	launchedPID int,
+	port int,
+	profile string,
+	process codex.ProcessIdentity,
+	mutated bool,
+	cause error,
+) error {
+	if !mutated {
+		return cause
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openRollbackTimeout)
+	defer cancel()
+	if process.ProcessID == 0 && launchedPID > 0 {
+		verified, verifyErr := codex.VerifyListener(
+			cleanupCtx, installation, launchedPID, port, profile,
+		)
+		if verifyErr == nil {
+			process = verified
+		} else {
+			current, currentErr := codex.DiscoverCurrentInstance(cleanupCtx, installation)
+			if currentErr == nil && current.Process.ProcessID == launchedPID &&
+				current.ControlledPort == port && current.Profile == profile {
+				cause = errors.Join(cause, codex.StopCurrentInstance(cleanupCtx, installation, current))
+				launchedPID = 0
+			} else {
+				cause = errors.Join(cause, verifyErr, currentErr)
+			}
+		}
+	}
+	if process.ProcessID > 0 {
+		cause = errors.Join(cause, codex.StopOwnedProcess(
+			cleanupCtx, installation, process, port, profile,
+		))
+	}
+	if adapter.appearance != nil {
+		_, restoreErr := adapter.appearance.Restore()
+		cause = errors.Join(cause, restoreErr)
+	}
+	return reopenOrdinaryIfMissing(cleanupCtx, installation, cause)
 }
 
 func reopenOrdinaryIfMissing(
@@ -770,6 +827,32 @@ func (adapter *Live) Close(ctx context.Context, session engine.Session) error {
 		return nil
 	}
 	return live.client.Close()
+}
+
+// FinalizeOfficialRollback completes a failed first-theme transaction. The
+// renderer has already been verified official by the engine; this method then
+// stops only the exact controlled process, restores the native appearance
+// backup, and reopens Codex without the loopback debugging launch flags.
+func (adapter *Live) FinalizeOfficialRollback(ctx context.Context, session engine.Session) error {
+	adapter.mu.Lock()
+	live := adapter.sessions[session.OpaqueID]
+	delete(adapter.sessions, session.OpaqueID)
+	adapter.mu.Unlock()
+	if live == nil {
+		return codex.ErrListenerUntrusted
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openRollbackTimeout)
+	defer cancel()
+	closeErr := live.client.Close()
+	stopErr := codex.StopOwnedProcess(
+		cleanupCtx, live.installation, live.process, live.port, live.profile,
+	)
+	var appearanceErr error
+	if adapter.appearance != nil {
+		_, appearanceErr = adapter.appearance.Restore()
+	}
+	cause := errors.Join(closeErr, stopErr, appearanceErr)
+	return reopenOrdinaryIfMissing(cleanupCtx, live.installation, cause)
 }
 
 // StopOwned closes and terminates only the exact controlled process created for

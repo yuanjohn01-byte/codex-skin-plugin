@@ -17,6 +17,7 @@ type fakeAdapter struct {
 	events              []string
 	cancelOnApply       context.CancelFunc
 	failOpen            bool
+	failCapture         bool
 	failApply           bool
 	mutateBeforeFailure bool
 	failVerify          bool
@@ -28,10 +29,23 @@ type fakeAdapter struct {
 
 type primingAdapter struct {
 	*fakeAdapter
+	failPrime bool
+}
+
+type finalizingAdapter struct {
+	*fakeAdapter
+}
+
+func (adapter *finalizingAdapter) FinalizeOfficialRollback(context.Context, Session) error {
+	adapter.events = append(adapter.events, "finalize_official")
+	return nil
 }
 
 func (adapter *primingAdapter) Prime(_ context.Context, _ Session, compiled CompiledTheme) error {
 	adapter.events = append(adapter.events, "prime")
+	if adapter.failPrime {
+		return errors.New("prime rejected")
+	}
 	if !adapter.state.StylePresent {
 		return nil
 	}
@@ -86,6 +100,9 @@ func (adapter *fakeAdapter) Probe(context.Context, Session) (RegionReport, error
 
 func (adapter *fakeAdapter) Capture(context.Context, Session) (Snapshot, error) {
 	adapter.events = append(adapter.events, "capture")
+	if adapter.failCapture {
+		return Snapshot{}, errors.New("capture rejected")
+	}
 	return adapter.state, nil
 }
 
@@ -173,7 +190,7 @@ func TestApplyVerifiedCommitsOnlyAfterVerification(t *testing.T) {
 	if result.ThemePublicID != "100001" || result.ThemeVersion != "1.0.0" {
 		t.Fatalf("result = %#v", result)
 	}
-	wantEvents := []string{"open", "probe", "capture", "apply", "verify", "close"}
+	wantEvents := []string{"open", "capture", "probe", "apply", "verify", "close"}
 	if strings.Join(adapter.events, ",") != strings.Join(wantEvents, ",") {
 		t.Fatalf("events = %v, want %v", adapter.events, wantEvents)
 	}
@@ -425,18 +442,83 @@ func TestCompileRejectsUnsupportedMinimumEngineBeforeRenderer(t *testing.T) {
 	}
 }
 
-func TestCapabilityFailureStopsBeforeBackupOrApply(t *testing.T) {
+func TestCapabilityFailureRollsBackBeforeApply(t *testing.T) {
 	verified := verifiedThemeForEngine(t)
 	store := testStore(t)
 	report := passingReport()
 	report.Regions["sidebar"] = RegionFail
-	adapter := &fakeAdapter{probe: report}
+	adapter := &finalizingAdapter{fakeAdapter: &fakeAdapter{probe: report}}
 	instance, _ := New(store, adapter)
 	_, err := instance.ApplyVerified(context.Background(), verified)
 	if !errors.Is(err, ErrCapabilityBlocked) {
 		t.Fatalf("ApplyVerified() error = %v", err)
 	}
-	if got := strings.Join(adapter.events, ","); got != "open,probe,close" {
+	if got := strings.Join(adapter.events, ","); got != "open,capture,probe,rollback,verify_official,finalize_official,close" {
+		t.Fatalf("events = %s", got)
+	}
+}
+
+func TestPrimeFailureRestoresTrustedPreviousTheme(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	store := testStore(t)
+	base := &fakeAdapter{probe: passingReport()}
+	adapter := &primingAdapter{fakeAdapter: base}
+	instance, _ := New(store, adapter)
+	if _, err := instance.ApplyVerified(context.Background(), verified); err != nil {
+		t.Fatalf("first ApplyVerified() error = %v", err)
+	}
+	previous := adapter.state
+	adapter.events = nil
+	adapter.failPrime = true
+	if _, err := instance.ApplyVerified(context.Background(), verified); err == nil {
+		t.Fatal("prime failure was accepted")
+	}
+	if adapter.state != previous {
+		t.Fatalf("state after prime rollback = %#v, want %#v", adapter.state, previous)
+	}
+	if got := strings.Join(adapter.events, ","); got != "open,prime,rollback,capture,close" {
+		t.Fatalf("events = %s", got)
+	}
+}
+
+func TestCaptureFailureRestoresOfficialPreflightState(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	store := testStore(t)
+	adapter := &finalizingAdapter{fakeAdapter: &fakeAdapter{probe: passingReport(), failCapture: true}}
+	instance, _ := New(store, adapter)
+	if _, err := instance.ApplyVerified(context.Background(), verified); err == nil {
+		t.Fatal("capture failure was accepted")
+	}
+	if adapter.state.StylePresent {
+		t.Fatalf("state after capture rollback = %#v", adapter.state)
+	}
+	if got := strings.Join(adapter.events, ","); got != "open,capture,rollback,verify_official,finalize_official,close" {
+		t.Fatalf("events = %s", got)
+	}
+}
+
+func TestOpenFailureKeepsPrepareJournalRecoverable(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	store := testStore(t)
+	base := &fakeAdapter{probe: passingReport(), failOpen: true}
+	adapter := &finalizingAdapter{fakeAdapter: base}
+	instance, _ := New(store, adapter)
+	if _, err := instance.ApplyVerified(context.Background(), verified); err == nil {
+		t.Fatal("open failure was accepted")
+	}
+	running, err := store.RunningJournals()
+	if err != nil || len(running) != 1 || running[0].Stage != "prepare" || running[0].RecoveryID == "" {
+		t.Fatalf("recoverable prepare journal = %#v, error = %v", running, err)
+	}
+	base.failOpen = false
+	if err := instance.RecoverInterrupted(context.Background()); err != nil {
+		t.Fatalf("RecoverInterrupted() error = %v", err)
+	}
+	running, err = store.RunningJournals()
+	if err != nil || len(running) != 0 {
+		t.Fatalf("running journals after recovery = %#v, error = %v", running, err)
+	}
+	if got := strings.Join(adapter.events, ","); got != "open,open,restore_official,verify_official,finalize_official,close" {
 		t.Fatalf("events = %s", got)
 	}
 }
@@ -596,7 +678,7 @@ func TestApplyMigratesVerifiedPreviousTemplateStateToCurrentTemplate(t *testing.
 }
 
 func TestInterruptedApplyStagesRestoreDurableLastKnownGood(t *testing.T) {
-	for _, stage := range []string{"apply", "verify", "commit"} {
+	for _, stage := range []string{"prepare", "backup", "apply", "verify", "commit"} {
 		t.Run(stage, func(t *testing.T) {
 			store := testStore(t)
 			previous := DesiredTheme{

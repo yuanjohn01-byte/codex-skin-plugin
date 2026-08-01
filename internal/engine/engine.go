@@ -81,42 +81,17 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 	if err != nil {
 		return ApplyResult{}, engine.failJournal(journal, "CS-THEME-COMPILE-001", err)
 	}
-
-	session, err := engine.openThemeSession(ctx, compiled)
+	previousCompiled, previousDesiredPointer, err := engine.loadDesiredCompiled()
 	if err != nil {
-		return ApplyResult{}, engine.failJournal(journal, "CS-CODEX-IDENTITY-001", err)
-	}
-	defer engine.adapter.Close(ctx, session)
-	if err := engine.primeDesiredSession(ctx, session); err != nil {
 		return ApplyResult{}, engine.failJournal(journal, "CS-CACHE-VERIFY-001", err)
 	}
-	probe, err := engine.probeCapabilities(ctx, session)
-	if err != nil || !CapabilitiesAllowApply(probe) {
-		if err == nil {
-			err = ErrCapabilityBlocked
-		}
-		return ApplyResult{}, engine.failJournal(journal, "CS-COMPAT-001", err)
-	}
-
-	journal.Stage = "backup"
-	if err := engine.store.WriteJournal(journal); err != nil {
-		return ApplyResult{}, err
-	}
-	before, err := engine.adapter.Capture(ctx, session)
-	if err != nil {
-		return ApplyResult{}, engine.failJournal(journal, "CS-BACKUP-001", err)
+	before := Snapshot{}
+	if previousCompiled != nil {
+		before = snapshotFromCompiled(*previousCompiled)
 	}
 	recoveryID, err := engine.store.NewRecoveryID()
 	if err != nil {
 		return ApplyResult{}, engine.failJournal(journal, "CS-STATE-001", err)
-	}
-	previousDesired, previousDesiredFound, err := engine.store.ReadDesired()
-	if err != nil {
-		return ApplyResult{}, engine.failJournal(journal, "CS-BACKUP-001", err)
-	}
-	var previousDesiredPointer *DesiredTheme
-	if previousDesiredFound {
-		previousDesiredPointer = &previousDesired
 	}
 	recovery := RecoveryPoint{
 		RecoveryID:      recoveryID,
@@ -131,10 +106,16 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 		return ApplyResult{}, engine.failJournal(journal, "CS-BACKUP-001", err)
 	}
 	journal.RecoveryID = recoveryID
+	journal.Stage = "prepare"
 	if err := engine.store.WriteJournal(journal); err != nil {
 		return ApplyResult{}, err
 	}
 
+	session, err := engine.openThemeSession(ctx, compiled)
+	if err != nil {
+		return ApplyResult{}, engine.failRecoverableJournal(journal, "CS-CODEX-IDENTITY-001", err)
+	}
+	defer engine.adapter.Close(ctx, session)
 	rollback := func(code string, cause error) error {
 		return engine.failWithRollback(
 			ctx,
@@ -146,10 +127,32 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 			cause,
 		)
 	}
+	if previousCompiled != nil {
+		if err := engine.primeSession(ctx, session, *previousCompiled); err != nil {
+			return ApplyResult{}, rollback("CS-CACHE-VERIFY-001", err)
+		}
+	}
+
+	journal.Stage = "backup"
+	if err := engine.store.WriteJournal(journal); err != nil {
+		return ApplyResult{}, rollback("CS-STATE-001", err)
+	}
+	before, err = engine.adapter.Capture(ctx, session)
+	if err != nil {
+		return ApplyResult{}, rollback("CS-BACKUP-001", err)
+	}
+
+	probe, err := engine.probeCapabilities(ctx, session)
+	if err != nil || !CapabilitiesAllowApply(probe) {
+		if err == nil {
+			err = ErrCapabilityBlocked
+		}
+		return ApplyResult{}, rollback("CS-COMPAT-001", err)
+	}
 
 	journal.Stage = "apply"
 	if err := engine.store.WriteJournal(journal); err != nil {
-		return ApplyResult{}, err
+		return ApplyResult{}, rollback("CS-STATE-001", err)
 	}
 	if err := engine.adapter.Apply(ctx, session, compiled); err != nil {
 		return ApplyResult{}, rollback("CS-APPLY-001", fmt.Errorf("%w: %v", ErrApplyFailed, err))
@@ -294,7 +297,8 @@ func (engine *Engine) recoverInterruptedLocked(ctx context.Context) error {
 		journal.Stage = "interrupted"
 		return engine.store.WriteJournal(journal)
 	}
-	mutatingStage := journal.Stage == "apply" || journal.Stage == "verify" || journal.Stage == "commit"
+	mutatingStage := journal.Stage == "prepare" || journal.Stage == "backup" ||
+		journal.Stage == "apply" || journal.Stage == "verify" || journal.Stage == "commit"
 	if !mutatingStage {
 		journal.Status = "failed"
 		journal.ErrorCode = "CS-INTERRUPTED-001"
@@ -331,6 +335,12 @@ func (engine *Engine) recoverInterruptedLocked(ctx context.Context) error {
 		}
 	} else if err := engine.adapter.VerifyOfficial(ctx, session); err != nil {
 		return fmt.Errorf("%w: interrupted official restore: %v", ErrRollbackFailed, err)
+	} else if finalizer, supported := engine.adapter.(OfficialRollbackFinalizer); supported {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+		defer cancel()
+		if err := finalizer.FinalizeOfficialRollback(cleanupCtx, session); err != nil {
+			return fmt.Errorf("%w: interrupted official finalize: %v", ErrRollbackFailed, err)
+		}
 	}
 	if point.PreviousDesired == nil {
 		if err := engine.store.ClearDesired(); err != nil {
@@ -364,48 +374,67 @@ func (engine *Engine) resolveInterruptedJournals(currentOperationID string) erro
 	return nil
 }
 
-func (engine *Engine) primeDesiredSession(ctx context.Context, session Session) error {
-	primer, supported := engine.adapter.(SessionPrimer)
-	if !supported {
-		return nil
-	}
+func (engine *Engine) loadDesiredCompiled() (*CompiledTheme, *DesiredTheme, error) {
 	desired, found, err := engine.store.ReadDesired()
 	if err != nil || !found {
-		return err
+		return nil, nil, err
 	}
 	cache, err := engine.store.ThemeCachePath(desired)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	verified, err := theme.VerifyCached(cache)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if verified.Manifest.ThemePublicID != desired.ThemePublicID ||
 		verified.Manifest.ThemeVersion != desired.ThemeVersion ||
 		verified.PackageSHA256 != desired.PackageSHA256 {
-		return fmt.Errorf("%w: cached desired theme mismatch", ErrStateUnsafe)
+		return nil, nil, fmt.Errorf("%w: cached desired theme mismatch", ErrStateUnsafe)
 	}
 	temporary, err := os.MkdirTemp(filepath.Join(engine.store.Root(), "tmp"), ".prime-")
 	if err != nil {
-		return fmt.Errorf("%w: create cache verification staging: %v", ErrStateUnsafe, err)
+		return nil, nil, fmt.Errorf("%w: create cache verification staging: %v", ErrStateUnsafe, err)
 	}
 	if err := os.Remove(temporary); err != nil {
-		return fmt.Errorf("%w: prepare cache verification staging: %v", ErrStateUnsafe, err)
+		return nil, nil, fmt.Errorf("%w: prepare cache verification staging: %v", ErrStateUnsafe, err)
 	}
 	defer os.RemoveAll(temporary)
 	if err := theme.Extract(verified, temporary); err != nil {
-		return err
+		return nil, nil, err
 	}
 	compiled, err := CompileTheme(verified, temporary)
 	if err != nil {
-		return err
+		return nil, nil, err
+	}
+	return &compiled, &desired, nil
+}
+
+func (engine *Engine) primeSession(ctx context.Context, session Session, compiled CompiledTheme) error {
+	primer, supported := engine.adapter.(SessionPrimer)
+	if !supported {
+		return nil
 	}
 	return primer.Prime(ctx, session, compiled)
 }
 
+func snapshotFromCompiled(compiled CompiledTheme) Snapshot {
+	return Snapshot{
+		StylePresent: true, StyleText: compiled.StyleText,
+		BackgroundDataURL: compiled.BackgroundDataURL,
+		ThemePublicID:     compiled.ThemePublicID, ThemeVersion: compiled.ThemeVersion,
+		TemplateVersion: compiled.TemplateVersion, AppearanceMode: compiled.AppearanceMode,
+	}
+}
+
 func (engine *Engine) failJournal(journal Journal, code string, cause error) error {
 	journal.Status = "failed"
+	journal.ErrorCode = code
+	return errors.Join(cause, engine.store.WriteJournal(journal))
+}
+
+func (engine *Engine) failRecoverableJournal(journal Journal, code string, cause error) error {
+	journal.Status = "running"
 	journal.ErrorCode = code
 	return errors.Join(cause, engine.store.WriteJournal(journal))
 }
@@ -431,8 +460,12 @@ func (engine *Engine) failWithRollback(
 			if captureErr != nil || captured != snapshot {
 				restoreErr = errors.Join(ErrRollbackFailed, captureErr)
 			}
-		} else if verifyErr := engine.adapter.VerifyOfficial(rollbackCtx, session); verifyErr != nil {
-			restoreErr = verifyErr
+		} else {
+			if verifyErr := engine.adapter.VerifyOfficial(rollbackCtx, session); verifyErr != nil {
+				restoreErr = verifyErr
+			} else if finalizer, supported := engine.adapter.(OfficialRollbackFinalizer); supported {
+				restoreErr = finalizer.FinalizeOfficialRollback(rollbackCtx, session)
+			}
 		}
 	}
 

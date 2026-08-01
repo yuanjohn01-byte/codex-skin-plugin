@@ -120,6 +120,14 @@ type OfficialSessionOpener interface {
 	OpenVerifiedOfficialSession(context.Context) (Session, error)
 }
 
+// OfficialRollbackFinalizer completes a failed first-theme transaction after
+// the verified renderer has been restored to the official interface. The live
+// adapter uses it to stop only the exact controlled process, restore Codex's
+// native appearance preference, and reopen an ordinary Codex instance.
+type OfficialRollbackFinalizer interface {
+	FinalizeOfficialRollback(context.Context, Session) error
+}
+
 type ApplyResult struct {
 	OperationID   string
 	ThemePublicID string
