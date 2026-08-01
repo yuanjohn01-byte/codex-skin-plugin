@@ -452,7 +452,10 @@ func atomicReplace(path string, expected, content []byte, info os.FileInfo) erro
 	if err := os.WriteFile(temporary, content, info.Mode().Perm()); err != nil {
 		return err
 	}
-	file, err := os.Open(temporary)
+	// Windows requires a writable handle for FlushFileBuffers (os.File.Sync).
+	// The temporary is private to this operation and is reopened only to make
+	// its contents durable before the platform-specific atomic replacement.
+	file, err := os.OpenFile(temporary, os.O_RDWR, 0)
 	if err != nil {
 		return err
 	}
