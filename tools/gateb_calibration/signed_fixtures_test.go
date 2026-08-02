@@ -60,17 +60,20 @@ func TestCompileSignedDarkLightFixtures(t *testing.T) {
 		if err != nil {
 			t.Fatalf("compile %s: %v", item.ThemePublicID, err)
 		}
-		if compiled.AppearanceMode != wantMode || compiled.TemplateVersion != 5 {
+		if compiled.AppearanceMode != wantMode || compiled.TemplateVersion != engine.TemplateVersion {
 			t.Fatalf(
-				"%s compiled mode/template = %s/%d, want %s/5",
+				"%s compiled mode/template = %s/%d, want %s/%d",
 				item.ThemePublicID,
 				compiled.AppearanceMode,
 				compiled.TemplateVersion,
 				wantMode,
+				engine.TemplateVersion,
 			)
 		}
 		for _, fragment := range []string{
 			"--cs-native-token-contract: 5",
+			"--cs-top-fade-contract: 6",
+			`[class*="_MainContentTopFade_"]`,
 			"--color-token-foreground: var(--cs-text-primary)",
 			"--color-token-description-foreground: var(--cs-text-secondary)",
 			"color-scheme: " + wantMode,

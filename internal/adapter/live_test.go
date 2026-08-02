@@ -34,8 +34,15 @@ func TestRuntimeFunctionsSupportStableAndModuleMainSurfaces(t *testing.T) {
 			t.Fatalf("%s function does not preserve the scoped main marker", name)
 		}
 	}
-	if !strings.Contains(verifyFunction, "const topFadeNeutralized = !topFade ||") {
-		t.Fatal("verify function does not accept an absent official top fade")
+	for _, fragment := range []string{
+		`[class*="_MainContentTopFade_"]`,
+		`--cs-top-fade-contract: 6`,
+		`expectedTemplateVersion < 6`,
+		`topFades.every`,
+	} {
+		if !strings.Contains(verifyFunction, fragment) {
+			t.Fatalf("verify function is missing top-fade contract %q", fragment)
+		}
 	}
 }
 

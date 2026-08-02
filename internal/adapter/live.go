@@ -582,7 +582,13 @@ func (adapter *Live) Verify(ctx context.Context, session engine.Session, compile
 		return engine.RegionReport{}, err
 	}
 	var report engine.RegionReport
-	if err := callFunction(ctx, live.client, verifyFunction, nil, &report); err != nil {
+	if err := callFunction(
+		ctx,
+		live.client,
+		verifyFunction,
+		[]any{compiled.TemplateVersion},
+		&report,
+	); err != nil {
 		return engine.RegionReport{}, err
 	}
 	return report, nil
@@ -1045,7 +1051,7 @@ const captureFunction = `function () {
   };
 }`
 
-const verifyFunction = `function () {
+const verifyFunction = `function (expectedTemplateVersion) {
   const visible = (node) => {
     if (!node) return false;
     const box = node.getBoundingClientRect();
@@ -1157,7 +1163,10 @@ const verifyFunction = `function () {
 			'[class~="text-token-text-secondary"], [class~="text-token-text-tertiary"]'
 		)].filter(visible)
 	);
-  const topFade = document.querySelector(".app-shell-main-content-top-fade");
+  const legacyTopFade = document.querySelector(".app-shell-main-content-top-fade");
+  const topFades = [...document.querySelectorAll(
+    '.app-shell-main-content-top-fade, [class*="_MainContentTopFade_"]'
+  )];
   const composerUtilityBar = main?.querySelector('[class*="_homeUtilityBar_"]') || null;
   const cards = suggestions ? [...suggestions.querySelectorAll("button")].filter(visible) : [];
   const project = main?.querySelector('button[class*="_utilityBarLabel_"]') ||
@@ -1165,11 +1174,21 @@ const verifyFunction = `function () {
     document.querySelector('[data-testid*="project" i]');
   const background = getComputedStyle(document.body).backgroundImage || "";
   const rootBackground = getComputedStyle(root).getPropertyValue("--cs-background-image") || "";
-  const topFadeStyle = topFade ? getComputedStyle(topFade) : null;
-  const topFadeNeutralized = !topFade || Boolean(topFadeStyle &&
-    topFadeStyle.backgroundImage === "none" &&
-    topFadeStyle.backdropFilter === "none" &&
-    Number(topFadeStyle.opacity) === 0);
+  const topFadeContractSafe = expectedTemplateVersion < 6 || Boolean(style &&
+    style.textContent.includes("--cs-top-fade-contract: 6") &&
+    style.textContent.includes('[class*="_MainContentTopFade_"]'));
+  const topFadeNeutralized = expectedTemplateVersion < 6
+    ? (!legacyTopFade || Boolean(getComputedStyle(legacyTopFade) &&
+        getComputedStyle(legacyTopFade).backgroundImage === "none" &&
+        getComputedStyle(legacyTopFade).backdropFilter === "none" &&
+        Number(getComputedStyle(legacyTopFade).opacity) === 0))
+    : (topFadeContractSafe && topFades.every((fade) => {
+        const computed = getComputedStyle(fade);
+        return computed.display === "none" ||
+          (computed.backgroundImage === "none" &&
+            computed.backdropFilter === "none" &&
+            Number(computed.opacity) === 0);
+      }));
   const mainRect = main?.getBoundingClientRect() || null;
   const sidebarRect = sidebar?.getBoundingClientRect() || null;
   const resizeHandle = sidebar?.querySelector('[class~="cursor-col-resize"]') || null;

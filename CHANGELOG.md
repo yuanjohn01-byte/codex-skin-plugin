@@ -11,6 +11,7 @@
 - Expose `theme apply`, offline `theme restore`, and local-only `status` Helper commands through dedicated Paid Alpha Skills and fixed platform wrappers.
 - Keep the wrapper fail closed until the signed Helper bootstrap has installed its fixed out-of-cache recovery-engine copy.
 - Replace the selector-only theme repair with Template v5: exact native appearance backup/pinning, the Codex dropdown token bridge, an engine-owned self-healing renderer controller, Appearance-settings pause/resume, and cleanup on switch/Restore.
+- Add Template v6 compatibility for Codex 26.727's CSS-module main-content top fade and fail verification when either the stable or module fade remains visible.
 - Reject absent late-rendered activity and diff fixtures as `not_present` instead of passing them, and require computed contrast when those fixtures exist.
 - Carry the MIT-licensed lifecycle and native-token mechanisms adapted from Codex Dream Skin v1.5.9 while excluding its artwork and other non-software assets.
 

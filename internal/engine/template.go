@@ -207,7 +207,7 @@ func CompileTheme(verified theme.Verified, stagedRoot string) (CompiledTheme, er
 		surfaceRGB,
 		RootMarkerAttribute,
 	)
-	previousStyle, err := compileTemplateV4(
+	previousStyle, err := compileTemplateV5(
 		manifest.Design.Mode,
 		tokens,
 		sidebarRGB,
@@ -217,7 +217,7 @@ func CompileTheme(verified theme.Verified, stagedRoot string) (CompiledTheme, er
 	if err != nil {
 		return CompiledTheme{}, err
 	}
-	style, err := compileTemplateV5(
+	style, err := compileTemplateV6(
 		manifest.Design.Mode,
 		tokens,
 		sidebarRGB,
@@ -237,6 +237,46 @@ func CompileTheme(verified theme.Verified, stagedRoot string) (CompiledTheme, er
 		LegacyStyleText:   legacyStyle,
 		BackgroundDataURL: imageURL,
 	}, nil
+}
+
+func compileTemplateV6(
+	mode string,
+	tokens theme.Tokens,
+	sidebarRGB string,
+	surfaceRGB string,
+	shadowAlpha string,
+) (string, error) {
+	style, err := compileTemplateV5(mode, tokens, sidebarRGB, surfaceRGB, shadowAlpha)
+	if err != nil {
+		return "", err
+	}
+	const topFadeContract = `
+
+/* Fixed top-fade contract v6. Codex 26.727 moved the native top fade from
+   the stable app-shell class to a CSS-module MainContentTopFade class. Both
+   variants are adapter-owned fixed selectors; theme packages cannot supply
+   selectors or executable CSS. */
+:root[__MARKER__="active"] {
+  --cs-top-fade-contract: 6;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"] :is(.composer-surface-chrome, .thread-scroll-container)
+  )
+  :is(
+    .app-shell-main-content-top-fade,
+    [class*="_MainContentTopFade_"]
+  ) {
+  display: none !important;
+  opacity: 0 !important;
+  background: none !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  transition: none !important;
+}
+`
+	return style + strings.ReplaceAll(topFadeContract, "__MARKER__", RootMarkerAttribute), nil
 }
 
 func compileTemplateV5(
