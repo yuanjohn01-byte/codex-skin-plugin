@@ -49,7 +49,6 @@ GUARDIAN_TOOL_PATHS = {
 }
 SPECIALIZED_WORKFLOW_GROUPS = {
     ".github/workflows/helper-build-spike.yml": {"go", "helper_build"},
-    ".github/workflows/helper-release-candidate.yml": {"paid_alpha_full"},
     ".github/workflows/guardian-lifecycle-spike.yml": {"guardian_lifecycle"},
     ".github/workflows/macos-signing-spike.yml": {"macos_signing"},
     ".github/workflows/windows-signing-spike.yml": {"windows_signing"},

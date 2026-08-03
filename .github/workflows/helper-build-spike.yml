@@ -12,6 +12,66 @@ permissions:
   contents: read
 
 jobs:
+  signed-staging-candidate:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: paid-alpha-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - name: Resolve exact candidate and pinned Bootstrap source
+        id: inputs
+        run: |
+          candidate_sha=$(git rev-parse HEAD)
+          test "$candidate_sha" = "${{ github.sha }}"
+          bootstrap_commit=$(sed -n "s/^bootstrap_build_commit='\([0-9a-f]\{40\}\)'$/\1/p" plugins/codex-skin/scripts/bootstrap-pins.sh)
+          bootstrap_built_at=$(sed -n "s/^bootstrap_built_at='\([^']*\)'$/\1/p" plugins/codex-skin/scripts/bootstrap-pins.sh)
+          test -n "$bootstrap_commit"
+          test -n "$bootstrap_built_at"
+          git merge-base --is-ancestor "$bootstrap_commit" "$candidate_sha"
+          git diff --quiet "$bootstrap_commit" "$candidate_sha" -- \
+            cmd/codex-skin-bootstrap internal/bootstrap internal/bootstrapcli internal/buildinfo \
+            internal/release go.mod go.sum tools/build_bootstrap.py
+          echo "candidate_sha=$candidate_sha" >> "$GITHUB_OUTPUT"
+          echo "bootstrap_commit=$bootstrap_commit" >> "$GITHUB_OUTPUT"
+          echo "bootstrap_built_at=$bootstrap_built_at" >> "$GITHUB_OUTPUT"
+          echo "helper_built_at=$(git show -s --format=%cI "$candidate_sha")" >> "$GITHUB_OUTPUT"
+      - name: Build deterministic Staging Helper and pinned Bootstrap
+        run: |
+          python3 tools/build_helper.py \
+            --commit "${{ steps.inputs.outputs.candidate_sha }}" \
+            --built-at "${{ steps.inputs.outputs.helper_built_at }}" \
+            --api-base-url https://codex-skin-staging.yuanjohn01.workers.dev
+          python3 tools/build_bootstrap.py \
+            --commit "${{ steps.inputs.outputs.bootstrap_commit }}" \
+            --built-at "${{ steps.inputs.outputs.bootstrap_built_at }}"
+          python3 tools/render_bootstrap_pins.py --summary dist/bootstrap/build-summary.json --check
+          python3 tools/create_release_descriptor.py --key-id helper-alpha-2026-08
+      - name: Sign and verify canonical Helper release descriptor
+        env:
+          CODEX_SKIN_HELPER_RELEASE_PRIVATE_KEY_PEM_B64: ${{ secrets.CODEX_SKIN_HELPER_RELEASE_PRIVATE_KEY_PEM_B64 }}
+        run: |
+          go run ./cmd/codex-skin-sign-helper-release \
+            --descriptor dist/helper/helper-release-descriptor.json \
+            --signature dist/helper/helper-release-descriptor.sig
+          test "$(wc -c < dist/helper/helper-release-descriptor.sig)" -eq 64
+          go test ./internal/release ./internal/releasesigning ./internal/bootstrap ./internal/bootstrapcli
+      - name: Upload signed candidate without publishing a Release
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-helper-candidate-${{ steps.inputs.outputs.candidate_sha }}-staging
+          path: |
+            dist/helper
+            dist/bootstrap
+          if-no-files-found: error
+          retention-days: 7
+
   reproducible-cross-build:
     runs-on: ubuntu-latest
     timeout-minutes: 15

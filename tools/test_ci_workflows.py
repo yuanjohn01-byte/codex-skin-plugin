@@ -11,7 +11,6 @@ from ci_scope import select_ci
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOWS = ROOT / ".github" / "workflows"
 BASELINE = WORKFLOWS / "ci.yml"
-STANDALONE_RELEASE_WORKFLOWS = {"helper-release-candidate.yml"}
 
 
 def job_block(workflow: str, job_name: str) -> str:
@@ -162,10 +161,6 @@ def main() -> int:
             raise AssertionError(
                 f"{path.name} bypasses the central automatic selector"
             )
-        if path.name in STANDALONE_RELEASE_WORKFLOWS:
-            if "  workflow_call:" in workflow or "environment: paid-alpha-release" not in workflow:
-                raise AssertionError(f"{path.name} lost its isolated release boundary")
-            continue
         if "  workflow_call:" not in workflow:
             raise AssertionError(f"{path.name} cannot be called by central CI")
         expected_group = f"group: {path.stem}-${{{{ github.event_name }}}}-"
