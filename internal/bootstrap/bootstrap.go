@@ -55,6 +55,7 @@ type Config struct {
 	SelfTester         SelfTester
 	SelfTestTimeout    time.Duration
 	beforeCurrentWrite func() error
+	syncDirectory      func(string) error
 }
 
 type Result struct {
@@ -222,7 +223,15 @@ func Install(ctx context.Context, config Config) (Result, error) {
 		Filename:      selection.Artifact.Filename,
 		SHA256:        selection.Artifact.SHA256,
 	}
-	recoveryTransaction, err := newRecoveryTransaction(root, executable, platform, selection.Artifact.SHA256)
+	directorySync := config.syncDirectory
+	if directorySync == nil {
+		directorySync = syncDirectory
+	}
+	currentSnapshot, err := captureRecoveryFile(filepath.Join(binRoot, "current.json"), 16*1024)
+	if err != nil {
+		return Result{}, err
+	}
+	recoveryTransaction, err := newRecoveryTransaction(root, executable, platform, selection.Artifact.SHA256, directorySync)
 	if err != nil {
 		return Result{}, err
 	}
@@ -237,11 +246,21 @@ func Install(ctx context.Context, config Config) (Result, error) {
 			return Result{}, err
 		}
 	}
-	if err := writeCurrent(binRoot, pointer); err != nil {
-		if rollbackErr := recoveryTransaction.rollback(); rollbackErr != nil {
-			return Result{}, fmt.Errorf("%w; recovery rollback failed: %v", err, rollbackErr)
+	currentReplaced, currentErr := writeCurrent(binRoot, pointer, directorySync)
+	if currentErr != nil {
+		var rollbackFailures []error
+		if currentReplaced {
+			if rollbackErr := restoreRecoveryFile(currentSnapshot, directorySync); rollbackErr != nil {
+				rollbackFailures = append(rollbackFailures, fmt.Errorf("current rollback failed: %w", rollbackErr))
+			}
 		}
-		return Result{}, err
+		if rollbackErr := recoveryTransaction.rollback(); rollbackErr != nil {
+			rollbackFailures = append(rollbackFailures, fmt.Errorf("recovery rollback failed: %w", rollbackErr))
+		}
+		if len(rollbackFailures) != 0 {
+			return Result{}, errors.Join(append([]error{currentErr}, rollbackFailures...)...)
+		}
+		return Result{}, currentErr
 	}
 	recoveryTransaction.commit()
 	recoveryEntry := recoveryTransaction.entry
@@ -311,15 +330,15 @@ func readCurrent(binRoot, expectedPlatform string) (currentPointer, bool, error)
 	return pointer, true, nil
 }
 
-func writeCurrent(binRoot string, pointer currentPointer) error {
+func writeCurrent(binRoot string, pointer currentPointer, directorySync func(string) error) (bool, error) {
 	content, err := json.Marshal(pointer)
 	if err != nil {
-		return fmt.Errorf("%w: encode: %v", ErrCurrentInvalid, err)
+		return false, fmt.Errorf("%w: encode: %v", ErrCurrentInvalid, err)
 	}
 	content = append(content, '\n')
 	temporary, err := os.CreateTemp(binRoot, ".current-")
 	if err != nil {
-		return fmt.Errorf("%w: create pointer: %v", ErrUnsafePath, err)
+		return false, fmt.Errorf("%w: create pointer: %v", ErrUnsafePath, err)
 	}
 	temporaryPath := temporary.Name()
 	closed := false
@@ -330,22 +349,25 @@ func writeCurrent(binRoot string, pointer currentPointer) error {
 		_ = os.Remove(temporaryPath)
 	}()
 	if err := temporary.Chmod(0o600); err != nil {
-		return fmt.Errorf("%w: pointer permissions: %v", ErrUnsafePath, err)
+		return false, fmt.Errorf("%w: pointer permissions: %v", ErrUnsafePath, err)
 	}
 	if _, err := temporary.Write(content); err != nil {
-		return fmt.Errorf("%w: write pointer: %v", ErrUnsafePath, err)
+		return false, fmt.Errorf("%w: write pointer: %v", ErrUnsafePath, err)
 	}
 	if err := temporary.Sync(); err != nil {
-		return fmt.Errorf("%w: sync pointer: %v", ErrUnsafePath, err)
+		return false, fmt.Errorf("%w: sync pointer: %v", ErrUnsafePath, err)
 	}
 	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("%w: close pointer: %v", ErrUnsafePath, err)
+		return false, fmt.Errorf("%w: close pointer: %v", ErrUnsafePath, err)
 	}
 	closed = true
 	if err := atomicReplace(temporaryPath, filepath.Join(binRoot, "current.json")); err != nil {
-		return fmt.Errorf("%w: activate pointer: %v", ErrUnsafePath, err)
+		return false, fmt.Errorf("%w: activate pointer: %v", ErrUnsafePath, err)
 	}
-	return syncDirectory(binRoot)
+	if err := directorySync(binRoot); err != nil {
+		return true, fmt.Errorf("%w: persist pointer: %v", ErrUnsafePath, err)
+	}
+	return true, nil
 }
 
 func writeExecutable(path string, content []byte) error {

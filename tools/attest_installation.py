@@ -175,8 +175,7 @@ def main() -> int:
         or version.get("pluginVersion") != plugin_version
         or version.get("helperReleaseTag") != expected_tag
         or version.get("apiOrigin") != args.expected_api_origin
-        or not isinstance(version.get("buildCommit"), str)
-        or GIT_SHA.fullmatch(str(version.get("buildCommit"))) is None
+        or version.get("buildCommit") != args.candidate_ref
     ):
         raise ValueError("Helper version attestation does not match the installed closure")
 

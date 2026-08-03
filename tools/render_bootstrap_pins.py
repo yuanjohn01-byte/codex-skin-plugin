@@ -16,8 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SUMMARY = ROOT / "dist" / "bootstrap" / "build-summary.json"
 SHELL_OUTPUT = ROOT / "plugins" / "codex-skin" / "scripts" / "bootstrap-pins.sh"
 POWERSHELL_OUTPUT = ROOT / "plugins" / "codex-skin" / "scripts" / "bootstrap-pins.ps1"
-VERSION = "0.1.0-paid-alpha"
-RELEASE_TAG = "helper-v0.1.0-paid-alpha.1"
+VERSION = "0.1.0-paid-alpha.1"
+RELEASE_TAG = "helper-v0.1.0-paid-alpha.2"
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 EXPECTED = {
     "macos-arm64": f"codex-skin-bootstrap_{VERSION}_macos_arm64",

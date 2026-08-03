@@ -42,7 +42,7 @@ The candidate Skills expose version, apply, local status, and offline restore. O
 
 The Helper's API origin is a build-time value and is intentionally empty in ordinary source builds. This prevents an installed Plugin from accepting an arbitrary server URL or depending on an undeployed endpoint. Staging/Production artifacts must pin the approved HTTPS origin during their release build and pass the corresponding environment gate.
 
-The Founder Staging closure uses the immutable Helper revision `0.1.0-paid-alpha.1` and its Staging API origin. It must never be republished with Production bytes under the same tag. Production promotion requires a higher immutable Helper revision, the approved Production origin, and the release gate for that exact artifact; the Plugin version remains `0.1.0-paid-alpha`.
+The Founder Staging repair closure uses the immutable Helper revision `0.1.0-paid-alpha.2`, Bootstrap revision `0.1.0-paid-alpha.1`, and its Staging API origin. The earlier signed `.1` Helper candidate remains immutable and is not overwritten. Neither Staging revision may be republished with Production bytes under the same tag or filename. Production promotion requires higher immutable Helper and Bootstrap revisions, the approved Production origin, and the release gate for those exact artifacts; the Plugin version remains `0.1.0-paid-alpha`.
 
 ## Helper development
 

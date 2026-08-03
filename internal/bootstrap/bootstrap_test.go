@@ -324,6 +324,78 @@ func TestCurrentActivationFailureRestoresPreviousRecoveryEngine(t *testing.T) {
 	}
 }
 
+func TestPostReplaceSyncFailuresRestorePreviousCurrentAndRecovery(t *testing.T) {
+	for _, failureCall := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("directory sync call %d", failureCall), func(t *testing.T) {
+			temporary := t.TempDir()
+			root := filepath.Join(temporary, "application-data")
+			cache := filepath.Join(temporary, "plugin-cache")
+			if err := os.Mkdir(cache, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			key := newSigningFixture(t)
+			source := &memorySource{}
+			firstTag := key.addRelease(t, source, "0.1.0-s3", []byte("first durable helper"))
+			secondTag := key.addRelease(t, source, "0.1.0-s4", []byte("second durable helper"))
+			tester := &fakeSelfTester{}
+			first, err := Install(context.Background(), configFor(root, cache, firstTag, source, key, tester))
+			if err != nil {
+				t.Fatal(err)
+			}
+			currentPath := filepath.Join(root, "bin", "current.json")
+			recoveryBinaryPath := filepath.Join(root, "recovery", "engine", "codex-skin")
+			recoveryEntryPath := filepath.Join(root, "recovery", "restore.command")
+			currentBefore, err := os.ReadFile(currentPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recoveryBinaryBefore, err := os.ReadFile(recoveryBinaryPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recoveryEntryBefore, err := os.ReadFile(recoveryEntryPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			failed := configFor(root, cache, secondTag, source, key, tester)
+			calls := 0
+			injected := errors.New("injected post-replace directory sync failure")
+			failed.syncDirectory = func(path string) error {
+				calls++
+				if calls == failureCall {
+					return injected
+				}
+				return syncDirectory(path)
+			}
+			if _, err := Install(context.Background(), failed); err == nil {
+				t.Fatal("post-replace directory sync failure was accepted")
+			}
+			currentAfter, err := os.ReadFile(currentPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recoveryBinaryAfter, err := os.ReadFile(recoveryBinaryPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recoveryEntryAfter, err := os.ReadFile(recoveryEntryPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(currentBefore, currentAfter) ||
+				!bytes.Equal(recoveryBinaryBefore, recoveryBinaryAfter) ||
+				!bytes.Equal(recoveryEntryBefore, recoveryEntryAfter) {
+				t.Fatal("post-replace failure left current and recovery on different closures")
+			}
+			reused, err := Install(context.Background(), configFor(root, cache, firstTag, source, key, tester))
+			if err != nil || !reused.Reused || reused.Executable != first.Executable {
+				t.Fatalf("last-known-good closure was not reusable: %#v, %v", reused, err)
+			}
+		})
+	}
+}
+
 func TestBadArtifactAndOverlappingPathsFailBeforeActivation(t *testing.T) {
 	temporary := t.TempDir()
 	root := filepath.Join(temporary, "application-data")

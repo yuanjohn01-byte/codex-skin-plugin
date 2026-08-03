@@ -18,18 +18,19 @@ type recoverySnapshot struct {
 }
 
 type recoveryTransaction struct {
-	binary       string
-	entry        string
-	binaryBytes  []byte
-	entryBytes   []byte
-	oldBinary    recoverySnapshot
-	oldEntry     recoverySnapshot
-	activatedBin bool
-	activatedAll bool
+	binary        string
+	entry         string
+	binaryBytes   []byte
+	entryBytes    []byte
+	oldBinary     recoverySnapshot
+	oldEntry      recoverySnapshot
+	activatedBin  bool
+	activatedAll  bool
+	directorySync func(string) error
 }
 
 func installRecovery(root, helper, platform string) (string, error) {
-	transaction, err := newRecoveryTransaction(root, helper, platform, "")
+	transaction, err := newRecoveryTransaction(root, helper, platform, "", syncDirectory)
 	if err != nil {
 		return "", err
 	}
@@ -41,7 +42,7 @@ func installRecovery(root, helper, platform string) (string, error) {
 }
 
 func installRecoveryVerified(root, helper, platform, expectedSHA256 string) (string, error) {
-	transaction, err := newRecoveryTransaction(root, helper, platform, expectedSHA256)
+	transaction, err := newRecoveryTransaction(root, helper, platform, expectedSHA256, syncDirectory)
 	if err != nil {
 		return "", err
 	}
@@ -52,7 +53,7 @@ func installRecoveryVerified(root, helper, platform, expectedSHA256 string) (str
 	return transaction.entry, nil
 }
 
-func newRecoveryTransaction(root, helper, platform, expectedSHA256 string) (*recoveryTransaction, error) {
+func newRecoveryTransaction(root, helper, platform, expectedSHA256 string, directorySync func(string) error) (*recoveryTransaction, error) {
 	recoveryRoot := filepath.Join(root, "recovery")
 	engineRoot := filepath.Join(recoveryRoot, "engine")
 	if err := ensureSecureDirectory(recoveryRoot, 0o700); err != nil {
@@ -91,34 +92,41 @@ func newRecoveryTransaction(root, helper, platform, expectedSHA256 string) (*rec
 	}
 	return &recoveryTransaction{
 		binary: binary, entry: entry, binaryBytes: helperBytes, entryBytes: entryContent,
-		oldBinary: oldBinary, oldEntry: oldEntry,
+		oldBinary: oldBinary, oldEntry: oldEntry, directorySync: directorySync,
 	}, nil
 }
 
 func (transaction *recoveryTransaction) activate() error {
-	if err := writeRecoveryFile(transaction.binary, transaction.binaryBytes); err != nil {
+	replaced, err := writeRecoveryFile(transaction.binary, transaction.binaryBytes, transaction.directorySync)
+	transaction.activatedBin = replaced
+	if err != nil {
+		if replaced {
+			if rollbackErr := transaction.rollback(); rollbackErr != nil {
+				return fmt.Errorf("%w; rollback failed: %v", err, rollbackErr)
+			}
+		}
 		return err
 	}
-	transaction.activatedBin = true
-	if err := writeRecoveryFile(transaction.entry, transaction.entryBytes); err != nil {
+	replaced, err = writeRecoveryFile(transaction.entry, transaction.entryBytes, transaction.directorySync)
+	transaction.activatedAll = replaced
+	if err != nil {
 		if rollbackErr := transaction.rollback(); rollbackErr != nil {
 			return fmt.Errorf("%w; rollback failed: %v", err, rollbackErr)
 		}
 		return err
 	}
-	transaction.activatedAll = true
 	return nil
 }
 
 func (transaction *recoveryTransaction) rollback() error {
 	var failures []error
 	if transaction.activatedAll {
-		if err := restoreRecoveryFile(transaction.oldEntry); err != nil {
+		if err := restoreRecoveryFile(transaction.oldEntry, transaction.directorySync); err != nil {
 			failures = append(failures, err)
 		}
 	}
 	if transaction.activatedBin {
-		if err := restoreRecoveryFile(transaction.oldBinary); err != nil {
+		if err := restoreRecoveryFile(transaction.oldBinary, transaction.directorySync); err != nil {
 			failures = append(failures, err)
 		}
 	}
@@ -148,9 +156,10 @@ func captureRecoveryFile(path string, maxBytes int64) (recoverySnapshot, error) 
 	return recoverySnapshot{path: path, existed: true, content: content}, nil
 }
 
-func restoreRecoveryFile(snapshot recoverySnapshot) error {
+func restoreRecoveryFile(snapshot recoverySnapshot, directorySync func(string) error) error {
 	if snapshot.existed {
-		return writeRecoveryFile(snapshot.path, snapshot.content)
+		_, err := writeRecoveryFile(snapshot.path, snapshot.content, directorySync)
+		return err
 	}
 	if err := rejectSymlinkIfPresent(snapshot.path); err != nil {
 		return err
@@ -158,7 +167,7 @@ func restoreRecoveryFile(snapshot recoverySnapshot) error {
 	if err := os.Remove(snapshot.path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("%w: remove recovery file during rollback", ErrUnsafePath)
 	}
-	return syncDirectory(filepath.Dir(snapshot.path))
+	return directorySync(filepath.Dir(snapshot.path))
 }
 
 func readRegularFile(path string, maxBytes int64) ([]byte, error) {
@@ -179,13 +188,13 @@ func readRegularFile(path string, maxBytes int64) ([]byte, error) {
 	return content, nil
 }
 
-func writeRecoveryFile(destination string, content []byte) error {
+func writeRecoveryFile(destination string, content []byte, directorySync func(string) error) (bool, error) {
 	if err := rejectSymlinkIfPresent(destination); err != nil {
-		return err
+		return false, err
 	}
 	temporary, err := os.CreateTemp(filepath.Dir(destination), ".recovery-")
 	if err != nil {
-		return fmt.Errorf("%w: create recovery file", ErrUnsafePath)
+		return false, fmt.Errorf("%w: create recovery file", ErrUnsafePath)
 	}
 	temporaryPath := temporary.Name()
 	closed := false
@@ -196,20 +205,23 @@ func writeRecoveryFile(destination string, content []byte) error {
 		_ = os.Remove(temporaryPath)
 	}()
 	if err := temporary.Chmod(0o700); err != nil {
-		return fmt.Errorf("%w: recovery file permissions", ErrUnsafePath)
+		return false, fmt.Errorf("%w: recovery file permissions", ErrUnsafePath)
 	}
 	if _, err := temporary.Write(content); err != nil {
-		return fmt.Errorf("%w: write recovery file", ErrUnsafePath)
+		return false, fmt.Errorf("%w: write recovery file", ErrUnsafePath)
 	}
 	if err := temporary.Sync(); err != nil {
-		return fmt.Errorf("%w: sync recovery file", ErrUnsafePath)
+		return false, fmt.Errorf("%w: sync recovery file", ErrUnsafePath)
 	}
 	if err := temporary.Close(); err != nil {
-		return fmt.Errorf("%w: close recovery file", ErrUnsafePath)
+		return false, fmt.Errorf("%w: close recovery file", ErrUnsafePath)
 	}
 	closed = true
 	if err := atomicReplace(temporaryPath, destination); err != nil {
-		return fmt.Errorf("%w: replace recovery file", ErrUnsafePath)
+		return false, fmt.Errorf("%w: replace recovery file", ErrUnsafePath)
 	}
-	return syncDirectory(filepath.Dir(destination))
+	if err := directorySync(filepath.Dir(destination)); err != nil {
+		return true, fmt.Errorf("%w: persist recovery file: %v", ErrUnsafePath, err)
+	}
+	return true, nil
 }

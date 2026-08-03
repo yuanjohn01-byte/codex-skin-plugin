@@ -16,7 +16,8 @@ import attest_installation
 ROOT = Path(__file__).resolve().parents[1]
 CANDIDATE = "a" * 40
 BOOTSTRAP_COMMIT = "b" * 40
-HELPER_COMMIT = "c" * 40
+HELPER_COMMIT = CANDIDATE
+MISMATCHED_HELPER_COMMIT = "c" * 40
 API_ORIGIN = "https://codex-skin-staging.example.invalid"
 
 
@@ -30,31 +31,31 @@ def main() -> int:
         temporary_root = Path(temporary)
         plugin = temporary_root / "plugin"
         shutil.copytree(ROOT / "plugins" / "codex-skin", plugin)
-        launcher = plugin / "scripts" / ".bootstrap" / "codex-skin-bootstrap_0.1.0-paid-alpha_macos_arm64"
+        launcher = plugin / "scripts" / ".bootstrap" / "codex-skin-bootstrap_0.1.0-paid-alpha.1_macos_arm64"
         launcher.parent.mkdir(mode=0o700)
         executable(launcher, "#!/bin/sh\nexit 0\n")
         launcher_sha = hashlib.sha256(launcher.read_bytes()).hexdigest()
         (plugin / "scripts" / "bootstrap-pins.sh").write_text(
             "# Generated fixture pins.\n"
-            "bootstrap_release_tag='helper-v0.1.0-paid-alpha.1'\n"
-            "bootstrap_version='0.1.0-paid-alpha'\n"
+            "bootstrap_release_tag='helper-v0.1.0-paid-alpha.2'\n"
+            "bootstrap_version='0.1.0-paid-alpha.1'\n"
             f"bootstrap_build_commit='{BOOTSTRAP_COMMIT}'\n"
             "bootstrap_built_at='2026-08-03T00:00:00Z'\n"
             "case \"$(uname -m)\" in\n"
             "  arm64)\n"
-            "    bootstrap_filename='codex-skin-bootstrap_0.1.0-paid-alpha_macos_arm64'\n"
+            "    bootstrap_filename='codex-skin-bootstrap_0.1.0-paid-alpha.1_macos_arm64'\n"
             f"    bootstrap_sha256='{launcher_sha}'\n"
             "    ;;\n"
             "  x86_64)\n"
-            "    bootstrap_filename='codex-skin-bootstrap_0.1.0-paid-alpha_macos_x64'\n"
+            "    bootstrap_filename='codex-skin-bootstrap_0.1.0-paid-alpha.1_macos_x64'\n"
             f"    bootstrap_sha256='{'d' * 64}'\n"
             "    ;;\n"
             "esac\n",
             encoding="utf-8",
         )
         application = temporary_root / "application"
-        helper_name = "codex-skin-helper_0.1.0-paid-alpha.1_macos_arm64"
-        helper = application / "bin" / "0.1.0-paid-alpha.1" / helper_name
+        helper_name = "codex-skin-helper_0.1.0-paid-alpha.2_macos_arm64"
+        helper = application / "bin" / "0.1.0-paid-alpha.2" / helper_name
         helper.parent.mkdir(parents=True)
         executable(
             helper,
@@ -68,9 +69,9 @@ def main() -> int:
                     "status": "completed",
                     "data": {
                         "command": "version",
-                        "helperVersion": "0.1.0-paid-alpha.1",
+                        "helperVersion": "0.1.0-paid-alpha.2",
                         "pluginVersion": "0.1.0-paid-alpha",
-                        "helperReleaseTag": "helper-v0.1.0-paid-alpha.1",
+                        "helperReleaseTag": "helper-v0.1.0-paid-alpha.2",
                         "apiOrigin": API_ORIGIN,
                         "buildCommit": HELPER_COMMIT,
                         "builtAt": "2026-08-03T00:00:00Z",
@@ -86,7 +87,7 @@ def main() -> int:
             json.dumps(
                 {
                     "schemaVersion": 1,
-                    "helperVersion": "0.1.0-paid-alpha.1",
+                    "helperVersion": "0.1.0-paid-alpha.2",
                     "platform": "macos-arm64",
                     "filename": helper_name,
                     "sha256": helper_sha,
@@ -127,7 +128,23 @@ def main() -> int:
         if failed.returncode == 0 or "recovery engine differs" not in failed.stderr:
             raise AssertionError("recovery engine drift was not rejected")
 
-    print("Installation attestation tests passed (exact closure + recovery drift).")
+        executable(
+            helper,
+            helper.read_text(encoding="utf-8").replace(
+                HELPER_COMMIT, MISMATCHED_HELPER_COMMIT
+            ),
+        )
+        helper_sha = hashlib.sha256(helper.read_bytes()).hexdigest()
+        current_path = application / "bin" / "current.json"
+        current = json.loads(current_path.read_text(encoding="utf-8"))
+        current["sha256"] = helper_sha
+        current_path.write_text(json.dumps(current) + "\n", encoding="utf-8")
+        shutil.copy2(helper, recovery)
+        failed = subprocess.run(command, check=False, capture_output=True, text=True)
+        if failed.returncode == 0 or "version attestation does not match" not in failed.stderr:
+            raise AssertionError("Helper build commit drift was not rejected")
+
+    print("Installation attestation tests passed (exact closure + recovery/build drift).")
     return 0
 
 
