@@ -2,7 +2,7 @@
   "artifacts": [
     {
       "destination": "contracts/helper-protocol-v1.schema.json",
-      "sha256": "26e3c97991c69ea051b1035dcffdb428066009ca8b974b1de36bd216568d490d",
+      "sha256": "45b3c23052d40a8de27706c628dd87a570f82f940a4cef112d5362e1f2d93044",
       "source": "codex-skin/contracts/public/helper-protocol-v1.schema.json"
     },
     {
@@ -46,9 +46,24 @@
       "source": "codex-skin/contracts/public/theme-verification-keys-v1.json"
     },
     {
+      "destination": "contracts/helper-release-verification-keyset-v1.schema.json",
+      "sha256": "67be848ba72810a603f8667a31c46dd4d6bc500de2e6f4a98f5d0c55036ca16d",
+      "source": "codex-skin/contracts/public/helper-release-verification-keyset-v1.schema.json"
+    },
+    {
+      "destination": "contracts/helper-release-verification-keys-v1.json",
+      "sha256": "3f64328d5f73804aeef2f37cb1bbc0a83ac6e80d2d49bc29edbd1d5aa19e845b",
+      "source": "codex-skin/contracts/public/helper-release-verification-keys-v1.json"
+    },
+    {
       "destination": "internal/theme/trusted-verification-keys-v1.json",
       "sha256": "e205c2b2df7e4cc72875df3e110f1ce188e587cfb48fabe70a8e80b8fff0c0cb",
       "source": "codex-skin/contracts/public/theme-verification-keys-v1.json"
+    },
+    {
+      "destination": "internal/release/trusted-verification-keys-v1.json",
+      "sha256": "3f64328d5f73804aeef2f37cb1bbc0a83ac6e80d2d49bc29edbd1d5aa19e845b",
+      "source": "codex-skin/contracts/public/helper-release-verification-keys-v1.json"
     },
     {
       "destination": "fixtures/free-test-theme-v1/fixture-policy-v1.json",

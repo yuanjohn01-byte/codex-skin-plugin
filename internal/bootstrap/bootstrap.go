@@ -44,15 +44,17 @@ type SelfTester interface {
 }
 
 type Config struct {
-	Root            string
-	PluginCache     string
-	ReleaseTag      string
-	RuntimeGOOS     string
-	RuntimeGOARCH   string
-	Source          Source
-	TrustedKeys     map[string]ed25519.PublicKey
-	SelfTester      SelfTester
-	SelfTestTimeout time.Duration
+	Root               string
+	PluginCache        string
+	ReleaseTag         string
+	RuntimeGOOS        string
+	RuntimeGOARCH      string
+	Source             Source
+	TrustedKeys        map[string]ed25519.PublicKey
+	TrustedKeyset      *releasecontract.VerificationKeyset
+	SelfTester         SelfTester
+	SelfTestTimeout    time.Duration
+	beforeCurrentWrite func() error
 }
 
 type Result struct {
@@ -60,6 +62,8 @@ type Result struct {
 	Executable      string
 	RecoveryEntry   string
 	HelperVersion   string
+	HelperSHA256    string
+	RecoverySHA256  string
 	PreviousVersion string
 	Reused          bool
 }
@@ -73,7 +77,8 @@ type currentPointer struct {
 }
 
 func Install(ctx context.Context, config Config) (Result, error) {
-	if config.Source == nil || config.SelfTester == nil || len(config.TrustedKeys) == 0 {
+	if config.Source == nil || config.SelfTester == nil ||
+		(len(config.TrustedKeys) == 0 && config.TrustedKeyset == nil) {
 		return Result{}, fmt.Errorf("%w: incomplete bootstrap configuration", ErrConfiguration)
 	}
 	goos := config.RuntimeGOOS
@@ -131,14 +136,16 @@ func Install(ctx context.Context, config Config) (Result, error) {
 	if len(signature) != ed25519.SignatureSize {
 		return Result{}, fmt.Errorf("%w: signature length", ErrDownload)
 	}
-	selection, err := releasecontract.SelectVerified(
-		descriptorBytes,
-		signature,
-		config.TrustedKeys,
-		currentVersion,
-		goos,
-		goarch,
-	)
+	var selection releasecontract.Selection
+	if config.TrustedKeyset != nil {
+		selection, err = releasecontract.SelectVerifiedWithKeyset(
+			descriptorBytes, signature, *config.TrustedKeyset, currentVersion, goos, goarch,
+		)
+	} else {
+		selection, err = releasecontract.SelectVerified(
+			descriptorBytes, signature, config.TrustedKeys, currentVersion, goos, goarch,
+		)
+	}
 	if err != nil {
 		return Result{}, err
 	}
@@ -161,13 +168,14 @@ func Install(ctx context.Context, config Config) (Result, error) {
 		if err := verifyExisting(ctx, executable, selection.Artifact, config.SelfTester, timeout, platform); err != nil {
 			return Result{}, err
 		}
-		recoveryEntry, err := installRecovery(root, executable, platform)
+		recoveryEntry, err := installRecoveryVerified(root, executable, platform, selection.Artifact.SHA256)
 		if err != nil {
 			return Result{}, err
 		}
 		return Result{
 			Root: root, Executable: executable, RecoveryEntry: recoveryEntry,
-			HelperVersion: current.HelperVersion, PreviousVersion: currentVersion, Reused: true,
+			HelperVersion: current.HelperVersion, HelperSHA256: selection.Artifact.SHA256,
+			RecoverySHA256: selection.Artifact.SHA256, PreviousVersion: currentVersion, Reused: true,
 		}, nil
 	}
 
@@ -214,16 +222,33 @@ func Install(ctx context.Context, config Config) (Result, error) {
 		Filename:      selection.Artifact.Filename,
 		SHA256:        selection.Artifact.SHA256,
 	}
-	recoveryEntry, err := installRecovery(root, executable, platform)
+	recoveryTransaction, err := newRecoveryTransaction(root, executable, platform, selection.Artifact.SHA256)
 	if err != nil {
 		return Result{}, err
 	}
-	if err := writeCurrent(binRoot, pointer); err != nil {
+	if err := recoveryTransaction.activate(); err != nil {
 		return Result{}, err
 	}
+	if config.beforeCurrentWrite != nil {
+		if err := config.beforeCurrentWrite(); err != nil {
+			if rollbackErr := recoveryTransaction.rollback(); rollbackErr != nil {
+				return Result{}, fmt.Errorf("%w; recovery rollback failed: %v", err, rollbackErr)
+			}
+			return Result{}, err
+		}
+	}
+	if err := writeCurrent(binRoot, pointer); err != nil {
+		if rollbackErr := recoveryTransaction.rollback(); rollbackErr != nil {
+			return Result{}, fmt.Errorf("%w; recovery rollback failed: %v", err, rollbackErr)
+		}
+		return Result{}, err
+	}
+	recoveryTransaction.commit()
+	recoveryEntry := recoveryTransaction.entry
 	return Result{
 		Root: root, Executable: executable, RecoveryEntry: recoveryEntry,
-		HelperVersion: pointer.HelperVersion, PreviousVersion: currentVersion,
+		HelperVersion: pointer.HelperVersion, HelperSHA256: pointer.SHA256,
+		RecoverySHA256: pointer.SHA256, PreviousVersion: currentVersion,
 	}, nil
 }
 

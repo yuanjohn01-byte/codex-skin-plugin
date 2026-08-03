@@ -30,9 +30,15 @@ FIXTURE_PATHS = {
     "tools/validate_public_repo.py",
 }
 HELPER_TOOL_PATHS = {
+    "tools/attest_installation.py",
+    "tools/build_bootstrap.py",
     "tools/build_helper.py",
     "tools/create_release_descriptor.py",
+    "tools/render_bootstrap_pins.py",
+    "tools/test_bootstrap_builds.py",
     "tools/test_helper_builds.py",
+    "tools/test_installation_attestation.py",
+    "tools/test_plugin_bootstrap_entry.py",
     "tools/test_release_descriptor.py",
 }
 GUARDIAN_TOOL_PATHS = {
@@ -43,6 +49,7 @@ GUARDIAN_TOOL_PATHS = {
 }
 SPECIALIZED_WORKFLOW_GROUPS = {
     ".github/workflows/helper-build-spike.yml": {"go", "helper_build"},
+    ".github/workflows/helper-release-candidate.yml": {"paid_alpha_full"},
     ".github/workflows/guardian-lifecycle-spike.yml": {"guardian_lifecycle"},
     ".github/workflows/macos-signing-spike.yml": {"macos_signing"},
     ".github/workflows/windows-signing-spike.yml": {"windows_signing"},

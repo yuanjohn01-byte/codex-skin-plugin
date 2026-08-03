@@ -6,7 +6,7 @@ description: Apply a published Codex Skin theme by its six-digit theme ID. Use w
 # Apply a Codex Skin theme
 
 1. Obtain exactly one six-digit theme ID from the user or the selected Codex Skin catalog item. Never invent an ID.
-2. Resolve the Plugin root from this Skill's installed path, then use only the platform wrapper inside `scripts/`:
+2. Resolve the Plugin root from this Skill's installed path, then use only the platform wrapper inside `scripts/`. On the first apply or a verified upgrade, this same fixed wrapper installs the signed Helper automatically; never download or copy a Helper manually:
    - macOS: `scripts/codex-skin.sh theme apply THEME_ID --json`
    - Windows: `scripts/codex-skin.ps1 theme apply THEME_ID --json`
 3. Do not call Codex Skin HTTP endpoints directly and do not accept a custom API origin, download URL, package path, selector, CSS, JavaScript, or shell fragment.

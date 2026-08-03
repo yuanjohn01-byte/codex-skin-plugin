@@ -61,12 +61,15 @@ type Runtime struct {
 }
 
 type versionData struct {
-	Command         string `json:"command"`
-	HelperVersion   string `json:"helperVersion"`
-	ProtocolVersion int    `json:"protocolVersion"`
-	GoVersion       string `json:"goVersion"`
-	BuildCommit     string `json:"buildCommit"`
-	BuiltAt         string `json:"builtAt"`
+	Command          string `json:"command"`
+	HelperVersion    string `json:"helperVersion"`
+	PluginVersion    string `json:"pluginVersion"`
+	HelperReleaseTag string `json:"helperReleaseTag"`
+	APIOrigin        string `json:"apiOrigin"`
+	ProtocolVersion  int    `json:"protocolVersion"`
+	GoVersion        string `json:"goVersion"`
+	BuildCommit      string `json:"buildCommit"`
+	BuiltAt          string `json:"builtAt"`
 }
 
 type doctorData struct {
@@ -188,12 +191,15 @@ func Run(args []string, stdout, stderr io.Writer, environment Runtime) int {
 	switch args[0] {
 	case "version":
 		data := versionData{
-			Command:         "version",
-			HelperVersion:   buildinfo.Version,
-			ProtocolVersion: buildinfo.ProtocolVersion,
-			GoVersion:       goVersion,
-			BuildCommit:     buildinfo.Commit,
-			BuiltAt:         buildinfo.BuiltAt,
+			Command:          "version",
+			HelperVersion:    buildinfo.Version,
+			PluginVersion:    buildinfo.PluginVersion,
+			HelperReleaseTag: buildinfo.HelperReleaseTag,
+			APIOrigin:        buildinfo.APIBaseURL,
+			ProtocolVersion:  buildinfo.ProtocolVersion,
+			GoVersion:        goVersion,
+			BuildCommit:      buildinfo.Commit,
+			BuiltAt:          buildinfo.BuiltAt,
 		}
 		if jsonMode {
 			return writeJSON(stdout, stderr, protocol.Success(data))

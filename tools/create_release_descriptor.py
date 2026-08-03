@@ -15,7 +15,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SUMMARY = ROOT / "dist" / "helper" / "build-summary.json"
-DEFAULT_OUTPUT = ROOT / "dist" / "helper" / "release-descriptor.json"
+DEFAULT_OUTPUT = ROOT / "dist" / "helper" / "helper-release-descriptor.json"
 PLATFORMS = ("macos-arm64", "macos-x64", "windows-x64")
 STRICT_SEMVER = re.compile(
     r"^(0|[1-9][0-9]*)\."

@@ -231,6 +231,19 @@
           "type": "string",
           "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
         },
+        "pluginVersion": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+        },
+        "helperReleaseTag": {
+          "type": "string",
+          "pattern": "^helper-v[0-9A-Za-z.-]+$",
+          "maxLength": 72
+        },
+        "apiOrigin": {
+          "type": "string",
+          "maxLength": 256
+        },
         "protocolVersion": {
           "const": 1
         },
