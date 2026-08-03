@@ -24,7 +24,7 @@ from build_helper import (
 
 
 BOOTSTRAP_VERSION = "0.1.0-paid-alpha"
-HELPER_RELEASE_TAG = "helper-v0.1.0-paid-alpha"
+HELPER_RELEASE_TAG = "helper-v0.1.0-paid-alpha.1"
 DEFAULT_OUTPUT = ROOT / "dist" / "bootstrap"
 TARGETS = (
     Target(

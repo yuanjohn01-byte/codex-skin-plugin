@@ -42,6 +42,8 @@ The candidate Skills expose version, apply, local status, and offline restore. O
 
 The Helper's API origin is a build-time value and is intentionally empty in ordinary source builds. This prevents an installed Plugin from accepting an arbitrary server URL or depending on an undeployed endpoint. Staging/Production artifacts must pin the approved HTTPS origin during their release build and pass the corresponding environment gate.
 
+The Founder Staging closure uses the immutable Helper revision `0.1.0-paid-alpha.1` and its Staging API origin. It must never be republished with Production bytes under the same tag. Production promotion requires a higher immutable Helper revision, the approved Production origin, and the release gate for that exact artifact; the Plugin version remains `0.1.0-paid-alpha`.
+
 ## Helper development
 
 Go 1.26.5 is pinned in `go.mod`. The minimal contract checks are:

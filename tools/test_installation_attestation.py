@@ -36,7 +36,7 @@ def main() -> int:
         launcher_sha = hashlib.sha256(launcher.read_bytes()).hexdigest()
         (plugin / "scripts" / "bootstrap-pins.sh").write_text(
             "# Generated fixture pins.\n"
-            "bootstrap_release_tag='helper-v0.1.0-paid-alpha'\n"
+            "bootstrap_release_tag='helper-v0.1.0-paid-alpha.1'\n"
             "bootstrap_version='0.1.0-paid-alpha'\n"
             f"bootstrap_build_commit='{BOOTSTRAP_COMMIT}'\n"
             "bootstrap_built_at='2026-08-03T00:00:00Z'\n"
@@ -53,8 +53,8 @@ def main() -> int:
             encoding="utf-8",
         )
         application = temporary_root / "application"
-        helper_name = "codex-skin-helper_0.1.0-paid-alpha_macos_arm64"
-        helper = application / "bin" / "0.1.0-paid-alpha" / helper_name
+        helper_name = "codex-skin-helper_0.1.0-paid-alpha.1_macos_arm64"
+        helper = application / "bin" / "0.1.0-paid-alpha.1" / helper_name
         helper.parent.mkdir(parents=True)
         executable(
             helper,
@@ -68,9 +68,9 @@ def main() -> int:
                     "status": "completed",
                     "data": {
                         "command": "version",
-                        "helperVersion": "0.1.0-paid-alpha",
+                        "helperVersion": "0.1.0-paid-alpha.1",
                         "pluginVersion": "0.1.0-paid-alpha",
-                        "helperReleaseTag": "helper-v0.1.0-paid-alpha",
+                        "helperReleaseTag": "helper-v0.1.0-paid-alpha.1",
                         "apiOrigin": API_ORIGIN,
                         "buildCommit": HELPER_COMMIT,
                         "builtAt": "2026-08-03T00:00:00Z",
@@ -86,7 +86,7 @@ def main() -> int:
             json.dumps(
                 {
                     "schemaVersion": 1,
-                    "helperVersion": "0.1.0-paid-alpha",
+                    "helperVersion": "0.1.0-paid-alpha.1",
                     "platform": "macos-arm64",
                     "filename": helper_name,
                     "sha256": helper_sha,
