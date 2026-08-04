@@ -265,6 +265,8 @@ func TestRendererControllerSelfHealsAndPausesInAppearanceSettings(t *testing.T) 
 	for _, fragment := range []string{
 		`Page.addScriptToEvaluateOnNewDocument`,
 		`new MutationObserver(schedule)`,
+		`partObserver = new MutationObserver(structuralMutationHandler)`,
+		`changed.some((node) => node === currentMain || containsMainSurface(node))`,
 		`partObserver?.observe(document.documentElement, { childList: true, subtree: true })`,
 		`document.addEventListener("DOMContentLoaded", bodyReadyHandler, { once: true })`,
 		`globalThis.navigation?.addEventListener("navigate", navigationHandler)`,
@@ -281,6 +283,14 @@ func TestRendererControllerSelfHealsAndPausesInAppearanceSettings(t *testing.T) 
 		}
 		if !strings.Contains(source, fragment) {
 			t.Fatalf("renderer controller is missing %q", fragment)
+		}
+	}
+	if strings.Contains(applyFunction, `partObserver = new MutationObserver(schedule)`) {
+		t.Fatal("renderer controller still schedules a full reapply for every conversation mutation")
+	}
+	for _, expensive := range []string{`getComputedStyle`, `getBoundingClientRect`, `thread-scroll-container`} {
+		if strings.Contains(themeSessionHealthFunction, expensive) {
+			t.Fatalf("steady-state health probe contains expensive traversal %q", expensive)
 		}
 	}
 }

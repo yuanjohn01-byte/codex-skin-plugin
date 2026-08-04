@@ -36,6 +36,18 @@ type finalizingAdapter struct {
 	*fakeAdapter
 }
 
+type restartConsentThemeAdapter struct {
+	*fakeAdapter
+}
+
+func (adapter *restartConsentThemeAdapter) OpenVerifiedThemeSession(
+	context.Context,
+	CompiledTheme,
+) (Session, error) {
+	adapter.events = append(adapter.events, "open_theme_consent")
+	return Session{}, ErrRestartConsent
+}
+
 func (adapter *finalizingAdapter) FinalizeOfficialRollback(context.Context, Session) error {
 	adapter.events = append(adapter.events, "finalize_official")
 	return nil
@@ -756,6 +768,31 @@ func TestInterruptedPreMutationStageDoesNotTouchRenderer(t *testing.T) {
 	}
 	if len(adapter.events) != 0 {
 		t.Fatalf("pre-mutation recovery opened renderer: %v", adapter.events)
+	}
+}
+
+func TestRestartConsentLeavesNoRecoverableApplyJournal(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	store := testStore(t)
+	adapter := &restartConsentThemeAdapter{fakeAdapter: &fakeAdapter{probe: passingReport()}}
+	instance, err := New(store, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = instance.ApplyVerified(context.Background(), verified)
+	if !errors.Is(err, ErrRestartConsent) {
+		t.Fatalf("ApplyVerified() error = %v, want ErrRestartConsent", err)
+	}
+	running, readErr := store.RunningJournals()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(running) != 0 {
+		t.Fatalf("restart consent left a recoverable journal: %#v", running)
+	}
+	if strings.Join(adapter.events, ",") != "open_theme_consent" {
+		t.Fatalf("restart consent touched the renderer: %v", adapter.events)
 	}
 }
 

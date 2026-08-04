@@ -2,6 +2,10 @@
 
 ## 0.1.0-paid-alpha - Code-stage candidate
 
+- Make restart consent terminal before renderer mutation so one approved apply performs only the required controlled Codex restart instead of first reopening a throwaway recovery process.
+- Reconnect the Scheme A keeper to the exact process identity verified by apply without re-reading the already-restored native appearance setting; use lightweight controller-marker health checks instead of repeated full layout/contrast scans.
+- Ignore ordinary conversation DOM mutations in the renderer controller, retaining structural, navigation, root-marker, and bounded safeguard repair paths to reduce typing and pointer latency.
+- Recover switch and offline Restore when Chromium has retired the prior CDP session's bootstrap identifier by installing a fixed local neutralizer and verifying immediate official cleanup.
 - Add a session-bound renderer controller: a theme is reported active only after the current controlled Codex session has an active controller, renderer reloads/rebuilt routes are rechecked during that session, and Restore asks the controller to stop before restoring the official appearance. Closing Codex or restarting the computer ends the session; no daemon, login item, or automatic reopen is installed.
 - Restore the user's native appearance settings on disk before a skin session is reported active, re-verify the live renderer afterward, and reject stale controller heartbeats after an abrupt exit or computer restart.
 - Exclude real-current-Codex macOS probes from ordinary `go test`; they require both the `realcodex` build tag and their existing explicit environment opt-in.

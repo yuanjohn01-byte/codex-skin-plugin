@@ -113,6 +113,14 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 
 	session, err := engine.openThemeSession(ctx, compiled)
 	if err != nil {
+		// A live adapter returns ErrRestartConsent before it changes the native
+		// appearance, stops Codex, opens a controlled listener, or touches the
+		// renderer. Keeping that pre-consent journal recoverable would make the
+		// continuation launch a throwaway Codex solely to "restore" an interface
+		// that was never mutated, followed by the real apply restart.
+		if errors.Is(err, ErrRestartConsent) {
+			return ApplyResult{}, engine.failJournal(journal, "CS-CODEX-IDENTITY-001", err)
+		}
 		return ApplyResult{}, engine.failRecoverableJournal(journal, "CS-CODEX-IDENTITY-001", err)
 	}
 	defer engine.adapter.Close(ctx, session)

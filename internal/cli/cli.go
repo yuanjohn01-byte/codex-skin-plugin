@@ -67,12 +67,16 @@ type Runtime struct {
 	currentSessionIdentity func(context.Context) (engine.Identity, error)
 	// The remaining unexported session hooks keep the detached controller's real
 	// state machine deterministic under unit tests. Production leaves them nil.
-	sessionAdapterFactory func(string) (themeSessionAdapter, error)
-	sessionThemeLoader    func(*engine.Store) (*engine.CompiledTheme, *engine.DesiredTheme, error)
-	sessionStartTimeout   time.Duration
-	sessionStopTimeout    time.Duration
-	sessionWaitInterval   time.Duration
-	RestartDelay          time.Duration
+	sessionAdapterFactory   func(string) (themeSessionAdapter, error)
+	sessionThemeLoader      func(*engine.Store) (*engine.CompiledTheme, *engine.DesiredTheme, error)
+	sessionStartTimeout     time.Duration
+	sessionStopTimeout      time.Duration
+	sessionWaitInterval     time.Duration
+	sessionControlPoll      time.Duration
+	sessionHealthInterval   time.Duration
+	sessionHealthTimeout    time.Duration
+	sessionAppearanceSettle time.Duration
+	RestartDelay            time.Duration
 }
 
 type versionData struct {
@@ -556,7 +560,10 @@ func runRestartWorker(requestID string, environment Runtime) int {
 		ctx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
 		defer cancel()
 	}
-	if request.Kind == "restore" && sessionControllerEnabled(environment) {
+	// Switching and Restore both take exclusive ownership from the previous
+	// Scheme A controller before a new renderer transaction begins. Terminal or
+	// missing session state is an idempotent no-op.
+	if (request.Kind == "apply" || request.Kind == "restore") && sessionControllerEnabled(environment) {
 		if err := stopThemeSession(store.Root(), ctx); err != nil {
 			_, _ = restartStore.Fail(requestID, "CS-FLOW-SESSION-001")
 			return exitRestore

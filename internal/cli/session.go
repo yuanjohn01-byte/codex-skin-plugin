@@ -15,7 +15,10 @@ import (
 
 const (
 	sessionReconnectWindow   = 15 * time.Second
-	sessionPollInterval      = 2 * time.Second
+	sessionReconnectPoll     = 500 * time.Millisecond
+	sessionControlPoll       = 500 * time.Millisecond
+	sessionHealthInterval    = 10 * time.Second
+	sessionHealthTimeout     = 3 * time.Second
 	sessionHeartbeatInterval = 10 * time.Second
 	sessionHeartbeatMaxAge   = 30 * time.Second
 	sessionAppearanceSettle  = 500 * time.Millisecond
@@ -25,8 +28,10 @@ var errSessionStopUnconfirmed = errors.New("theme session controller stop is unc
 
 type themeSessionAdapter interface {
 	OpenVerifiedThemeSession(context.Context, engine.CompiledTheme) (engine.Session, error)
+	OpenVerifiedBoundThemeSession(context.Context, engine.CompiledTheme, engine.Identity) (engine.Session, error)
 	Apply(context.Context, engine.Session, engine.CompiledTheme) error
 	Verify(context.Context, engine.Session, engine.CompiledTheme) (engine.RegionReport, error)
+	ThemeSessionHealthy(context.Context, engine.Session, engine.CompiledTheme) (bool, error)
 	RestoreOfficial(context.Context, engine.Session) error
 	VerifyOfficial(context.Context, engine.Session) error
 	Close(context.Context, engine.Session) error
@@ -37,6 +42,7 @@ type themeSessionAdapter interface {
 // one previously approved, controlled Codex process themed until that process
 // exits, Restore asks it to stop, or its identity becomes unsafe.
 func runThemeSession(sessionID string, environment Runtime) int {
+	controlPoll, healthInterval, healthTimeout, appearanceSettle := sessionControllerTimings(environment)
 	goos, _, _ := environment.values()
 	root, err := resolveRoot(goos, environment)
 	if err != nil {
@@ -101,7 +107,7 @@ func runThemeSession(sessionID string, environment Runtime) int {
 			return exitApply
 		}
 		sessionCtx, cancel := context.WithTimeout(ctx, 12*time.Second)
-		liveSession, openErr := live.OpenVerifiedThemeSession(sessionCtx, *compiled)
+		liveSession, openErr := live.OpenVerifiedBoundThemeSession(sessionCtx, *compiled, record.Codex)
 		cancel()
 		if openErr != nil {
 			if requested, stopErr := sessions.StopRequested(sessionID); stopErr == nil && requested {
@@ -118,7 +124,7 @@ func runThemeSession(sessionID string, environment Runtime) int {
 				return exitSuccess
 			}
 			if !lastReady.IsZero() && time.Since(lastReady) < sessionReconnectWindow {
-				if !waitSession(ctx, sessionPollInterval) {
+				if !waitSession(ctx, sessionReconnectPoll) {
 					return exitInternal
 				}
 				continue
@@ -172,7 +178,7 @@ func runThemeSession(sessionID string, environment Runtime) int {
 		if applyErr != nil || !engine.ReportAllowsTheme(report, *compiled) {
 			if !lastReady.IsZero() && time.Since(lastReady) < sessionReconnectWindow {
 				_ = live.Close(context.Background(), liveSession)
-				if !waitSession(ctx, sessionPollInterval) {
+				if !waitSession(ctx, sessionReconnectPoll) {
 					return exitInternal
 				}
 				continue
@@ -190,7 +196,7 @@ func runThemeSession(sessionID string, environment Runtime) int {
 				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "appearance_restore_failed")
 				return exitApply
 			}
-			if !waitSession(ctx, sessionAppearanceSettle) {
+			if !waitSession(ctx, appearanceSettle) {
 				_ = restoreControlledSession(live, liveSession)
 				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_cancelled")
 				return exitApply
@@ -232,6 +238,7 @@ func runThemeSession(sessionID string, environment Runtime) int {
 		}
 		lastReady = time.Now()
 		lastHeartbeat := lastReady
+		nextHealth := lastReady.Add(healthInterval)
 
 		for {
 			stopRequested, stopErr = sessions.StopRequested(sessionID)
@@ -250,31 +257,64 @@ func runThemeSession(sessionID string, environment Runtime) int {
 				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "desired_theme_changed")
 				return exitApply
 			}
-			verifyCtx, verifyCancel := context.WithTimeout(ctx, 6*time.Second)
-			report, verifyErr := live.Verify(verifyCtx, liveSession, *compiled)
-			verifyCancel()
-			if verifyErr == nil && engine.ReportAllowsTheme(report, *compiled) {
-				if time.Since(lastHeartbeat) >= sessionHeartbeatInterval {
-					if _, err := sessions.Heartbeat(sessionID, os.Getpid()); err != nil {
-						_ = live.Close(context.Background(), liveSession)
-						if requested, stopErr := sessions.StopRequested(sessionID); stopErr == nil && requested {
-							_, _ = sessions.Finish(sessionID, sessionflow.StatusEnded, "restore_requested")
-							return exitSuccess
-						}
-						return exitInternal
-					}
-					lastHeartbeat = time.Now()
+			now := time.Now()
+			if now.Before(nextHealth) {
+				wait := controlPoll
+				if remaining := time.Until(nextHealth); remaining < wait {
+					wait = remaining
 				}
-				if !waitSession(ctx, sessionPollInterval) {
+				if !waitSession(ctx, wait) {
 					_ = live.Close(context.Background(), liveSession)
 					return exitInternal
 				}
 				continue
 			}
-			_ = live.Close(context.Background(), liveSession)
-			break
+			healthCtx, healthCancel := context.WithTimeout(ctx, healthTimeout)
+			healthy, healthErr := live.ThemeSessionHealthy(healthCtx, liveSession, *compiled)
+			healthCancel()
+			if healthErr != nil || !healthy {
+				_ = live.Close(context.Background(), liveSession)
+				break
+			}
+			if time.Since(lastHeartbeat) >= sessionHeartbeatInterval {
+				if _, err := sessions.Heartbeat(sessionID, os.Getpid()); err != nil {
+					_ = live.Close(context.Background(), liveSession)
+					if requested, stopErr := sessions.StopRequested(sessionID); stopErr == nil && requested {
+						_, _ = sessions.Finish(sessionID, sessionflow.StatusEnded, "restore_requested")
+						return exitSuccess
+					}
+					return exitInternal
+				}
+				lastHeartbeat = time.Now()
+			}
+			nextHealth = time.Now().Add(healthInterval)
 		}
 	}
+}
+
+func sessionControllerTimings(environment Runtime) (
+	controlPoll time.Duration,
+	healthInterval time.Duration,
+	healthTimeout time.Duration,
+	appearanceSettle time.Duration,
+) {
+	controlPoll = environment.sessionControlPoll
+	if controlPoll <= 0 {
+		controlPoll = sessionControlPoll
+	}
+	healthInterval = environment.sessionHealthInterval
+	if healthInterval <= 0 {
+		healthInterval = sessionHealthInterval
+	}
+	healthTimeout = environment.sessionHealthTimeout
+	if healthTimeout <= 0 {
+		healthTimeout = sessionHealthTimeout
+	}
+	appearanceSettle = environment.sessionAppearanceSettle
+	if appearanceSettle <= 0 {
+		appearanceSettle = sessionAppearanceSettle
+	}
+	return controlPoll, healthInterval, healthTimeout, appearanceSettle
 }
 
 func sessionCodexExited(ctx context.Context) bool {
@@ -411,7 +451,7 @@ func startThemeSession(
 func sessionTimings(environment Runtime) (time.Duration, time.Duration, time.Duration) {
 	startTimeout := environment.sessionStartTimeout
 	if startTimeout <= 0 {
-		startTimeout = 18 * time.Second
+		startTimeout = 35 * time.Second
 	}
 	stopTimeout := environment.sessionStopTimeout
 	if stopTimeout <= 0 {

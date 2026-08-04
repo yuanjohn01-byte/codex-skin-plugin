@@ -23,7 +23,11 @@ type gatedThemeSessionAdapter struct {
 	verifyGate    sync.Once
 
 	mu                     sync.Mutex
+	ordinaryOpenCount      int
+	boundOpenCount         int
 	applyCount             int
+	verifyCount            int
+	healthCount            int
 	restoreCount           int
 	appearanceRestoreCount int
 	themed                 bool
@@ -33,6 +37,27 @@ func (adapter *gatedThemeSessionAdapter) OpenVerifiedThemeSession(
 	ctx context.Context,
 	_ engine.CompiledTheme,
 ) (engine.Session, error) {
+	adapter.mu.Lock()
+	adapter.ordinaryOpenCount++
+	adapter.mu.Unlock()
+	return adapter.open(ctx)
+}
+
+func (adapter *gatedThemeSessionAdapter) OpenVerifiedBoundThemeSession(
+	ctx context.Context,
+	_ engine.CompiledTheme,
+	expected engine.Identity,
+) (engine.Session, error) {
+	adapter.mu.Lock()
+	adapter.boundOpenCount++
+	adapter.mu.Unlock()
+	if !sameIdentity(adapter.identity, expected) {
+		return engine.Session{}, engine.ErrStateUnsafe
+	}
+	return adapter.open(ctx)
+}
+
+func (adapter *gatedThemeSessionAdapter) open(ctx context.Context) (engine.Session, error) {
 	if adapter.opened != nil {
 		close(adapter.opened)
 	}
@@ -63,6 +88,9 @@ func (adapter *gatedThemeSessionAdapter) Verify(
 	_ engine.Session,
 	compiled engine.CompiledTheme,
 ) (engine.RegionReport, error) {
+	adapter.mu.Lock()
+	adapter.verifyCount++
+	adapter.mu.Unlock()
 	if adapter.afterApply != nil {
 		adapter.verifyGate.Do(func() {
 			close(adapter.afterApply)
@@ -73,6 +101,17 @@ func (adapter *gatedThemeSessionAdapter) Verify(
 		})
 	}
 	return passingThemeReport(compiled), nil
+}
+
+func (adapter *gatedThemeSessionAdapter) ThemeSessionHealthy(
+	context.Context,
+	engine.Session,
+	engine.CompiledTheme,
+) (bool, error) {
+	adapter.mu.Lock()
+	adapter.healthCount++
+	adapter.mu.Unlock()
+	return true, nil
 }
 
 func (adapter *gatedThemeSessionAdapter) RestoreOfficial(context.Context, engine.Session) error {
@@ -105,6 +144,71 @@ func (adapter *gatedThemeSessionAdapter) state() (int, int, int, bool) {
 	adapter.mu.Lock()
 	defer adapter.mu.Unlock()
 	return adapter.applyCount, adapter.restoreCount, adapter.appearanceRestoreCount, adapter.themed
+}
+
+func (adapter *gatedThemeSessionAdapter) metrics() (int, int, int, int) {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	return adapter.ordinaryOpenCount, adapter.boundOpenCount, adapter.verifyCount, adapter.healthCount
+}
+
+func TestActiveSessionUsesBoundIdentityAndLightweightHealthChecks(t *testing.T) {
+	store, identity, compiled, desired, executable := newSessionControllerTestState(t)
+	adapter := &gatedThemeSessionAdapter{identity: identity}
+	controllerDone := make(chan int, 1)
+	parent := Runtime{
+		GOOS: "darwin", GOARCH: "arm64", Root: store.Root(), Executable: executable,
+		currentSessionIdentity: func(context.Context) (engine.Identity, error) { return identity, nil },
+		sessionStartTimeout:    time.Second,
+		sessionStopTimeout:     time.Second,
+		sessionWaitInterval:    time.Millisecond,
+	}
+	parent.StartSession = func(_ string, sessionID string) error {
+		go func() {
+			controllerDone <- runThemeSession(sessionID, Runtime{
+				GOOS: "darwin", GOARCH: "arm64", Root: store.Root(), Context: context.Background(),
+				sessionControlPoll:      time.Millisecond,
+				sessionHealthInterval:   3 * time.Millisecond,
+				sessionHealthTimeout:    20 * time.Millisecond,
+				sessionAppearanceSettle: time.Millisecond,
+				sessionAdapterFactory:   func(string) (themeSessionAdapter, error) { return adapter, nil },
+				sessionThemeLoader: func(*engine.Store) (*engine.CompiledTheme, *engine.DesiredTheme, error) {
+					copyCompiled, copyDesired := compiled, desired
+					return &copyCompiled, &copyDesired, nil
+				},
+			})
+		}()
+		return nil
+	}
+
+	if err := startThemeSession(store, desired.ThemePublicID, desired.ThemeVersion, parent); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		_, _, _, healthCount := adapter.metrics()
+		if healthCount >= 2 {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	ordinaryOpenCount, boundOpenCount, verifyCount, healthCount := adapter.metrics()
+	if ordinaryOpenCount != 0 || boundOpenCount != 1 {
+		t.Fatalf("session opens: ordinary=%d bound=%d", ordinaryOpenCount, boundOpenCount)
+	}
+	if verifyCount != 2 || healthCount < 2 {
+		t.Fatalf("session checks: full_verify=%d lightweight_health=%d", verifyCount, healthCount)
+	}
+	sessions, err := sessionflow.New(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := sessions.RequestStop(); err != nil {
+		t.Fatal(err)
+	}
+	if code := awaitCode(t, controllerDone); code != exitSuccess {
+		t.Fatalf("controller code = %d", code)
+	}
 }
 
 func TestSessionStartTimeoutWaitsForPausedControllerBeforeRollback(t *testing.T) {

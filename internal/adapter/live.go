@@ -182,7 +182,7 @@ func NewLive(config Config) (*Live, error) {
 }
 
 func (adapter *Live) OpenVerifiedSession(ctx context.Context) (engine.Session, error) {
-	return adapter.openVerifiedSession(ctx, "", false)
+	return adapter.openVerifiedSession(ctx, "", false, nil)
 }
 
 func (adapter *Live) OpenVerifiedThemeSession(
@@ -192,17 +192,34 @@ func (adapter *Live) OpenVerifiedThemeSession(
 	if compiled.AppearanceMode != "dark" && compiled.AppearanceMode != "light" {
 		return engine.Session{}, engine.ErrConfiguration
 	}
-	return adapter.openVerifiedSession(ctx, compiled.AppearanceMode, false)
+	return adapter.openVerifiedSession(ctx, compiled.AppearanceMode, false, nil)
+}
+
+// OpenVerifiedBoundThemeSession reconnects the Scheme A controller to the
+// exact controlled Codex process that the apply transaction already verified.
+// It deliberately does not inspect or pin the on-disk appearance setting: the
+// controller restores that setting before reporting active, while the running
+// renderer must remain attached to the same process and loopback listener.
+func (adapter *Live) OpenVerifiedBoundThemeSession(
+	ctx context.Context,
+	compiled engine.CompiledTheme,
+	expected engine.Identity,
+) (engine.Session, error) {
+	if compiled.AppearanceMode != "dark" && compiled.AppearanceMode != "light" {
+		return engine.Session{}, engine.ErrConfiguration
+	}
+	return adapter.openVerifiedSession(ctx, compiled.AppearanceMode, false, &expected)
 }
 
 func (adapter *Live) OpenVerifiedOfficialSession(ctx context.Context) (engine.Session, error) {
-	return adapter.openVerifiedSession(ctx, "", true)
+	return adapter.openVerifiedSession(ctx, "", true, nil)
 }
 
 func (adapter *Live) openVerifiedSession(
 	ctx context.Context,
 	targetAppearance string,
 	restoreAppearance bool,
+	boundIdentity *engine.Identity,
 ) (engine.Session, error) {
 	installation, err := codex.DiscoverInstallation(ctx)
 	if err != nil {
@@ -215,7 +232,10 @@ func (adapter *Live) openVerifiedSession(
 	appearanceRestart := false
 	mutated := false
 	var process codex.ProcessIdentity
-	if adapter.currentProfile && adapter.appearance != nil {
+	if boundIdentity != nil && (!adapter.currentProfile || restoreAppearance) {
+		return engine.Session{}, engine.ErrConfiguration
+	}
+	if boundIdentity == nil && adapter.currentProfile && adapter.appearance != nil {
 		if restoreAppearance {
 			appearanceRestart, err = adapter.appearance.NeedsRestore()
 		} else if targetAppearance != "" {
@@ -226,7 +246,19 @@ func (adapter *Live) openVerifiedSession(
 		}
 	}
 
-	if adapter.currentProfile {
+	if boundIdentity != nil {
+		current, currentErr := codex.DiscoverCurrentInstance(ctx, installation)
+		if currentErr != nil || current.ControlledPort < 1 ||
+			!boundIdentityMatches(installation, current.Process, *boundIdentity) {
+			if currentErr == nil {
+				currentErr = codex.ErrListenerUntrusted
+			}
+			return engine.Session{}, currentErr
+		}
+		profile = current.Profile
+		port = current.ControlledPort
+		process = current.Process
+	} else if adapter.currentProfile {
 		current, currentErr := codex.DiscoverCurrentInstance(ctx, installation)
 		switch {
 		case currentErr == nil && current.ControlledPort > 0 && !appearanceRestart:
@@ -363,6 +395,21 @@ func (adapter *Live) openVerifiedSession(
 			ProcessStartID: process.ProcessStartID,
 		},
 	}, nil
+}
+
+func boundIdentityMatches(
+	installation codex.Installation,
+	process codex.ProcessIdentity,
+	expected engine.Identity,
+) bool {
+	return expected.Platform == installation.Platform &&
+		expected.AppIdentifier == installation.AppIdentifier &&
+		expected.Publisher == installation.Publisher &&
+		expected.Version == installation.Version &&
+		expected.ExecutableHash == installation.ExecutableSHA256 &&
+		expected.ProcessID == process.ProcessID &&
+		expected.ProcessStartID == process.ProcessStartID &&
+		expected.ExecutableHash == process.ExecutableSHA256
 }
 
 func (adapter *Live) recoverOpenFailure(
@@ -592,6 +639,33 @@ func (adapter *Live) Verify(ctx context.Context, session engine.Session, compile
 		return engine.RegionReport{}, err
 	}
 	return report, nil
+}
+
+// ThemeSessionHealthy is the steady-state Scheme A liveness probe. Unlike the
+// full verifier used at commit time, it reads only Codex Skin's own controller
+// markers and does not walk layout, computed colors, or conversation content.
+// The renderer controller remains healthy while the official Settings surface
+// is open even though the visual theme is intentionally deactivated there.
+func (adapter *Live) ThemeSessionHealthy(
+	ctx context.Context,
+	session engine.Session,
+	compiled engine.CompiledTheme,
+) (bool, error) {
+	live, err := adapter.verifiedLiveSession(ctx, session)
+	if err != nil {
+		return false, err
+	}
+	var healthy bool
+	if err := callFunction(
+		ctx,
+		live.client,
+		themeSessionHealthFunction,
+		[]any{compiled.ThemePublicID, compiled.ThemeVersion, compiled.TemplateVersion},
+		&healthy,
+	); err != nil {
+		return false, err
+	}
+	return healthy, nil
 }
 
 func (adapter *Live) Restore(ctx context.Context, session engine.Session, snapshot engine.Snapshot) error {
@@ -1061,6 +1135,29 @@ const captureFunction = `function () {
 	templateVersion: Number(state?.templateVersion || root.getAttribute("data-codex-skin-template") || 0),
 	appearanceMode: state?.appearanceMode || root.getAttribute("data-codex-skin-appearance") || ""
   };
+}`
+
+const themeSessionHealthFunction = `function (expectedThemeId, expectedThemeVersion, expectedTemplateVersion) {
+  const state = globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V1__"];
+  if (!state || state.themeId !== expectedThemeId ||
+      state.themeVersion !== expectedThemeVersion ||
+      state.templateVersion !== expectedTemplateVersion ||
+      typeof state.ensure !== "function" || typeof state.cleanup !== "function") return false;
+  const main = document.querySelector('main.main-surface, main[class*="_MainContentSurface_"]');
+  const settings = Boolean(
+    document.querySelector('input[name="appearance-theme"]') ||
+    document.querySelector('[data-testid="theme-preview"]')
+  );
+  if (settings) return true;
+  const root = document.documentElement;
+  return state.active === true && state.installed === true &&
+    document.querySelectorAll("#codex-skin-theme-v1").length === 1 &&
+    document.querySelectorAll('main[data-codex-skin-main="true"]').length === 1 &&
+    main.getAttribute("data-codex-skin-main") === "true" &&
+    root.getAttribute("data-codex-skin") === "active" &&
+    root.getAttribute("data-codex-skin-theme") === expectedThemeId &&
+    root.getAttribute("data-codex-skin-theme-version") === expectedThemeVersion &&
+    Number(root.getAttribute("data-codex-skin-template") || 0) === expectedTemplateVersion;
 }`
 
 const verifyFunction = `function (expectedTemplateVersion) {

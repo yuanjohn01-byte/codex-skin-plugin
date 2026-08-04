@@ -23,8 +23,8 @@ def fixture() -> dict[str, object]:
         "artifacts": [
             {
                 "platform": platform,
-                "filename": f"codex-skin-helper_0.1.0-paid-alpha.3_{suffix}",
-                "helperVersion": "0.1.0-paid-alpha.3",
+                "filename": f"codex-skin-helper_0.1.0-paid-alpha.4_{suffix}",
+                "helperVersion": "0.1.0-paid-alpha.4",
                 "builtAt": "2026-07-20T08:00:00+08:00",
                 "sha256": str(index + 1) * 64,
                 "size": 1_900_000 + index,

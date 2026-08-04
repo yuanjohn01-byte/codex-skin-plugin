@@ -84,7 +84,25 @@ func (adapter *Live) removeControllerBootstrap(ctx context.Context, live *liveSe
 		if err := live.client.Call(ctx, "Page.removeScriptToEvaluateOnNewDocument", map[string]any{
 			"identifier": record.Identifier,
 		}, nil); err != nil {
-			return err
+			// Chromium can retire a Page script identifier when the CDP session
+			// that created it disconnects. A new verified connection must still be
+			// able to switch or Restore. Install a fixed local neutralizer after
+			// the stale bootstrap and prove the current document is clean; a later
+			// theme bootstrap is registered after this guard and therefore wins.
+			neutralizer := `(() => { (` + restoreFunction + `)(); ` +
+				`globalThis["__CODEX_SKIN_RENDERER_DISABLED_V1__"] = true; })();`
+			var registered struct {
+				Identifier string `json:"identifier"`
+			}
+			if guardErr := live.client.Call(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{
+				"source": neutralizer,
+			}, &registered); guardErr != nil || !controllerIdentifier.MatchString(registered.Identifier) {
+				return errors.Join(err, guardErr, engine.ErrRestoreFailed)
+			}
+			var restored bool
+			if guardErr := callFunction(ctx, live.client, restoreFunction, nil, &restored); guardErr != nil || !restored {
+				return errors.Join(err, guardErr, engine.ErrRestoreFailed)
+			}
 		}
 	}
 	return adapter.clearControllerRecord()
@@ -208,6 +226,7 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
   let bodyReadyHandler = null;
   let timer = null;
   let interval = null;
+  let currentMain = null;
   let stopped = false;
 
   const mainSurface = () => document.querySelector(
@@ -279,6 +298,7 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
   const deactivate = () => {
     removeSheet();
     removeMainMarkers();
+    currentMain = null;
     const root = document.documentElement;
     if (root) {
       for (const name of ROOT_ATTRIBUTES) root.removeAttribute(name);
@@ -288,10 +308,23 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
   const activate = () => {
     const main = mainSurface();
     if (!main) return false;
-    installStyle();
-    removeMainMarkers(main);
-    setAttribute(main, "data-codex-skin-main", "true");
     const root = document.documentElement;
+    const styleInstalled = styleMode === "adopted"
+      ? Boolean(styleSheet && document.adoptedStyleSheets.includes(styleSheet))
+      : Boolean(styleNode && styleNode.isConnected && !styleNode.disabled);
+    if (currentMain === main && main.getAttribute("data-codex-skin-main") === "true" &&
+        root.getAttribute("data-codex-skin") === "active" &&
+        root.getAttribute("data-codex-skin-theme") === themeId &&
+        root.getAttribute("data-codex-skin-theme-version") === themeVersion &&
+        Number(root.getAttribute("data-codex-skin-template") || 0) === templateVersion &&
+        styleInstalled &&
+        document.querySelectorAll("#codex-skin-theme-v1").length === 1) return true;
+    installStyle();
+    if (currentMain !== main) {
+      removeMainMarkers(main);
+      currentMain = main;
+      setAttribute(main, "data-codex-skin-main", "true");
+    }
     root.style.removeProperty("--cs-background-image");
     setAttribute(root, "data-codex-skin", "active");
     setAttribute(root, "data-codex-skin-theme", themeId);
@@ -310,6 +343,25 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
   const schedule = () => {
     if (stopped || timer !== null) return;
     timer = setTimeout(ensure, 40);
+  };
+  const containsMainSurface = (node) => node instanceof Element && (
+    node.matches('main.main-surface, main[class*="_MainContentSurface_"]') ||
+    Boolean(node.querySelector('main.main-surface, main[class*="_MainContentSurface_"]'))
+  );
+  const structuralMutationHandler = (records) => {
+    if (stopped) return;
+    if (currentMain && !currentMain.isConnected) {
+      schedule();
+      return;
+    }
+    for (const record of records) {
+      if (record.type !== "childList") continue;
+      const changed = [...record.addedNodes, ...record.removedNodes];
+      if (changed.some((node) => node === currentMain || containsMainSurface(node))) {
+        schedule();
+        return;
+      }
+    }
   };
   const navigationHandler = () => schedule();
   const cleanup = () => {
@@ -336,11 +388,16 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
     cleanup, ensure, styleText, backgroundURL, themeId, themeVersion,
     templateVersion, appearanceMode,
     get styleMode() { return styleMode; },
+    get installed() {
+      return styleMode === "adopted"
+        ? Boolean(styleSheet && document.adoptedStyleSheets.includes(styleSheet))
+        : Boolean(styleNode && styleNode.isConnected && !styleNode.disabled);
+    },
     get active() { return document.documentElement?.getAttribute("data-codex-skin") === "active"; }
   };
   if (typeof MutationObserver === "function") {
     rootObserver = new MutationObserver(schedule);
-    partObserver = new MutationObserver(schedule);
+    partObserver = new MutationObserver(structuralMutationHandler);
   }
   const observeAttributes = (node) => {
     if (!rootObserver || !node) return;
