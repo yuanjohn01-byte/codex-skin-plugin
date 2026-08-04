@@ -2,14 +2,24 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/yuanjohn01-byte/codex-skin-plugin/blob/main/contracts/device-authorization-poll-v1.schema.json",
   "title": "Codex Skin device authorization poll contract v1",
-  "description": "Public request and response contract for Helper device authorization polling, cancellation, token issuance, refresh rotation, device-limit recovery, and logout.",
+  "description": "Public request and response contract for Helper device authorization start, polling, cancellation, token issuance, refresh rotation, device-limit recovery, and logout.",
   "x-endpoints": {
+    "start": "/api/v1/plugin/device-authorizations",
     "poll": "/api/v1/plugin/device-authorizations/token",
     "cancel": "/api/v1/plugin/device-authorizations/cancel",
     "refresh": "/api/v1/plugin/token/refresh",
     "logout": "/api/v1/plugin/logout"
   },
   "oneOf": [
+    {
+      "$ref": "#/$defs/startRequest"
+    },
+    {
+      "$ref": "#/$defs/startSuccessEnvelope"
+    },
+    {
+      "$ref": "#/$defs/startErrorEnvelope"
+    },
     {
       "$ref": "#/$defs/proofRequest"
     },
@@ -36,6 +46,156 @@
     }
   ],
   "$defs": {
+    "startRequest": {
+      "type": "object",
+      "required": [
+        "deviceKey",
+        "deviceDisplayName",
+        "platform",
+        "codeChallenge",
+        "pluginVersion",
+        "engineVersion",
+        "pluginProtocolVersion"
+      ],
+      "properties": {
+        "deviceKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "deviceDisplayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "platform": {
+          "enum": ["macos", "windows"]
+        },
+        "codeChallenge": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{43}$"
+        },
+        "pluginVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "engineVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "pluginProtocolVersion": {
+          "const": 1
+        }
+      },
+      "additionalProperties": false
+    },
+    "startSuccessEnvelope": {
+      "type": "object",
+      "required": ["data", "requestId"],
+      "properties": {
+        "data": {
+          "type": "object",
+          "required": [
+            "deviceCode",
+            "verificationUriComplete",
+            "expiresIn",
+            "interval"
+          ],
+          "properties": {
+            "deviceCode": {
+              "type": "string",
+              "pattern": "^[A-Za-z0-9_-]{43}$"
+            },
+            "verificationUriComplete": {
+              "type": "string",
+              "pattern": "^https?://[^\\s]+/device/approve\\?token=[A-Za-z0-9_-]{43}$",
+              "maxLength": 2048
+            },
+            "expiresIn": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 300
+            },
+            "interval": {
+              "const": 4
+            }
+          },
+          "additionalProperties": false
+        },
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        }
+      },
+      "additionalProperties": false
+    },
+    "startErrorEnvelope": {
+      "type": "object",
+      "required": ["error", "requestId"],
+      "properties": {
+        "error": {
+          "type": "object",
+          "required": [
+            "code",
+            "message",
+            "action",
+            "retryable",
+            "incidentId",
+            "details"
+          ],
+          "properties": {
+            "code": {
+              "enum": [
+                "CS-AUTH-START-001",
+                "CS-AUTH-START-002",
+                "CS-AUTH-START-003",
+                "CS-AUTH-START-004",
+                "CS-AUTH-START-005"
+              ]
+            },
+            "message": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 256
+            },
+            "action": {
+              "enum": [
+                "fix_request",
+                "retry_later",
+                "use_new_idempotency_key",
+                "contact_support"
+              ]
+            },
+            "retryable": {
+              "type": "boolean"
+            },
+            "incidentId": {
+              "oneOf": [
+                {
+                  "type": "string",
+                  "pattern": "^INC-[A-Z0-9]{12}$"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "details": {
+              "type": "object",
+              "properties": {
+                "retryAfter": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 300
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "additionalProperties": false
+        },
+        "requestId": {
+          "$ref": "#/$defs/requestId"
+        }
+      },
+      "additionalProperties": false
+    },
     "proofRequest": {
       "type": "object",
       "required": ["deviceCode", "codeVerifier"],
@@ -141,8 +301,7 @@
           "additionalProperties": false
         },
         "requestId": {
-          "type": "string",
-          "pattern": "^req_[a-f0-9]{32}$"
+          "$ref": "#/$defs/requestId"
         }
       },
       "additionalProperties": false
@@ -197,8 +356,7 @@
           "additionalProperties": false
         },
         "requestId": {
-          "type": "string",
-          "pattern": "^req_[a-f0-9]{32}$"
+          "$ref": "#/$defs/requestId"
         }
       },
       "additionalProperties": false
@@ -396,6 +554,15 @@
         }
       },
       "additionalProperties": false
+    },
+    "requestId": {
+      "type": "string",
+      "pattern": "^req_[a-f0-9]{32}$"
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$",
+      "maxLength": 64
     }
   }
 }

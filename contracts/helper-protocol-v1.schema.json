@@ -110,6 +110,15 @@
               "$ref": "#/$defs/restoreData"
             },
             {
+              "$ref": "#/$defs/applyData"
+            },
+            {
+              "$ref": "#/$defs/restartData"
+            },
+            {
+              "$ref": "#/$defs/statusData"
+            },
+            {
               "type": "null"
             }
           ]
@@ -221,6 +230,19 @@
         "helperVersion": {
           "type": "string",
           "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+        },
+        "pluginVersion": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$"
+        },
+        "helperReleaseTag": {
+          "type": "string",
+          "pattern": "^helper-v[0-9A-Za-z.-]+$",
+          "maxLength": 72
+        },
+        "apiOrigin": {
+          "type": "string",
+          "maxLength": 256
         },
         "protocolVersion": {
           "const": 1
@@ -357,6 +379,123 @@
         }
       },
       "additionalProperties": false
+    },
+    "applyData": {
+      "type": "object",
+      "required": [
+        "command",
+        "operationId",
+        "themePublicId",
+        "themeVersion",
+        "authorizedDuringCommand",
+        "purchaseShownDuringCommand"
+      ],
+      "properties": {
+        "command": {
+          "const": "theme apply"
+        },
+        "operationId": {
+          "type": "string",
+          "pattern": "^op_[0-9a-f]{32}$"
+        },
+        "themePublicId": {
+          "type": "string",
+          "pattern": "^[0-9]{6}$"
+        },
+        "themeVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "authorizedDuringCommand": {
+          "type": "boolean"
+        },
+        "purchaseShownDuringCommand": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "statusData": {
+      "type": "object",
+      "required": [
+        "command",
+        "deviceLinked"
+      ],
+      "properties": {
+        "command": {
+          "const": "status"
+        },
+        "deviceLinked": {
+          "type": "boolean"
+        },
+        "pendingThemePublicId": {
+          "type": "string",
+          "pattern": "^[0-9]{6}$"
+        },
+        "appliedThemePublicId": {
+          "type": "string",
+          "pattern": "^[0-9]{6}$"
+        },
+        "appliedThemeVersion": {
+          "$ref": "#/$defs/semver"
+        },
+        "restartKind": {
+          "enum": [
+            "apply",
+            "restore"
+          ]
+        },
+        "restartStatus": {
+          "enum": [
+            "pending_confirmation",
+            "restart_approved",
+            "running",
+            "completed",
+            "failed"
+          ]
+        },
+        "restartThemePublicId": {
+          "type": "string",
+          "pattern": "^[0-9]{6}$"
+        },
+        "restartErrorCode": {
+          "type": "string",
+          "pattern": "^CS-[A-Z0-9]+(?:-[A-Z0-9]+)+$",
+          "maxLength": 64
+        }
+      },
+      "additionalProperties": false
+    },
+    "restartData": {
+      "type": "object",
+      "required": [
+        "command",
+        "restartAccepted",
+        "kind"
+      ],
+      "properties": {
+        "command": {
+          "const": "theme continue"
+        },
+        "restartAccepted": {
+          "const": true
+        },
+        "kind": {
+          "enum": [
+            "apply",
+            "restore"
+          ]
+        },
+        "themePublicId": {
+          "type": "string",
+          "pattern": "^[0-9]{6}$"
+        }
+      },
+      "additionalProperties": false
+    },
+    "semver": {
+      "type": "string",
+      "pattern": "^(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)\\.(0|[1-9][0-9]*)(?:-(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\\.(?:0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*)?$",
+      "maxLength": 64
     }
   }
 }

@@ -1,0 +1,15 @@
+---
+name: codex-skin-status
+description: Show local Codex Skin device, pending request, and applied-theme status. Use when the user asks whether Codex Skin is connected, which theme is active, or whether a theme request is pending.
+---
+
+# Show Codex Skin status
+
+1. Resolve the Plugin root from this Skill's installed path and use only its platform wrapper:
+   - macOS: `scripts/codex-skin.sh status --json`
+   - Windows: `scripts/codex-skin.ps1 status --json`
+2. Do not call the network. Status reports durable local facts only: whether a device link exists locally, the pending six-digit theme ID if any, the applied theme ID/version if any, the session controller status/theme if present, and the bounded restart continuation kind/status/error code if present.
+3. Do not describe `deviceLinked: true` as proof that the current server session or Paid Alpha access is valid; that is checked during the next theme operation.
+4. A `pending_confirmation` restart is not approved; `restart_approved` or `running` is not completion; only `completed` is terminal success. A `failed` restart must be reported with its stable `restartErrorCode`.
+5. `sessionStatus: "starting"` or `"stop_requested"` is transitional and must not be called success. If `appliedThemePublicId` already matches during that transition, say that the theme package was committed and may already be visible, but the current-session keeper is not active yet. `active` means the skin controller is connected to the current controlled Codex session. `ended` means Codex was closed, the computer restarted, or Restore ended that session; tell the user to apply the theme again when they next want it. If `sessionStatus` is `failed` while `appliedThemePublicId` is present, explain that the theme package was committed and may be visibly applied, but its keeper failed, so this is only a partial apply—not a complete success. Report `CS-FLOW-SESSION-001` and offer Restore.
+6. Return a short human summary and do not expose the device ID, credentials, absolute paths, recovery contents, request IDs, or operation journals.

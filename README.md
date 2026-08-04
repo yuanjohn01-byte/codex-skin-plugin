@@ -2,9 +2,9 @@
 
 This is the standalone Public Plugin repository for Codex Skin. The installable Plugin root is `plugins/codex-skin/`; the repository root contains the Git-backed Marketplace metadata and release documentation.
 
-Current status: the pre-release Marketplace exposes the Codex Skin v0.0.2 upgrade candidate from this repository. The installed Plugin remains a read-only version check; no theme capability or public compatibility claim is attached.
+Current status: this feature branch contains the `0.1.0-paid-alpha` code-stage candidate. It adds the Plugin theme flow, but it is not a Public or Production release. The current release workflow must not publish it until Private API deployment, a signed Helper Release, and the documented macOS/Windows gates are complete.
 
-The repository now also contains the unreleased Gate B source for a self-contained Go Helper theme engine. Engine v0.2.0 verifies data-only theme packages against the canonical verification keyset embedded byte-for-byte from the Private public-contract export, enforces the signed minimum engine version, checks official Codex identity before using loopback-only CDP, applies a fixed engine-owned template transactionally, and keeps journals, revalidated package cache, durable last-known-good snapshots, and an offline `theme restore` entry outside the Plugin cache. These capabilities are not exposed by the installed v0.0.2 Plugin and are not a public release claim.
+The candidate consumes only allowlisted contracts exported from Private. One six-digit theme request can continue through same-origin device authorization, an optional bounded Pro purchase wait, verified package download, the existing Gate B signature/package checks, and transactional apply. Refresh credentials remain in macOS Keychain or Windows Credential Manager; Access Tokens remain memory-only. Offline Restore continues to work from the fixed out-of-cache recovery engine without login, active access, network, Node, or the Plugin cache.
 
 The v0.0.1-to-v0.0.2 upgrade spike has passed macOS and Windows Desktop/CLI checks against the reviewed feature refs. The Windows distribution workflow also performs the equivalent CLI/cache upgrade on a clean GitHub-hosted runner. Every release still requires a post-merge two-platform check of the exact `main` form before its commands are published.
 
@@ -24,6 +24,9 @@ codex-skin-plugin/
       .codex-plugin/plugin.json
       skills/
         codex-skin-version/SKILL.md
+        codex-skin-install-theme/SKILL.md
+        codex-skin-restore-theme/SKILL.md
+        codex-skin-status/SKILL.md
       scripts/
       assets/
   cmd/codex-skin/              # self-contained Helper entrypoint
@@ -35,7 +38,11 @@ codex-skin-plugin/
     test_public_repository.py
 ```
 
-The bundled v0.0.2 Skill is a read-only installation and upgrade check. The Gate B Helper source is not exposed as an installed capability yet. The internal device-authorization client can validate a successful token response, keep the Access Token behind a redacting in-memory value, and rotate a Refresh Token stored with its device proof in macOS Keychain or Windows Credential Manager. Its in-memory continuation validates the same-origin device-management response, preserves the original authorization proof, and invokes the caller's pending operation at most once after authorization. This code still has no installed CLI or Skill entry and is not allowed to call the non-Production API from an installed Plugin.
+The candidate Skills expose version, apply, local status, and offline restore. On the first `theme apply`, their wrappers may download only the release-tagged Bootstrap launcher whose platform filename and SHA-256 are pinned in the Plugin. That launcher verifies the signed Helper release and installs it under the per-user Codex Skin recovery path. All Helper commands then invoke only that fixed external copy; they never select a binary from the replaceable Plugin cache. `status`, `continue`, and Restore never bootstrap or use the network and fail closed when the verified external Helper is absent.
+
+The Helper's API origin is a build-time value and is intentionally empty in ordinary source builds. This prevents an installed Plugin from accepting an arbitrary server URL or depending on an undeployed endpoint. Staging/Production artifacts must pin the approved HTTPS origin during their release build and pass the corresponding environment gate.
+
+The Scheme A Staging candidate uses the immutable Helper revision `0.1.0-paid-alpha.4`, Bootstrap revision `0.1.0-paid-alpha.3`, and its Staging API origin. The earlier signed `.1` and `.2` Helper candidates remain immutable and are not overwritten. No Staging revision may be republished with different bytes under the same tag or filename. Production promotion requires higher immutable Helper and Bootstrap revisions, the approved Production origin, and the release gate for those exact artifacts; the Plugin version remains `0.1.0-paid-alpha`.
 
 ## Helper development
 
@@ -46,13 +53,14 @@ go test ./...
 go vet ./...
 go run ./cmd/codex-skin version --json
 go run ./cmd/codex-skin doctor --json
+go run ./cmd/codex-skin status --json
 go run ./cmd/codex-skin theme restore --json
 python3 tools/test_helper_builds.py
 python3 tools/test_release_descriptor.py
 python3 tools/test_guardian_builds.py
 ```
 
-The canonical Helper protocol, release descriptor, and device-authorization poll Schemas live in the Private repository allowlist and are generated into `contracts/`. Direct edits to a Public Schema or its digest manifest fail the repository boundary check. The poll client and same-task continuation are currently internal libraries with no CLI or Skill entry and cannot make the unreleased Staging API a user dependency.
+The canonical Helper protocol, release descriptor, device-authorization, and theme-download Schemas live in the Private repository allowlist and are generated into `contracts/`. Direct edits to a Public Schema or its digest manifest fail the repository boundary check.
 
 The credential backend uses the fixed `/usr/bin/security` binary on macOS and sends the secret only through stdin; it calls the current user's native `CredWriteW`/`CredReadW`/`CredDeleteW` APIs directly on Windows and frees the returned credential buffer. It never uses a shell, `cmdkey`, argv, environment variables, or an ordinary state file for credential contents. Native tests use an isolated temporary Keychain on macOS and a synthetic, cleanup-guarded Generic Credential on the Windows hosted runner.
 
@@ -60,9 +68,9 @@ The build test produces unsigned internal artifacts for `macos-arm64`, `macos-x6
 
 `tools/create_release_descriptor.py` converts that trusted build summary into one canonical, fixed-order descriptor with the exact version, tag, UTC timestamp, platform filenames, sizes, and SHA-256 values. The Go release package rejects noncanonical JSON, unknown fields or signing key IDs, invalid detached Ed25519 signatures, missing/duplicate/mismatched platforms, unsupported runtimes, and downloaded bytes with the wrong size or digest. Tests generate ephemeral signing keys at runtime; this repository contains no release private key or Production trust-root claim. The S3 artifact remains an unsigned internal review artifact until the later signing and release gates are complete.
 
-The bootstrap library uses the fixed Public GitHub Releases origin, accepts only the descriptor, raw detached signature, and strict Helper filenames, and allows HTTPS redirects only to GitHub release-asset hosts. After signature/platform/size/SHA-256 verification it writes a per-version executable in `~/Library/Application Support/CodexSkin/bin/` on macOS or `%LOCALAPPDATA%\CodexSkin\bin\` on Windows, runs only the fixed `version --json` and `doctor --json` self-tests with a minimal environment, then atomically replaces `current.json`. Descriptor/signature tampering, wrong artifact bytes, declared-length truncation, reader interruption, downgrade, and self-test failure all stop before activation; untrusted candidates never reach the executable self-test, and the previous pointer and Helper remain reusable without staging debris. The application root must not overlap or resolve through the Plugin cache; tests replace that cache and confirm the Helper plus `state/` and `recovery/` sentinels remain. This is still internal bootstrap infrastructure: no unsigned artifact is authorized for user installation.
+The bootstrap library uses the fixed Public GitHub Releases origin, accepts only `helper-release-descriptor.json`, its raw detached Ed25519 signature, and strict Helper filenames, and allows HTTPS redirects only to GitHub release-asset hosts. The verification keyset is generated from the canonical Private allowlist and embedded into the launcher. After signature/platform/size/SHA-256 verification it writes a per-version executable in `~/Library/Application Support/CodexSkin/bin/` on macOS or `%LOCALAPPDATA%\CodexSkin\bin\` on Windows, runs only the fixed `version --json` and `doctor --json` self-tests with a minimal environment, updates the cache-independent recovery engine transactionally, and only then atomically replaces `current.json`. The install result reports the exact Helper and recovery SHA-256 values. Descriptor/signature tampering, wrong artifact bytes, declared-length truncation, reader interruption, downgrade, self-test failure, and current activation failure all stop safely; the latter also restores the prior recovery engine. Untrusted candidates never reach the executable self-test, and the previous pointer and Helper remain reusable without staging debris. The application root must not overlap or resolve through the Plugin cache; tests replace that cache and confirm the Helper plus `state/` and `recovery/` sentinels remain. This is still pre-release infrastructure: no unsigned artifact is authorized for user installation.
 
-The Gate B engine accepts only versioned manifest fields and declared local PNG/JPEG/WebP assets; theme packages cannot provide CSS, JavaScript, shell commands, selectors, or remote execution URLs. A verified package follows `validate → stage → backup → apply → verify → commit`. First use and cached reuse both require the exact embedded keyset, descriptor signature, package hash, manifest hash and compatible minimum engine version; callers cannot substitute a self-signed keyset. If apply, verify or commit fails, rollback uses a bounded context detached from request cancellation, verifies the restored snapshot or official state, and restores the previous desired-theme pointer. An incomplete rollback keeps its mutation-stage journal recoverable. The independent `theme restore` command removes the fixed theme marker and background without network, login, access entitlement, Node, or Plugin cache access. Formal user exposure remains deferred to the later flow/release gates.
+The Gate B engine accepts only versioned manifest fields and declared local PNG/JPEG/WebP assets; theme packages cannot provide CSS, JavaScript, shell commands, selectors, or remote execution URLs. The engine transaction follows `validate → stage → backup → apply → verify → commit`; restart consent is terminal before mutation, so its continuation does not create a second recovery restart. The outer user flow then starts and verifies the session controller before it reports success. First use and cached reuse both require the exact embedded keyset, descriptor signature, package hash, manifest hash and compatible minimum engine version; callers cannot substitute a self-signed keyset. Template v5 synchronizes the theme's declared light/dark mode with Codex's native `appearanceTheme`, preserves the exact pre-theme appearance settings for Restore, bridges Codex's native dropdown/popover token family, and installs one fixed in-renderer controller before navigation. The signed Helper starts a second, session-bound controller only after the initial visual verification succeeds; it reconnects to that exact verified process without re-reading the restored on-disk appearance setting, and apply does not report success until that controller is active. During the active session, fixed renderer hooks repair only root, route, or main-surface changes and the Helper uses a lightweight marker probe instead of repeatedly scanning layout and computed contrast. Before activation, it restores the user's original on-disk appearance settings and verifies that the running renderer stays themed, so an abrupt shutdown cannot leave the next ordinary Codex launch pinned to the skin's light/dark mode. It never creates a login item, service, daemon, or auto-launch behavior: completely closing Codex or restarting the computer ends the skin session, so the user applies the theme again next time. Restore first stops the session controller, then removes the controller, fixed theme marker and background without network, login, access entitlement, Node, or Plugin cache access; if Chromium retired a previous connection's script identifier, a fixed local neutralizer replaces it and immediate official cleanup is still verified. Verification measures computed contrast only for fixtures that are actually present, reporting absent late-rendered activity and diff regions as `not_present` instead of a synthetic pass. If apply, verify or session start fails, rollback uses a bounded context detached from request cancellation, verifies the restored snapshot or official state, restores the original appearance settings, and restores the previous desired-theme pointer. An incomplete rollback keeps its mutation-stage journal recoverable. Formal user exposure remains deferred to the later flow/release gates.
 
 The [macOS signing feasibility note](docs/macos-signing-feasibility.md) and its CI workflow test ad-hoc signing, strict verification, and post-signing tamper rejection without using secrets. Ad-hoc signatures are explicitly not Developer ID signatures or notarization; formal macOS distribution remains blocked on a protected Apple certificate, accepted notarization, the exact Gatekeeper download path, and a decision about a staplable release container.
 
@@ -70,9 +78,9 @@ The [Windows signing feasibility note](docs/windows-signing-feasibility.md) uses
 
 The [per-user Guardian lifecycle note](docs/guardian-lifecycle-feasibility.md) describes the internal fixed-surface Guardian and its versioned install, signature gate, per-user registration, side-by-side upgrade, explicit rollback, and registration-first uninstall tests. Native macOS LaunchAgent and Windows Limited/Interactive Scheduled Task jobs create, run, inspect, and remove temporary registrations without adding a service, network listener, or general command surface. The trigger remains a packaging-only Spike; actual lifecycle reconciliation is a later numbered task, and formal Guardian distribution remains blocked on the same platform signing gates.
 
-## Installation
+## Release installation contract
 
-The following is the single installation flow for releases on `main`. A release is ready for website publication only after its documented gates pass. Users do not need to open or fill in the Marketplace form, edit Codex configuration, or delete cache files.
+The following is the single installation flow for releases on `main`. It is retained as the release contract, not as permission to install this unmerged code-stage branch. A release is ready for website publication only after its documented gates pass. Users do not need to open or fill in the Marketplace form, edit Codex configuration, or delete cache files.
 
 Run these commands in a terminal:
 
@@ -82,7 +90,7 @@ codex plugin add codex-skin@codex-skin
 codex plugin list --json
 ```
 
-The final command must show exactly one installed `codex-skin@codex-skin` entry with `installed: true` and `enabled: true`. Completely quit Codex, reopen it, start a new task, and ask Codex to run `$codex-skin-version`. A successful v0.0.2 distribution check reports Version `0.0.2`, Skill `codex-skin-version`, and that theme operations are unavailable in this test build.
+The final command must show exactly one installed `codex-skin@codex-skin` entry with `installed: true` and `enabled: true`. Completely quit Codex, reopen it, start a new task, and ask Codex to run `$codex-skin-version`. For the Paid Alpha release, the Skill must report `0.1.0-paid-alpha`; apply/restore/status are accepted only after the signed Helper and exact API origin are also verified.
 
 The command shape has passed macOS and Windows Desktop/CLI tests against the reviewed feature refs. For every release, publishing the `main` form also requires a post-merge two-platform check.
 
@@ -119,7 +127,7 @@ codex plugin add codex-skin@codex-skin
 codex plugin list --json
 ```
 
-If an existing Plugin still works but the upgrade does not, leave it installed and report the diagnostics instead of uninstalling it. The installed v0.0.2 spike has no theme operations. Its unreleased Helper source includes an out-of-cache offline restore entry, but users should not invoke an unsigned internal build as a product release.
+If an existing Plugin still works but the upgrade does not, leave it installed and report the diagnostics instead of uninstalling it. Do not invoke an unsigned internal Helper build as a product release.
 
 ## License
 

@@ -1,0 +1,14 @@
+{
+  "schemaVersion": 1,
+  "keys": [
+    {
+      "keyId": "helper-alpha-2026-08",
+      "algorithm": "Ed25519",
+      "usage": "helper-release",
+      "publicKeyBase64": "HpvPHlAV+E27CkqEK1GM/NjUoKl2fkLUXL73Pot/aIg=",
+      "notBefore": "2026-08-03T00:00:00Z",
+      "notAfter": "2028-08-03T00:00:00Z",
+      "status": "active"
+    }
+  ]
+}

@@ -30,6 +30,13 @@ func NewHTTPReleaseSource() *HTTPReleaseSource {
 	return newHTTPReleaseSource(&http.Client{Timeout: 30 * time.Second})
 }
 
+func NewHTTPReleaseSourceWithClient(client *http.Client) *HTTPReleaseSource {
+	if client == nil {
+		return NewHTTPReleaseSource()
+	}
+	return newHTTPReleaseSource(client)
+}
+
 func newHTTPReleaseSource(client *http.Client) *HTTPReleaseSource {
 	cloned := *client
 	if cloned.Timeout <= 0 {

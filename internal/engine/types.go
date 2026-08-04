@@ -8,7 +8,8 @@ import (
 const (
 	StateSchemaVersion     = 1
 	CurrentEngineVersion   = "0.2.0"
-	TemplateVersion        = 1
+	MinimumTemplateVersion = 1
+	TemplateVersion        = 6
 	MarkerID               = "codex-skin-theme-v1"
 	RootMarkerAttribute    = "data-codex-skin"
 	ThemeMarkerAttribute   = "data-codex-skin-theme"
@@ -21,6 +22,7 @@ var (
 	ErrBusy              = errors.New("another theme operation is active")
 	ErrStateUnsafe       = errors.New("theme engine state path is unsafe")
 	ErrCapabilityBlocked = errors.New("Codex capability probes blocked theme apply")
+	ErrRestartConsent    = errors.New("current Codex requires an explicit restart confirmation")
 	ErrApplyFailed       = errors.New("theme apply failed")
 	ErrVerifyFailed      = errors.New("theme verification failed")
 	ErrRollbackFailed    = errors.New("theme rollback failed")
@@ -67,13 +69,17 @@ type Snapshot struct {
 	ThemePublicID     string `json:"themePublicId"`
 	ThemeVersion      string `json:"themeVersion"`
 	TemplateVersion   int    `json:"templateVersion"`
+	AppearanceMode    string `json:"appearanceMode"`
 }
 
 type CompiledTheme struct {
 	ThemePublicID     string
 	ThemeVersion      string
 	TemplateVersion   int
+	AppearanceMode    string
 	StyleText         string
+	PreviousStyleText string
+	LegacyStyleText   string
 	BackgroundDataURL string
 }
 
@@ -89,10 +95,37 @@ type Adapter interface {
 	Close(context.Context, Session) error
 }
 
+// CapabilityWaiter lets a live adapter wait for the official UI to finish
+// loading before the engine evaluates fail-closed capability probes.
+type CapabilityWaiter interface {
+	WaitForCapabilities(context.Context, Session) (RegionReport, error)
+}
+
 // SessionPrimer lets an adapter re-establish trusted in-memory context from a
 // package that the engine revalidated from its offline cache.
 type SessionPrimer interface {
 	Prime(context.Context, Session, CompiledTheme) error
+}
+
+// ThemeSessionOpener lets the live adapter synchronize Codex's native
+// appearance before opening the verified renderer used for a theme apply.
+// Test/fake adapters keep using Adapter.OpenVerifiedSession.
+type ThemeSessionOpener interface {
+	OpenVerifiedThemeSession(context.Context, CompiledTheme) (Session, error)
+}
+
+// OfficialSessionOpener lets the live adapter restore the exact native
+// appearance backup before the official renderer is verified.
+type OfficialSessionOpener interface {
+	OpenVerifiedOfficialSession(context.Context) (Session, error)
+}
+
+// OfficialRollbackFinalizer completes a failed first-theme transaction after
+// the verified renderer has been restored to the official interface. The live
+// adapter uses it to stop only the exact controlled process, restore Codex's
+// native appearance preference, and reopen an ordinary Codex instance.
+type OfficialRollbackFinalizer interface {
+	FinalizeOfficialRollback(context.Context, Session) error
 }
 
 type ApplyResult struct {

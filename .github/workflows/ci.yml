@@ -83,7 +83,9 @@ jobs:
           test -z "$(gofmt -l
           cmd/codex-skin
           internal/adapter
+          internal/appearance
           internal/bootstrap
+          internal/browseropen
           internal/buildinfo
           internal/cdp
           internal/cli
@@ -91,9 +93,14 @@ jobs:
           internal/credentials
           internal/deviceauth
           internal/engine
+          internal/flowstate
           internal/protocol
           internal/release
+          internal/restartflow
+          internal/sessionflow
           internal/theme
+          internal/themeapi
+          internal/userflow
           tools/gateb_calibration)"
       - name: Vet the Helper
         if: steps.scope.outputs.run_go == 'true'
@@ -101,7 +108,9 @@ jobs:
           go vet
           ./cmd/codex-skin
           ./internal/adapter
+          ./internal/appearance
           ./internal/bootstrap
+          ./internal/browseropen
           ./internal/buildinfo
           ./internal/cdp
           ./internal/cli
@@ -109,9 +118,14 @@ jobs:
           ./internal/credentials
           ./internal/deviceauth
           ./internal/engine
+          ./internal/flowstate
           ./internal/protocol
           ./internal/release
+          ./internal/restartflow
+          ./internal/sessionflow
           ./internal/theme
+          ./internal/themeapi
+          ./internal/userflow
           ./tools/gateb_calibration
       - name: Test the Helper and JSONL contract
         if: steps.scope.outputs.run_go == 'true'
@@ -119,7 +133,9 @@ jobs:
           go test
           ./cmd/codex-skin
           ./internal/adapter
+          ./internal/appearance
           ./internal/bootstrap
+          ./internal/browseropen
           ./internal/buildinfo
           ./internal/cdp
           ./internal/cli
@@ -127,9 +143,14 @@ jobs:
           ./internal/credentials
           ./internal/deviceauth
           ./internal/engine
+          ./internal/flowstate
           ./internal/protocol
           ./internal/release
+          ./internal/restartflow
+          ./internal/sessionflow
           ./internal/theme
+          ./internal/themeapi
+          ./internal/userflow
           ./tools/gateb_calibration
 
   full-helper-build:

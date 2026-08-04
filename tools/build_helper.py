@@ -12,13 +12,14 @@ import struct
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = "github.com/yuanjohn01-byte/codex-skin-plugin"
-HELPER_VERSION = "0.1.0-s3"
+HELPER_VERSION = "0.1.0-paid-alpha.4"
 REQUIRED_GO_VERSION = "go1.26.5"
 DEFAULT_OUTPUT = ROOT / "dist" / "helper"
 
@@ -43,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--commit")
     parser.add_argument("--built-at")
+    parser.add_argument("--api-base-url")
     parser.add_argument("--target", action="append", choices=[item.platform for item in TARGETS])
     return parser.parse_args()
 
@@ -107,6 +109,7 @@ def build_target(
     output: Path,
     commit: str,
     built_at: str,
+    api_base_url: str | None,
 ) -> dict[str, object]:
     output.mkdir(parents=True, exist_ok=True)
     destination = output / target.filename
@@ -119,15 +122,16 @@ def build_target(
             "GOFLAGS": "-mod=readonly",
         }
     )
-    ldflags = " ".join(
-        (
-            "-s",
-            "-w",
-            f"-X {MODULE}/internal/buildinfo.Version={HELPER_VERSION}",
-            f"-X {MODULE}/internal/buildinfo.Commit={commit}",
-            f"-X {MODULE}/internal/buildinfo.BuiltAt={built_at}",
-        )
-    )
+    flags = [
+        "-s",
+        "-w",
+        f"-X {MODULE}/internal/buildinfo.Version={HELPER_VERSION}",
+        f"-X {MODULE}/internal/buildinfo.Commit={commit}",
+        f"-X {MODULE}/internal/buildinfo.BuiltAt={built_at}",
+    ]
+    if api_base_url:
+        flags.append(f"-X {MODULE}/internal/buildinfo.APIBaseURL={api_base_url}")
+    ldflags = " ".join(flags)
     run(
         [
             go,
@@ -173,9 +177,29 @@ def atomic_json(path: Path, payload: object) -> None:
 def main() -> int:
     args = parse_args()
     commit, built_at = resolve_build_metadata(args.commit, args.built_at)
+    if args.api_base_url:
+        parsed_api = urllib.parse.urlsplit(args.api_base_url)
+        if (
+            parsed_api.scheme != "https"
+            or not parsed_api.hostname
+            or parsed_api.username
+            or parsed_api.password
+            or parsed_api.path
+            or parsed_api.query
+            or parsed_api.fragment
+            or args.api_base_url != f"https://{parsed_api.netloc}"
+        ):
+            raise ValueError("API base URL must be an exact HTTPS origin")
     selected = set(args.target or [item.platform for item in TARGETS])
     summaries = [
-        build_target(go_binary(), item, args.output.resolve(), commit, built_at)
+        build_target(
+            go_binary(),
+            item,
+            args.output.resolve(),
+            commit,
+            built_at,
+            args.api_base_url,
+        )
         for item in TARGETS
         if item.platform in selected
     ]

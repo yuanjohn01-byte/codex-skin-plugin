@@ -119,10 +119,21 @@ func Discover(ctx context.Context, port int) ([]Target, error) {
 }
 
 func SelectPage(targets []Target) (Target, error) {
-	if len(targets) != 1 {
-		return Target{}, fmt.Errorf("%w: expected one official app page, got %d", ErrTargetInvalid, len(targets))
+	mainTargets := make([]Target, 0, len(targets))
+	for _, target := range targets {
+		if target.URL == "app://-/index.html" ||
+			target.URL == "app://codex/index.html" {
+			mainTargets = append(mainTargets, target)
+		}
 	}
-	return targets[0], nil
+	if len(mainTargets) != 1 {
+		return Target{}, fmt.Errorf(
+			"%w: expected one official main app page, got %d",
+			ErrTargetInvalid,
+			len(mainTargets),
+		)
+	}
+	return mainTargets[0], nil
 }
 
 func Dial(ctx context.Context, target Target, port int) (*Client, error) {

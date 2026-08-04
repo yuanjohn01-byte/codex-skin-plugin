@@ -13,42 +13,55 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/appearance"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/cdp"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/codex"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 )
 
-const defaultLaunchWait = 25 * time.Second
+const (
+	defaultLaunchWait   = 25 * time.Second
+	openRollbackTimeout = 20 * time.Second
+)
 
 var sixDigitID = regexp.MustCompile(`^[0-9]{6}$`)
 
 type Live struct {
-	root       string
-	profile    string
-	port       int
-	launchWait time.Duration
-	mu         sync.Mutex
-	sessions   map[string]*liveSession
+	root            string
+	profile         string
+	port            int
+	launchWait      time.Duration
+	currentProfile  bool
+	restartApproved bool
+	appearance      *appearance.Manager
+	mu              sync.Mutex
+	sessions        map[string]*liveSession
 }
 
 type liveSession struct {
-	client       *cdp.Client
-	installation codex.Installation
-	process      codex.ProcessIdentity
-	port         int
-	profile      string
-	current      *engine.CompiledTheme
+	client         *cdp.Client
+	installation   codex.Installation
+	process        codex.ProcessIdentity
+	port           int
+	profile        string
+	current        *engine.CompiledTheme
+	appearanceMode string
+	targetID       string
 }
 
 type Config struct {
-	Root       string
-	Profile    string
-	Port       int
-	LaunchWait time.Duration
+	Root            string
+	Profile         string
+	Port            int
+	LaunchWait      time.Duration
+	CurrentProfile  bool
+	RestartApproved bool
+	UserHome        string
 }
 
 type remoteObject struct {
@@ -122,55 +135,206 @@ func NewLive(config Config) (*Live, error) {
 		return nil, engine.ErrConfiguration
 	}
 	profile := config.Profile
-	if profile == "" {
+	if config.CurrentProfile && profile != "" {
+		return nil, engine.ErrConfiguration
+	}
+	if !config.CurrentProfile && profile == "" {
 		profile = filepath.Join(root, "state", "codex-profile")
 	}
-	profile, err = filepath.Abs(profile)
-	if err != nil {
-		return nil, engine.ErrConfiguration
-	}
-	relative, err := filepath.Rel(root, profile)
-	if err != nil || relative == "." || relative == ".." || filepath.IsAbs(relative) ||
-		len(relative) >= 3 && relative[:3] == ".."+string(filepath.Separator) {
-		return nil, engine.ErrConfiguration
+	if profile != "" {
+		profile, err = filepath.Abs(profile)
+		if err != nil {
+			return nil, engine.ErrConfiguration
+		}
+		relative, err := filepath.Rel(root, profile)
+		if err != nil || relative == "." || relative == ".." || filepath.IsAbs(relative) ||
+			len(relative) >= 3 && relative[:3] == ".."+string(filepath.Separator) {
+			return nil, engine.ErrConfiguration
+		}
 	}
 	wait := config.LaunchWait
 	if wait <= 0 {
 		wait = defaultLaunchWait
 	}
-	return &Live{
+	live := &Live{
 		root: root, profile: profile, port: config.Port, launchWait: wait,
+		currentProfile: config.CurrentProfile, restartApproved: config.RestartApproved,
 		sessions: map[string]*liveSession{},
-	}, nil
+	}
+	if config.CurrentProfile {
+		home := config.UserHome
+		if home == "" {
+			home, err = os.UserHomeDir()
+		}
+		if err != nil || home == "" {
+			return nil, engine.ErrConfiguration
+		}
+		live.appearance, err = appearance.New(
+			filepath.Join(home, ".codex", "config.toml"),
+			filepath.Join(root, "recovery", "appearance.json"),
+			runtime.GOOS,
+		)
+		if err != nil {
+			return nil, engine.ErrConfiguration
+		}
+	}
+	return live, nil
 }
 
 func (adapter *Live) OpenVerifiedSession(ctx context.Context) (engine.Session, error) {
+	return adapter.openVerifiedSession(ctx, "", false, nil)
+}
+
+func (adapter *Live) OpenVerifiedThemeSession(
+	ctx context.Context,
+	compiled engine.CompiledTheme,
+) (engine.Session, error) {
+	if compiled.AppearanceMode != "dark" && compiled.AppearanceMode != "light" {
+		return engine.Session{}, engine.ErrConfiguration
+	}
+	return adapter.openVerifiedSession(ctx, compiled.AppearanceMode, false, nil)
+}
+
+// OpenVerifiedBoundThemeSession reconnects the Scheme A controller to the
+// exact controlled Codex process that the apply transaction already verified.
+// It deliberately does not inspect or pin the on-disk appearance setting: the
+// controller restores that setting before reporting active, while the running
+// renderer must remain attached to the same process and loopback listener.
+func (adapter *Live) OpenVerifiedBoundThemeSession(
+	ctx context.Context,
+	compiled engine.CompiledTheme,
+	expected engine.Identity,
+) (engine.Session, error) {
+	if compiled.AppearanceMode != "dark" && compiled.AppearanceMode != "light" {
+		return engine.Session{}, engine.ErrConfiguration
+	}
+	return adapter.openVerifiedSession(ctx, compiled.AppearanceMode, false, &expected)
+}
+
+func (adapter *Live) OpenVerifiedOfficialSession(ctx context.Context) (engine.Session, error) {
+	return adapter.openVerifiedSession(ctx, "", true, nil)
+}
+
+func (adapter *Live) openVerifiedSession(
+	ctx context.Context,
+	targetAppearance string,
+	restoreAppearance bool,
+	boundIdentity *engine.Identity,
+) (engine.Session, error) {
 	installation, err := codex.DiscoverInstallation(ctx)
 	if err != nil {
 		return engine.Session{}, err
 	}
-	if err := ensureProfile(adapter.profile); err != nil {
-		return engine.Session{}, err
-	}
+	profile := adapter.profile
 	port := adapter.port
-	if port == 0 {
-		port, err = reserveLoopbackPort()
+	launchedPID := 0
+	appearanceChanged := false
+	appearanceRestart := false
+	mutated := false
+	var process codex.ProcessIdentity
+	if boundIdentity != nil && (!adapter.currentProfile || restoreAppearance) {
+		return engine.Session{}, engine.ErrConfiguration
+	}
+	if boundIdentity == nil && adapter.currentProfile && adapter.appearance != nil {
+		if restoreAppearance {
+			appearanceRestart, err = adapter.appearance.NeedsRestore()
+		} else if targetAppearance != "" {
+			appearanceRestart, err = adapter.appearance.NeedsPin(targetAppearance)
+		}
 		if err != nil {
-			return engine.Session{}, err
+			return engine.Session{}, errors.Join(engine.ErrStateUnsafe, err)
 		}
 	}
-	launchedPID, err := codex.LaunchControlled(ctx, installation, adapter.profile, port)
-	if err != nil {
+
+	if boundIdentity != nil {
+		current, currentErr := codex.DiscoverCurrentInstance(ctx, installation)
+		if currentErr != nil || current.ControlledPort < 1 ||
+			!boundIdentityMatches(installation, current.Process, *boundIdentity) {
+			if currentErr == nil {
+				currentErr = codex.ErrListenerUntrusted
+			}
+			return engine.Session{}, currentErr
+		}
+		profile = current.Profile
+		port = current.ControlledPort
+		process = current.Process
+	} else if adapter.currentProfile {
+		current, currentErr := codex.DiscoverCurrentInstance(ctx, installation)
+		switch {
+		case currentErr == nil && current.ControlledPort > 0 && !appearanceRestart:
+			profile = current.Profile
+			port = current.ControlledPort
+			process = current.Process
+		case currentErr == nil && !adapter.restartApproved:
+			return engine.Session{}, engine.ErrRestartConsent
+		case currentErr == nil:
+			profile = current.Profile
+			if err := codex.StopCurrentInstance(ctx, installation, current); err != nil {
+				return engine.Session{}, err
+			}
+			mutated = true
+		case errors.Is(currentErr, codex.ErrCurrentMissing):
+			profile, err = codex.DefaultUserProfile(installation)
+			if err != nil {
+				return engine.Session{}, err
+			}
+		default:
+			return engine.Session{}, currentErr
+		}
+	} else if err := ensureProfile(profile); err != nil {
 		return engine.Session{}, err
 	}
+
+	if process.ProcessID == 0 {
+		if adapter.currentProfile && adapter.appearance != nil && appearanceRestart {
+			if restoreAppearance {
+				appearanceChanged, err = adapter.appearance.Restore()
+			} else {
+				appearanceChanged, err = adapter.appearance.Pin(targetAppearance)
+			}
+			if err != nil {
+				return engine.Session{}, adapter.recoverOpenFailure(
+					ctx, installation, launchedPID, port, profile, process,
+					mutated, errors.Join(engine.ErrStateUnsafe, err),
+				)
+			}
+			mutated = mutated || appearanceChanged
+		}
+		if port == 0 {
+			port, err = reserveLoopbackPort()
+			if err != nil {
+				return engine.Session{}, adapter.recoverOpenFailure(
+					ctx, installation, launchedPID, port, profile, process, mutated, err,
+				)
+			}
+		}
+		launchedPID, err = codex.LaunchControlled(ctx, installation, profile, port)
+		if err != nil {
+			return engine.Session{}, adapter.recoverOpenFailure(
+				ctx, installation, launchedPID, port, profile, process, true, err,
+			)
+		}
+		mutated = true
+	}
 	deadline := time.Now().Add(adapter.launchWait)
-	var process codex.ProcessIdentity
 	var targets []cdp.Target
 	for time.Now().Before(deadline) {
 		if ctx.Err() != nil {
-			return engine.Session{}, ctx.Err()
+			return engine.Session{}, adapter.recoverOpenFailure(
+				ctx, installation, launchedPID, port, profile, process, mutated, ctx.Err(),
+			)
 		}
-		process, err = codex.VerifyListener(ctx, installation, launchedPID, port, adapter.profile)
+		if launchedPID > 0 {
+			process, err = codex.VerifyListener(ctx, installation, launchedPID, port, profile)
+		} else {
+			process, err = codex.VerifyListener(
+				ctx,
+				installation,
+				process.ProcessID,
+				port,
+				profile,
+			)
+		}
 		if err == nil {
 			targets, err = cdp.Discover(ctx, port)
 			if err == nil {
@@ -180,32 +344,46 @@ func (adapter *Live) OpenVerifiedSession(ctx context.Context) (engine.Session, e
 		time.Sleep(250 * time.Millisecond)
 	}
 	if err != nil {
-		return engine.Session{}, errors.Join(codex.ErrListenerUntrusted, err)
+		err = errors.Join(codex.ErrListenerUntrusted, err)
+		return engine.Session{}, adapter.recoverOpenFailure(
+			ctx, installation, launchedPID, port, profile, process, mutated, err,
+		)
 	}
 	target, err := cdp.SelectPage(targets)
 	if err != nil {
-		return engine.Session{}, err
+		return engine.Session{}, adapter.recoverOpenFailure(
+			ctx, installation, launchedPID, port, profile, process, mutated, err,
+		)
 	}
 	client, err := cdp.Dial(ctx, target, port)
 	if err != nil {
-		return engine.Session{}, err
+		return engine.Session{}, adapter.recoverOpenFailure(
+			ctx, installation, launchedPID, port, profile, process, mutated, err,
+		)
 	}
 	if err := client.Call(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
 		client.Close()
-		return engine.Session{}, err
+		return engine.Session{}, adapter.recoverOpenFailure(
+			ctx, installation, launchedPID, port, profile, process, mutated, err,
+		)
 	}
 	if err := client.Call(ctx, "Page.enable", map[string]any{}, nil); err != nil {
 		client.Close()
-		return engine.Session{}, err
+		return engine.Session{}, adapter.recoverOpenFailure(
+			ctx, installation, launchedPID, port, profile, process, mutated, err,
+		)
 	}
 	opaqueID, err := randomSessionID()
 	if err != nil {
 		client.Close()
-		return engine.Session{}, err
+		return engine.Session{}, adapter.recoverOpenFailure(
+			ctx, installation, launchedPID, port, profile, process, mutated, err,
+		)
 	}
 	adapter.mu.Lock()
 	adapter.sessions[opaqueID] = &liveSession{
-		client: client, installation: installation, process: process, port: port, profile: adapter.profile,
+		client: client, installation: installation, process: process, port: port, profile: profile,
+		appearanceMode: targetAppearance, targetID: target.ID,
 	}
 	adapter.mu.Unlock()
 	return engine.Session{
@@ -217,6 +395,86 @@ func (adapter *Live) OpenVerifiedSession(ctx context.Context) (engine.Session, e
 			ProcessStartID: process.ProcessStartID,
 		},
 	}, nil
+}
+
+func boundIdentityMatches(
+	installation codex.Installation,
+	process codex.ProcessIdentity,
+	expected engine.Identity,
+) bool {
+	return expected.Platform == installation.Platform &&
+		expected.AppIdentifier == installation.AppIdentifier &&
+		expected.Publisher == installation.Publisher &&
+		expected.Version == installation.Version &&
+		expected.ExecutableHash == installation.ExecutableSHA256 &&
+		expected.ProcessID == process.ProcessID &&
+		expected.ProcessStartID == process.ProcessStartID &&
+		expected.ExecutableHash == process.ExecutableSHA256
+}
+
+func (adapter *Live) recoverOpenFailure(
+	ctx context.Context,
+	installation codex.Installation,
+	launchedPID int,
+	port int,
+	profile string,
+	process codex.ProcessIdentity,
+	mutated bool,
+	cause error,
+) error {
+	if !mutated {
+		return cause
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openRollbackTimeout)
+	defer cancel()
+	if process.ProcessID == 0 && launchedPID > 0 {
+		verified, verifyErr := codex.VerifyListener(
+			cleanupCtx, installation, launchedPID, port, profile,
+		)
+		if verifyErr == nil {
+			process = verified
+		} else {
+			current, currentErr := codex.DiscoverCurrentInstance(cleanupCtx, installation)
+			if currentErr == nil && current.Process.ProcessID == launchedPID &&
+				current.ControlledPort == port && current.Profile == profile {
+				cause = errors.Join(cause, codex.StopCurrentInstance(cleanupCtx, installation, current))
+				launchedPID = 0
+			} else {
+				cause = errors.Join(cause, verifyErr, currentErr)
+			}
+		}
+	}
+	if process.ProcessID > 0 {
+		cause = errors.Join(cause, codex.StopOwnedProcess(
+			cleanupCtx, installation, process, port, profile,
+		))
+	}
+	if adapter.appearance != nil {
+		_, restoreErr := adapter.appearance.Restore()
+		cause = errors.Join(cause, restoreErr)
+	}
+	return reopenOrdinaryIfMissing(cleanupCtx, installation, cause)
+}
+
+func reopenOrdinaryIfMissing(
+	ctx context.Context,
+	installation codex.Installation,
+	cause error,
+) error {
+	_, currentErr := codex.DiscoverCurrentInstance(ctx, installation)
+	switch {
+	case currentErr == nil:
+		return cause
+	case errors.Is(currentErr, codex.ErrCurrentMissing):
+		reopenCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
+		defer cancel()
+		if reopenErr := codex.LaunchOrdinary(reopenCtx, installation); reopenErr != nil {
+			return errors.Join(cause, reopenErr)
+		}
+		return cause
+	default:
+		return errors.Join(cause, currentErr)
+	}
 }
 
 func (adapter *Live) Probe(ctx context.Context, session engine.Session) (engine.RegionReport, error) {
@@ -231,6 +489,27 @@ func (adapter *Live) Probe(ctx context.Context, session engine.Session) (engine.
 	return report, nil
 }
 
+func (adapter *Live) WaitForCapabilities(ctx context.Context, session engine.Session) (engine.RegionReport, error) {
+	deadline := time.Now().Add(adapter.launchWait)
+	var last engine.RegionReport
+	var lastErr error
+	for time.Now().Before(deadline) {
+		last, lastErr = adapter.Probe(ctx, session)
+		if lastErr == nil && engine.CapabilitiesAllowApply(last) {
+			return last, nil
+		}
+		select {
+		case <-ctx.Done():
+			return engine.RegionReport{}, ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	if lastErr != nil {
+		return engine.RegionReport{}, lastErr
+	}
+	return last, engine.ErrCapabilityBlocked
+}
+
 func (adapter *Live) Capture(ctx context.Context, session engine.Session) (engine.Snapshot, error) {
 	live, err := adapter.verifiedLiveSession(ctx, session)
 	if err != nil {
@@ -243,7 +522,7 @@ func (adapter *Live) Capture(ctx context.Context, session engine.Session) (engin
 	if snapshot.StylePresent &&
 		(live.current == nil ||
 			!sixDigitID.MatchString(snapshot.ThemePublicID) ||
-			snapshot.TemplateVersion != engine.TemplateVersion ||
+			snapshot.TemplateVersion != live.current.TemplateVersion ||
 			snapshot.ThemeVersion == "" ||
 			snapshot.ThemePublicID != live.current.ThemePublicID ||
 			snapshot.ThemeVersion != live.current.ThemeVersion ||
@@ -253,6 +532,7 @@ func (adapter *Live) Capture(ctx context.Context, session engine.Session) (engin
 	if snapshot.StylePresent {
 		snapshot.StyleText = live.current.StyleText
 		snapshot.BackgroundDataURL = live.current.BackgroundDataURL
+		snapshot.AppearanceMode = live.current.AppearanceMode
 	}
 	return snapshot, nil
 }
@@ -261,6 +541,7 @@ func (adapter *Live) Prime(ctx context.Context, session engine.Session, compiled
 	if !sixDigitID.MatchString(compiled.ThemePublicID) ||
 		compiled.ThemeVersion == "" ||
 		compiled.TemplateVersion != engine.TemplateVersion ||
+		(compiled.AppearanceMode != "dark" && compiled.AppearanceMode != "light") ||
 		compiled.StyleText == "" ||
 		!validBackgroundDataURL(compiled.BackgroundDataURL) {
 		return engine.ErrConfiguration
@@ -274,24 +555,58 @@ func (adapter *Live) Prime(ctx context.Context, session engine.Session, compiled
 		return err
 	}
 	if !snapshot.StylePresent {
-		live.current = nil
+		if err := adapter.installController(ctx, live, compiled); err != nil {
+			return err
+		}
+		copy := compiled
+		live.current = &copy
 		return nil
 	}
+	primed, err := selectPrimedTheme(snapshot, compiled)
+	if err != nil {
+		return err
+	}
+	live.current = primed
+	return adapter.installController(ctx, live, *primed)
+}
+
+func selectPrimedTheme(
+	snapshot engine.Snapshot,
+	compiled engine.CompiledTheme,
+) (*engine.CompiledTheme, error) {
 	if snapshot.ThemePublicID != compiled.ThemePublicID ||
 		snapshot.ThemeVersion != compiled.ThemeVersion ||
-		snapshot.TemplateVersion != compiled.TemplateVersion ||
-		snapshot.StyleText != compiled.StyleText {
-		return engine.ErrCapabilityBlocked
+		snapshot.AppearanceMode != compiled.AppearanceMode {
+		return nil, engine.ErrCapabilityBlocked
 	}
 	copy := compiled
-	live.current = &copy
-	return nil
+	switch {
+	case snapshot.TemplateVersion == compiled.TemplateVersion &&
+		snapshot.StyleText == compiled.StyleText:
+	case snapshot.TemplateVersion == engine.TemplateVersion-1 &&
+		compiled.PreviousStyleText != "" &&
+		snapshot.StyleText == compiled.PreviousStyleText:
+		copy.TemplateVersion = engine.TemplateVersion - 1
+		copy.StyleText = compiled.PreviousStyleText
+		copy.PreviousStyleText = ""
+		copy.LegacyStyleText = ""
+	case snapshot.TemplateVersion == engine.MinimumTemplateVersion &&
+		compiled.LegacyStyleText != "" &&
+		snapshot.StyleText == compiled.LegacyStyleText:
+		copy.TemplateVersion = engine.MinimumTemplateVersion
+		copy.StyleText = compiled.LegacyStyleText
+		copy.LegacyStyleText = ""
+	default:
+		return nil, engine.ErrCapabilityBlocked
+	}
+	return &copy, nil
 }
 
 func (adapter *Live) Apply(ctx context.Context, session engine.Session, compiled engine.CompiledTheme) error {
 	if !sixDigitID.MatchString(compiled.ThemePublicID) ||
 		compiled.ThemeVersion == "" ||
 		compiled.TemplateVersion != engine.TemplateVersion ||
+		(compiled.AppearanceMode != "dark" && compiled.AppearanceMode != "light") ||
 		compiled.StyleText == "" ||
 		!validBackgroundDataURL(compiled.BackgroundDataURL) {
 		return engine.ErrConfiguration
@@ -300,15 +615,8 @@ func (adapter *Live) Apply(ctx context.Context, session engine.Session, compiled
 	if err != nil {
 		return err
 	}
-	var applied bool
-	if err := callFunction(ctx, live.client, applyFunction, []any{
-		compiled.StyleText, compiled.BackgroundDataURL, compiled.ThemePublicID,
-		compiled.ThemeVersion, compiled.TemplateVersion,
-	}, &applied); err != nil {
+	if err := adapter.installController(ctx, live, compiled); err != nil {
 		return err
-	}
-	if !applied {
-		return engine.ErrApplyFailed
 	}
 	copy := compiled
 	live.current = &copy
@@ -321,10 +629,43 @@ func (adapter *Live) Verify(ctx context.Context, session engine.Session, compile
 		return engine.RegionReport{}, err
 	}
 	var report engine.RegionReport
-	if err := callFunction(ctx, live.client, verifyFunction, nil, &report); err != nil {
+	if err := callFunction(
+		ctx,
+		live.client,
+		verifyFunction,
+		[]any{compiled.TemplateVersion},
+		&report,
+	); err != nil {
 		return engine.RegionReport{}, err
 	}
 	return report, nil
+}
+
+// ThemeSessionHealthy is the steady-state Scheme A liveness probe. Unlike the
+// full verifier used at commit time, it reads only Codex Skin's own controller
+// markers and does not walk layout, computed colors, or conversation content.
+// The renderer controller remains healthy while the official Settings surface
+// is open even though the visual theme is intentionally deactivated there.
+func (adapter *Live) ThemeSessionHealthy(
+	ctx context.Context,
+	session engine.Session,
+	compiled engine.CompiledTheme,
+) (bool, error) {
+	live, err := adapter.verifiedLiveSession(ctx, session)
+	if err != nil {
+		return false, err
+	}
+	var healthy bool
+	if err := callFunction(
+		ctx,
+		live.client,
+		themeSessionHealthFunction,
+		[]any{compiled.ThemePublicID, compiled.ThemeVersion, compiled.TemplateVersion},
+		&healthy,
+	); err != nil {
+		return false, err
+	}
+	return healthy, nil
 }
 
 func (adapter *Live) Restore(ctx context.Context, session engine.Session, snapshot engine.Snapshot) error {
@@ -333,7 +674,9 @@ func (adapter *Live) Restore(ctx context.Context, session engine.Session, snapsh
 	}
 	if !sixDigitID.MatchString(snapshot.ThemePublicID) ||
 		snapshot.ThemeVersion == "" ||
-		snapshot.TemplateVersion != engine.TemplateVersion ||
+		snapshot.TemplateVersion < engine.MinimumTemplateVersion ||
+		snapshot.TemplateVersion > engine.TemplateVersion ||
+		(snapshot.AppearanceMode != "dark" && snapshot.AppearanceMode != "light") ||
 		snapshot.StyleText == "" ||
 		!validBackgroundDataURL(snapshot.BackgroundDataURL) {
 		return engine.ErrRollbackFailed
@@ -342,27 +685,157 @@ func (adapter *Live) Restore(ctx context.Context, session engine.Session, snapsh
 	if err != nil {
 		return err
 	}
-	var restored bool
-	if err := callFunction(ctx, live.client, applyFunction, []any{
-		snapshot.StyleText, snapshot.BackgroundDataURL, snapshot.ThemePublicID,
-		snapshot.ThemeVersion, snapshot.TemplateVersion,
-	}, &restored); err != nil {
-		return err
+	if adapter.currentProfile && adapter.appearance != nil && live.appearanceMode != snapshot.AppearanceMode {
+		if err := adapter.restartSessionAppearance(ctx, live, snapshot.AppearanceMode); err != nil {
+			return errors.Join(engine.ErrRollbackFailed, err)
+		}
 	}
-	if !restored {
-		return engine.ErrRollbackFailed
-	}
-	live.current = &engine.CompiledTheme{
+	restoredTheme := engine.CompiledTheme{
 		ThemePublicID: snapshot.ThemePublicID, ThemeVersion: snapshot.ThemeVersion,
 		TemplateVersion: snapshot.TemplateVersion, StyleText: snapshot.StyleText,
-		BackgroundDataURL: snapshot.BackgroundDataURL,
+		BackgroundDataURL: snapshot.BackgroundDataURL, AppearanceMode: snapshot.AppearanceMode,
 	}
+	if err := adapter.installController(ctx, live, restoredTheme); err != nil {
+		return errors.Join(engine.ErrRollbackFailed, err)
+	}
+	live.current = &restoredTheme
 	return nil
+}
+
+func (adapter *Live) restartSessionAppearance(
+	ctx context.Context,
+	live *liveSession,
+	mode string,
+) error {
+	if mode != "dark" && mode != "light" {
+		return engine.ErrConfiguration
+	}
+	if !adapter.restartApproved {
+		return engine.ErrRestartConsent
+	}
+	if err := adapter.removeControllerBootstrap(ctx, live); err != nil {
+		return err
+	}
+	var cleaned bool
+	_ = callFunction(ctx, live.client, restoreFunction, nil, &cleaned)
+	if err := codex.StopOwnedProcess(
+		ctx, live.installation, live.process, live.port, live.profile,
+	); err != nil {
+		return err
+	}
+	_ = live.client.Close()
+	live.client = nil
+	live.current = nil
+
+	if _, err := adapter.appearance.Pin(mode); err != nil {
+		return adapter.recoverOrdinaryAppearance(ctx, live.installation, err)
+	}
+	launchedPID, err := codex.LaunchControlled(ctx, live.installation, live.profile, live.port)
+	if err != nil {
+		return adapter.recoverOrdinaryAppearance(ctx, live.installation, err)
+	}
+	process, target, client, err := adapter.connectControlled(
+		ctx, live.installation, launchedPID, live.port, live.profile,
+	)
+	if err != nil {
+		return adapter.recoverFailedControlled(
+			ctx, live.installation, launchedPID, live.port, live.profile, err,
+		)
+	}
+	if err := adapter.clearControllerRecord(); err != nil {
+		_ = client.Close()
+		_ = codex.StopOwnedProcess(ctx, live.installation, process, live.port, live.profile)
+		return adapter.recoverOrdinaryAppearance(ctx, live.installation, err)
+	}
+	live.process = process
+	live.targetID = target.ID
+	live.client = client
+	live.appearanceMode = mode
+	return nil
+}
+
+func (adapter *Live) connectControlled(
+	ctx context.Context,
+	installation codex.Installation,
+	launchedPID int,
+	port int,
+	profile string,
+) (codex.ProcessIdentity, cdp.Target, *cdp.Client, error) {
+	deadline := time.Now().Add(adapter.launchWait)
+	var process codex.ProcessIdentity
+	var targets []cdp.Target
+	var err error
+	for time.Now().Before(deadline) {
+		if ctx.Err() != nil {
+			return codex.ProcessIdentity{}, cdp.Target{}, nil, ctx.Err()
+		}
+		process, err = codex.VerifyListener(ctx, installation, launchedPID, port, profile)
+		if err == nil {
+			targets, err = cdp.Discover(ctx, port)
+			if err == nil {
+				break
+			}
+		}
+		time.Sleep(250 * time.Millisecond)
+	}
+	if err != nil {
+		return codex.ProcessIdentity{}, cdp.Target{}, nil, errors.Join(codex.ErrListenerUntrusted, err)
+	}
+	target, err := cdp.SelectPage(targets)
+	if err != nil {
+		return codex.ProcessIdentity{}, cdp.Target{}, nil, err
+	}
+	client, err := cdp.Dial(ctx, target, port)
+	if err != nil {
+		return codex.ProcessIdentity{}, cdp.Target{}, nil, err
+	}
+	if err := client.Call(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
+		client.Close()
+		return codex.ProcessIdentity{}, cdp.Target{}, nil, err
+	}
+	if err := client.Call(ctx, "Page.enable", map[string]any{}, nil); err != nil {
+		client.Close()
+		return codex.ProcessIdentity{}, cdp.Target{}, nil, err
+	}
+	return process, target, client, nil
+}
+
+func (adapter *Live) recoverOrdinaryAppearance(
+	ctx context.Context,
+	installation codex.Installation,
+	cause error,
+) error {
+	if adapter.appearance != nil {
+		_, restoreErr := adapter.appearance.Restore()
+		cause = errors.Join(cause, restoreErr)
+	}
+	return reopenOrdinaryIfMissing(ctx, installation, cause)
+}
+
+func (adapter *Live) recoverFailedControlled(
+	ctx context.Context,
+	installation codex.Installation,
+	launchedPID int,
+	port int,
+	profile string,
+	cause error,
+) error {
+	if process, err := codex.VerifyListener(ctx, installation, launchedPID, port, profile); err == nil {
+		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 12*time.Second)
+		cause = errors.Join(cause, codex.StopOwnedProcess(
+			stopCtx, installation, process, port, profile,
+		))
+		cancel()
+	}
+	return adapter.recoverOrdinaryAppearance(ctx, installation, cause)
 }
 
 func (adapter *Live) RestoreOfficial(ctx context.Context, session engine.Session) error {
 	live, err := adapter.verifiedLiveSession(ctx, session)
 	if err != nil {
+		return err
+	}
+	if err := adapter.removeControllerBootstrap(ctx, live); err != nil {
 		return err
 	}
 	var restored bool
@@ -434,6 +907,44 @@ func (adapter *Live) Close(ctx context.Context, session engine.Session) error {
 		return nil
 	}
 	return live.client.Close()
+}
+
+// RestoreNativeAppearanceBackup restores the exact on-disk appearance settings
+// without launching or attaching to Codex. The session controller calls this
+// after the already-running renderer is verified, so an abrupt computer shutdown
+// cannot leave the next ordinary Codex launch pinned to a theme mode.
+func (adapter *Live) RestoreNativeAppearanceBackup() error {
+	if !adapter.currentProfile || adapter.appearance == nil {
+		return engine.ErrConfiguration
+	}
+	_, err := adapter.appearance.Restore()
+	return err
+}
+
+// FinalizeOfficialRollback completes a failed first-theme transaction. The
+// renderer has already been verified official by the engine; this method then
+// stops only the exact controlled process, restores the native appearance
+// backup, and reopens Codex without the loopback debugging launch flags.
+func (adapter *Live) FinalizeOfficialRollback(ctx context.Context, session engine.Session) error {
+	adapter.mu.Lock()
+	live := adapter.sessions[session.OpaqueID]
+	delete(adapter.sessions, session.OpaqueID)
+	adapter.mu.Unlock()
+	if live == nil {
+		return codex.ErrListenerUntrusted
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openRollbackTimeout)
+	defer cancel()
+	closeErr := live.client.Close()
+	stopErr := codex.StopOwnedProcess(
+		cleanupCtx, live.installation, live.process, live.port, live.profile,
+	)
+	var appearanceErr error
+	if adapter.appearance != nil {
+		_, appearanceErr = adapter.appearance.Restore()
+	}
+	cause := errors.Join(closeErr, stopErr, appearanceErr)
+	return reopenOrdinaryIfMissing(cleanupCtx, live.installation, cause)
 }
 
 // StopOwned closes and terminates only the exact controlled process created for
@@ -572,12 +1083,20 @@ const probeFunction = `function () {
   const status = (node, optional) => node ? "pass" : (optional ? "not_present" : "fail");
   const style = document.querySelectorAll("#codex-skin-theme-v1");
   const root = document.documentElement;
+  const mainSelector = 'main.main-surface, main[class*="_MainContentSurface_"]';
   const suggestions = document.querySelector(".group\\/home-suggestions");
   const topFade = document.querySelector(".app-shell-main-content-top-fade");
-  const main = document.querySelector("main.main-surface");
+  const main = document.querySelector(mainSelector);
+  const activityHeader = document.querySelector(
+    ".thread-scroll-container button.group\\/activity-header"
+  );
+	const diffResource = document.querySelector(
+		'.thread-scroll-container ' +
+		'[class~="[--codex-diffs-header-padding-x:var(--thread-resource-card-row-padding-x)]"]'
+	);
   const composerUtilityBar = main?.querySelector('[class*="_homeUtilityBar_"]') || null;
-  const project = document.querySelector('main.main-surface button[class*="_utilityBarLabel_"]') ||
-    document.querySelector('main.main-surface div.sticky:has(input[type="text"],textarea)') ||
+  const project = main?.querySelector('button[class*="_utilityBarLabel_"]') ||
+    main?.querySelector('div.sticky:has(input[type="text"],textarea)') ||
     document.querySelector('[data-testid*="project" i]');
   return {
     styleMarkerCount: style.length,
@@ -588,8 +1107,13 @@ const probeFunction = `function () {
       home: status(main, false),
       mainBoundary: status(main, false),
       sidebar: status(document.querySelector("aside.app-shell-left-panel"), false),
-      composerUtilityBar: status(composerUtilityBar, false),
-      topFade: status(topFade, false),
+      composerUtilityBar: status(composerUtilityBar, true),
+      topFade: "pass",
+      bottomFade: "pass",
+      templateScope: status(main, false),
+      themeContrast: "pass",
+      conversationActivity: status(activityHeader, true),
+		conversationDiffResource: status(diffResource, true),
       suggestionCards: status(suggestions, true),
       projectPicker: status(project, true),
       composer: status(document.querySelector(".composer-surface-chrome"), false)
@@ -602,41 +1126,41 @@ const captureFunction = `function () {
   if (styles.length > 1) throw new Error("invalid marker count");
   const root = document.documentElement;
   const style = styles[0] || null;
+  const state = globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V1__"];
   return {
-    stylePresent: Boolean(style),
-    styleText: style ? style.textContent : "",
+	stylePresent: Boolean(style && state),
+	styleText: state?.styleText || "",
     themePublicId: root.getAttribute("data-codex-skin-theme") || "",
     themeVersion: root.getAttribute("data-codex-skin-theme-version") || "",
-    templateVersion: Number(root.getAttribute("data-codex-skin-template") || 0)
+	templateVersion: Number(state?.templateVersion || root.getAttribute("data-codex-skin-template") || 0),
+	appearanceMode: state?.appearanceMode || root.getAttribute("data-codex-skin-appearance") || ""
   };
 }`
 
-const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVersion, templateVersion) {
-  for (const old of document.querySelectorAll("#codex-skin-theme-v1")) old.remove();
-  const style = document.createElement("style");
-  style.id = "codex-skin-theme-v1";
-  style.type = "text/css";
-  style.textContent = styleText;
-  (document.head || document.documentElement).appendChild(style);
+const themeSessionHealthFunction = `function (expectedThemeId, expectedThemeVersion, expectedTemplateVersion) {
+  const state = globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V1__"];
+  if (!state || state.themeId !== expectedThemeId ||
+      state.themeVersion !== expectedThemeVersion ||
+      state.templateVersion !== expectedTemplateVersion ||
+      typeof state.ensure !== "function" || typeof state.cleanup !== "function") return false;
+  const main = document.querySelector('main.main-surface, main[class*="_MainContentSurface_"]');
+  const settings = Boolean(
+    document.querySelector('input[name="appearance-theme"]') ||
+    document.querySelector('[data-testid="theme-preview"]')
+  );
+  if (settings) return true;
   const root = document.documentElement;
-  const previousURL = root.getAttribute("data-codex-skin-background-url");
-  if (previousURL && previousURL.startsWith("blob:")) URL.revokeObjectURL(previousURL);
-  const comma = backgroundDataURL.indexOf(",");
-  const mediaType = backgroundDataURL.slice(5, backgroundDataURL.indexOf(";base64,"));
-  const binary = atob(backgroundDataURL.slice(comma + 1));
-  const bytes = new Uint8Array(binary.length);
-  for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-  const backgroundURL = URL.createObjectURL(new Blob([bytes], { type: mediaType }));
-  root.style.setProperty("--cs-background-image", 'url("' + backgroundURL + '")');
-  root.setAttribute("data-codex-skin-background-url", backgroundURL);
-  root.setAttribute("data-codex-skin", "active");
-  root.setAttribute("data-codex-skin-theme", themeId);
-  root.setAttribute("data-codex-skin-theme-version", themeVersion);
-  root.setAttribute("data-codex-skin-template", String(templateVersion));
-  return document.querySelectorAll("#codex-skin-theme-v1").length === 1;
+  return state.active === true && state.installed === true &&
+    document.querySelectorAll("#codex-skin-theme-v1").length === 1 &&
+    document.querySelectorAll('main[data-codex-skin-main="true"]').length === 1 &&
+    main.getAttribute("data-codex-skin-main") === "true" &&
+    root.getAttribute("data-codex-skin") === "active" &&
+    root.getAttribute("data-codex-skin-theme") === expectedThemeId &&
+    root.getAttribute("data-codex-skin-theme-version") === expectedThemeVersion &&
+    Number(root.getAttribute("data-codex-skin-template") || 0) === expectedTemplateVersion;
 }`
 
-const verifyFunction = `function () {
+const verifyFunction = `function (expectedTemplateVersion) {
   const visible = (node) => {
     if (!node) return false;
     const box = node.getBoundingClientRect();
@@ -644,26 +1168,136 @@ const verifyFunction = `function () {
     return box.width > 1 && box.height > 1 && style.display !== "none" && style.visibility !== "hidden";
   };
   const optional = (node, pass) => !node ? "not_present" : (pass ? "pass" : "fail");
+  const color = (value, surface) => {
+    if (!value || !/^#[0-9A-F]{6}(?:[0-9A-F]{2})?$/.test(value)) return null;
+    const channel = (start) => Number.parseInt(value.slice(start, start + 2), 16);
+    const alpha = value.length === 9 ? channel(7) / 255 : 1;
+    return [
+      channel(1) * alpha + surface[0] * (1 - alpha),
+      channel(3) * alpha + surface[1] * (1 - alpha),
+      channel(5) * alpha + surface[2] * (1 - alpha)
+    ];
+  };
+  const luminance = (rgb) => {
+    const channel = (value) => {
+      value /= 255;
+      return value <= 0.04045 ? value / 12.92 : Math.pow((value + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * channel(rgb[0]) + 0.7152 * channel(rgb[1]) + 0.0722 * channel(rgb[2]);
+  };
+  const contrast = (left, right) => {
+    const high = Math.max(luminance(left), luminance(right));
+    const low = Math.min(luminance(left), luminance(right));
+    return (high + 0.05) / (low + 0.05);
+  };
+	const parsedComputedColor = (value) => {
+		const serialized = String(value || "").trim();
+		const rgb = serialized.match(
+			/rgba?\(\s*([0-9.]+)[,\s]+([0-9.]+)[,\s]+([0-9.]+)(?:\s*[,/]\s*([0-9.]+)%?)?/
+		);
+		if (rgb) {
+			const alpha = rgb[4] == null
+				? 1
+				: Math.max(0, Math.min(1, Number(rgb[4]) / (serialized.includes("%") ? 100 : 1)));
+			return { rgb: [Number(rgb[1]), Number(rgb[2]), Number(rgb[3])], alpha };
+		}
+		const oklab = serialized.match(
+			/^oklab\(\s*([+-]?[0-9.]+)(%)?\s+([+-]?[0-9.]+)(%)?\s+([+-]?[0-9.]+)(%)?(?:\s*\/\s*([0-9.]+)(%)?)?\s*\)$/
+		);
+		if (!oklab) return null;
+		const lightness = Number(oklab[1]) / (oklab[2] ? 100 : 1);
+		const a = Number(oklab[3]) * (oklab[4] ? 0.004 : 1);
+		const b = Number(oklab[5]) * (oklab[6] ? 0.004 : 1);
+		const l = Math.pow(lightness + 0.3963377774 * a + 0.2158037573 * b, 3);
+		const m = Math.pow(lightness - 0.1055613458 * a - 0.0638541728 * b, 3);
+		const s = Math.pow(lightness - 0.0894841775 * a - 1.291485548 * b, 3);
+		const linear = [
+			4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
+			-1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
+			-0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s
+		];
+		const gamma = (channel) => {
+			const value = channel <= 0.0031308
+				? 12.92 * channel
+				: 1.055 * Math.pow(channel, 1 / 2.4) - 0.055;
+			return Math.max(0, Math.min(255, value * 255));
+		};
+		const alpha = oklab[7] == null
+			? 1
+			: Math.max(0, Math.min(1, Number(oklab[7]) / (oklab[8] ? 100 : 1)));
+		return { rgb: linear.map(gamma), alpha };
+	};
+	const computedColor = (value) => parsedComputedColor(value)?.rgb || null;
+	const effectiveBackground = (node, fallback) => {
+		const layers = [];
+		let base = fallback;
+		for (let current = node; current instanceof Element; current = current.parentElement) {
+			const computed = getComputedStyle(current);
+			const layer = parsedComputedColor(computed.backgroundColor);
+			if (layer && layer.alpha > 0) {
+				layers.push(layer);
+				if (layer.alpha >= 0.995) {
+					base = layer.rgb;
+					break;
+				}
+			}
+			if (computed.backgroundImage && computed.backgroundImage !== "none") {
+				base = fallback;
+				break;
+			}
+		}
+		return layers.reverse().reduce((under, layer) => [
+			layer.rgb[0] * layer.alpha + under[0] * (1 - layer.alpha),
+			layer.rgb[1] * layer.alpha + under[1] * (1 - layer.alpha),
+			layer.rgb[2] * layer.alpha + under[2] * (1 - layer.alpha)
+		], base);
+	};
   const root = document.documentElement;
   const styles = document.querySelectorAll("#codex-skin-theme-v1");
   const style = styles[0] || null;
-  const main = document.querySelector("main.main-surface");
+  const main = document.querySelector('main[data-codex-skin-main="true"]');
   const sidebar = document.querySelector("aside.app-shell-left-panel");
   const composer = document.querySelector(".composer-surface-chrome");
   const suggestions = document.querySelector(".group\\/home-suggestions");
-  const topFade = document.querySelector(".app-shell-main-content-top-fade");
+	const activityHeaders = [...document.querySelectorAll(
+		'.thread-scroll-container :is(button.group\\/activity-header, ' +
+		'button[class~="group/activity-header"])'
+	)].filter(visible);
+	const diffResourceSelector = '.thread-scroll-container ' +
+		'[class~="[--codex-diffs-header-padding-x:var(--thread-resource-card-row-padding-x)]"]';
+	const diffResourceCards = [...document.querySelectorAll(diffResourceSelector)].filter(visible);
+	const diffResourceControls = diffResourceCards.flatMap((card) =>
+		[...card.querySelectorAll(
+			':is(button, a, [role="button"])[class~="text-token-text-primary"], ' +
+			'[class~="text-token-text-secondary"], [class~="text-token-text-tertiary"]'
+		)].filter(visible)
+	);
+  const legacyTopFade = document.querySelector(".app-shell-main-content-top-fade");
+  const topFades = [...document.querySelectorAll(
+    '.app-shell-main-content-top-fade, [class*="_MainContentTopFade_"]'
+  )];
   const composerUtilityBar = main?.querySelector('[class*="_homeUtilityBar_"]') || null;
   const cards = suggestions ? [...suggestions.querySelectorAll("button")].filter(visible) : [];
-  const project = document.querySelector('main.main-surface button[class*="_utilityBarLabel_"]') ||
-    document.querySelector('main.main-surface div.sticky:has(input[type="text"],textarea)') ||
+  const project = main?.querySelector('button[class*="_utilityBarLabel_"]') ||
+    main?.querySelector('div.sticky:has(input[type="text"],textarea)') ||
     document.querySelector('[data-testid*="project" i]');
   const background = getComputedStyle(document.body).backgroundImage || "";
   const rootBackground = getComputedStyle(root).getPropertyValue("--cs-background-image") || "";
-  const topFadeStyle = topFade ? getComputedStyle(topFade) : null;
-  const topFadeNeutralized = Boolean(topFadeStyle &&
-    topFadeStyle.backgroundImage === "none" &&
-    topFadeStyle.backdropFilter === "none" &&
-    Number(topFadeStyle.opacity) === 0);
+  const topFadeContractSafe = expectedTemplateVersion < 6 || Boolean(style &&
+    style.textContent.includes("--cs-top-fade-contract: 6") &&
+    style.textContent.includes('[class*="_MainContentTopFade_"]'));
+  const topFadeNeutralized = expectedTemplateVersion < 6
+    ? (!legacyTopFade || Boolean(getComputedStyle(legacyTopFade) &&
+        getComputedStyle(legacyTopFade).backgroundImage === "none" &&
+        getComputedStyle(legacyTopFade).backdropFilter === "none" &&
+        Number(getComputedStyle(legacyTopFade).opacity) === 0))
+    : (topFadeContractSafe && topFades.every((fade) => {
+        const computed = getComputedStyle(fade);
+        return computed.display === "none" ||
+          (computed.backgroundImage === "none" &&
+            computed.backdropFilter === "none" &&
+            Number(computed.opacity) === 0);
+      }));
   const mainRect = main?.getBoundingClientRect() || null;
   const sidebarRect = sidebar?.getBoundingClientRect() || null;
   const resizeHandle = sidebar?.querySelector('[class~="cursor-col-resize"]') || null;
@@ -684,6 +1318,64 @@ const verifyFunction = `function () {
   const composerUtilityNeutralized = Boolean(composerUtilityStyle &&
     composerUtilityStyle.backgroundColor !== "rgb(246, 246, 246)" &&
     composerUtilityStyle.borderTopWidth !== "0px");
+  const immersive = Boolean(main?.querySelector(
+    ":is(.composer-surface-chrome, .thread-scroll-container)"
+  ));
+  const mainStyle = main ? getComputedStyle(main) : null;
+  const unsafeGlobalTextSelector =
+    ':root[data-codex-skin="active"] main[data-codex-skin-main="true"] ' +
+    '[class~="text-token-text-primary"],\n' +
+    ':root[data-codex-skin="active"] main[data-codex-skin-main="true"] ' +
+    '[class~="text-token-foreground"]';
+  const templateScopeSafe = Boolean(
+    style &&
+    immersive &&
+    mainStyle?.backgroundImage.includes("linear-gradient") &&
+    !style.textContent.includes(unsafeGlobalTextSelector)
+  );
+  const bottomFade = main?.querySelector(
+    ".thread-scroll-container .bg-gradient-to-t.from-token-main-surface-primary"
+  ) || null;
+  const bottomFadeStyle = bottomFade ? getComputedStyle(bottomFade) : null;
+  const bottomFadeNeutralized = !bottomFadeStyle ||
+    (bottomFadeStyle.backgroundImage === "none" &&
+      (bottomFadeStyle.backgroundColor === "rgba(0, 0, 0, 0)" ||
+        bottomFadeStyle.backgroundColor === "transparent"));
+  const rootStyle = getComputedStyle(root);
+  const surface = rootStyle.getPropertyValue("--cs-surface-rgb").trim()
+    .split(/\s+/).map(Number);
+  const primary = color(rootStyle.getPropertyValue("--cs-text-primary").trim(), surface);
+  const secondary = color(rootStyle.getPropertyValue("--cs-text-secondary").trim(), surface);
+  const accent = color(rootStyle.getPropertyValue("--cs-accent").trim(), surface);
+  const themeContrastSafe = surface.length === 3 && surface.every(Number.isFinite) &&
+    primary && secondary && accent &&
+    contrast(primary, surface) >= 4.5 &&
+    contrast(secondary, surface) >= 4.5 &&
+    contrast(accent, surface) >= 3;
+	const activityContractSafe = Boolean(style &&
+		style.textContent.includes("--cs-activity-contract: 3") &&
+		style.textContent.includes('button[class~="group/activity-header"]') &&
+		style.textContent.includes("text-shadow: none !important"));
+	const conversationActivitySafe = activityContractSafe && activityHeaders.length > 0 && activityHeaders.every((header) => {
+		const label = header.querySelector("[class~='text-token-conversation-body']") || header;
+		const foreground = computedColor(getComputedStyle(label).color);
+		const background = effectiveBackground(label, surface);
+		return foreground && contrast(foreground, background) >= 4.5;
+  });
+	const diffResourceContractSafe = Boolean(style &&
+		style.textContent.includes("--cs-diff-resource-contract: 4") &&
+		style.textContent.includes(
+			"[--codex-diffs-header-padding-x:var(--thread-resource-card-row-padding-x)]"
+		) &&
+		style.textContent.includes("color: var(--cs-text-primary) !important") &&
+		style.textContent.includes("text-shadow: none !important"));
+	const conversationDiffResourceSafe = diffResourceContractSafe &&
+		diffResourceCards.length > 0 && diffResourceControls.length > 0 &&
+			diffResourceControls.every((control) => {
+					const foreground = computedColor(getComputedStyle(control).color);
+					const background = effectiveBackground(control, surface);
+					return foreground && contrast(foreground, background) >= 4.5;
+				});
   return {
     styleMarkerCount: styles.length,
     templateVersion: Number(root.getAttribute("data-codex-skin-template") || 0),
@@ -697,8 +1389,17 @@ const verifyFunction = `function () {
       home: visible(main) ? "pass" : "fail",
       mainBoundary: mainBoundaryNeutralized ? "pass" : "fail",
       sidebar: visible(sidebar) ? "pass" : "fail",
-      composerUtilityBar: composerUtilityNeutralized ? "pass" : "fail",
+      composerUtilityBar: optional(composerUtilityBar, composerUtilityNeutralized),
       topFade: topFadeNeutralized ? "pass" : "fail",
+      bottomFade: bottomFadeNeutralized ? "pass" : "fail",
+      templateScope: templateScopeSafe ? "pass" : "fail",
+      themeContrast: themeContrastSafe ? "pass" : "fail",
+		conversationActivity: activityHeaders.length === 0
+			? "not_present"
+			: (conversationActivitySafe ? "pass" : "fail"),
+		conversationDiffResource: diffResourceCards.length === 0
+			? "not_present"
+			: (conversationDiffResourceSafe ? "pass" : "fail"),
       suggestionCards: optional(suggestions, cards.length > 0),
       projectPicker: optional(project, visible(project)),
       composer: visible(composer) ? "pass" : "fail"
@@ -707,14 +1408,21 @@ const verifyFunction = `function () {
 }`
 
 const restoreFunction = `function () {
+	const state = globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V1__"];
+	if (typeof state?.cleanup === "function") state.cleanup();
+	delete globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V1__"];
   for (const style of document.querySelectorAll("#codex-skin-theme-v1")) style.remove();
+  for (const main of document.querySelectorAll('main[data-codex-skin-main="true"]')) {
+    main.removeAttribute("data-codex-skin-main");
+  }
   const root = document.documentElement;
   const backgroundURL = root.getAttribute("data-codex-skin-background-url");
   if (backgroundURL && backgroundURL.startsWith("blob:")) URL.revokeObjectURL(backgroundURL);
   root.removeAttribute("data-codex-skin");
   root.removeAttribute("data-codex-skin-theme");
   root.removeAttribute("data-codex-skin-theme-version");
-  root.removeAttribute("data-codex-skin-template");
+	root.removeAttribute("data-codex-skin-template");
+	root.removeAttribute("data-codex-skin-appearance");
   root.removeAttribute("data-codex-skin-background-url");
   root.style.removeProperty("--cs-background-image");
   return document.querySelectorAll("#codex-skin-theme-v1").length === 0;
@@ -722,11 +1430,14 @@ const restoreFunction = `function () {
 
 const officialFunction = `function () {
   const root = document.documentElement;
-  return document.querySelectorAll("#codex-skin-theme-v1").length === 0 &&
+	return !globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V1__"] &&
+		document.querySelectorAll("#codex-skin-theme-v1").length === 0 &&
+    document.querySelectorAll('main[data-codex-skin-main="true"]').length === 0 &&
     !root.hasAttribute("data-codex-skin") &&
     !root.hasAttribute("data-codex-skin-theme") &&
     !root.hasAttribute("data-codex-skin-theme-version") &&
-    !root.hasAttribute("data-codex-skin-template") &&
+		!root.hasAttribute("data-codex-skin-template") &&
+		!root.hasAttribute("data-codex-skin-appearance") &&
     !root.hasAttribute("data-codex-skin-background-url") &&
     !root.style.getPropertyValue("--cs-background-image");
 }`
@@ -780,7 +1491,9 @@ const fixedLayoutDiagnosticsFunction = `function () {
       rect: [rect.x, rect.y, rect.width, rect.height]
     };
   };
-  const main = document.querySelector("main.main-surface");
+  const main = document.querySelector(
+    'main[data-codex-skin-main="true"], main.main-surface, main[class*="_MainContentSurface_"]'
+  );
   const sidebar = document.querySelector("aside.app-shell-left-panel");
   const composer = document.querySelector(".composer-surface-chrome");
   const composerRect = composer?.getBoundingClientRect() || null;

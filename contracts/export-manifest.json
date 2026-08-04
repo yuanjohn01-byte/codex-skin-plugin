@@ -2,7 +2,7 @@
   "artifacts": [
     {
       "destination": "contracts/helper-protocol-v1.schema.json",
-      "sha256": "d99682337ded8dde95543b6cba8fb91bba0cb2427efffc7f21b226f976cc690d",
+      "sha256": "45b3c23052d40a8de27706c628dd87a570f82f940a4cef112d5362e1f2d93044",
       "source": "codex-skin/contracts/public/helper-protocol-v1.schema.json"
     },
     {
@@ -11,9 +11,19 @@
       "source": "codex-skin/contracts/public/helper-release-descriptor-v1.schema.json"
     },
     {
+      "destination": "contracts/plugin-event-v1.schema.json",
+      "sha256": "f124ea7b3369f93695e70eac498e20c29e0ec4822b2d211f00e145a00bdda314",
+      "source": "codex-skin/contracts/public/plugin-event-v1.schema.json"
+    },
+    {
       "destination": "contracts/device-authorization-poll-v1.schema.json",
-      "sha256": "ebc422ad4efa58ad4c3a3ab2aaedb338a81cfba685f81797a9f5c0a018602fb0",
+      "sha256": "d7d11271e0ad434e5c0fad3b85d146d71dc896f6f644d8379abb6ce8aa4bc669",
       "source": "codex-skin/contracts/public/device-authorization-poll-v1.schema.json"
+    },
+    {
+      "destination": "contracts/theme-download-v1.schema.json",
+      "sha256": "7fa5544a767b453c2749da7425693ac2630c8bc5ba391d76ecc11b96b91f2eff",
+      "source": "codex-skin/contracts/public/theme-download-v1.schema.json"
     },
     {
       "destination": "contracts/theme-manifest-v1.schema.json",
@@ -36,9 +46,24 @@
       "source": "codex-skin/contracts/public/theme-verification-keys-v1.json"
     },
     {
+      "destination": "contracts/helper-release-verification-keyset-v1.schema.json",
+      "sha256": "67be848ba72810a603f8667a31c46dd4d6bc500de2e6f4a98f5d0c55036ca16d",
+      "source": "codex-skin/contracts/public/helper-release-verification-keyset-v1.schema.json"
+    },
+    {
+      "destination": "contracts/helper-release-verification-keys-v1.json",
+      "sha256": "3f64328d5f73804aeef2f37cb1bbc0a83ac6e80d2d49bc29edbd1d5aa19e845b",
+      "source": "codex-skin/contracts/public/helper-release-verification-keys-v1.json"
+    },
+    {
       "destination": "internal/theme/trusted-verification-keys-v1.json",
       "sha256": "e205c2b2df7e4cc72875df3e110f1ce188e587cfb48fabe70a8e80b8fff0c0cb",
       "source": "codex-skin/contracts/public/theme-verification-keys-v1.json"
+    },
+    {
+      "destination": "internal/release/trusted-verification-keys-v1.json",
+      "sha256": "3f64328d5f73804aeef2f37cb1bbc0a83ac6e80d2d49bc29edbd1d5aa19e845b",
+      "source": "codex-skin/contracts/public/helper-release-verification-keys-v1.json"
     },
     {
       "destination": "fixtures/free-test-theme-v1/fixture-policy-v1.json",

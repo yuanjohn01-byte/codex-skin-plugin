@@ -18,6 +18,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/buildinfo"
 	releasecontract "github.com/yuanjohn01-byte/codex-skin-plugin/internal/release"
 )
 
@@ -276,6 +277,125 @@ func TestFailedUpgradeKeepsCurrentThenSuccessfulUpgradeSwitches(t *testing.T) {
 	}
 }
 
+func TestCurrentActivationFailureRestoresPreviousRecoveryEngine(t *testing.T) {
+	temporary := t.TempDir()
+	root := filepath.Join(temporary, "application-data")
+	cache := filepath.Join(temporary, "plugin-cache")
+	if err := os.Mkdir(cache, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	key := newSigningFixture(t)
+	source := &memorySource{}
+	firstTag := key.addRelease(t, source, "0.1.0-s3", []byte("first recovery helper"))
+	secondTag := key.addRelease(t, source, "0.1.0-s4", []byte("second recovery helper"))
+	tester := &fakeSelfTester{}
+	first, err := Install(context.Background(), configFor(root, cache, firstTag, source, key, tester))
+	if err != nil {
+		t.Fatal(err)
+	}
+	currentBefore, err := os.ReadFile(filepath.Join(root, "bin", "current.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryPath := filepath.Join(root, "recovery", "engine", "codex-skin")
+	recoveryBefore, err := os.ReadFile(recoveryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	injected := errors.New("injected current activation failure")
+	failed := configFor(root, cache, secondTag, source, key, tester)
+	failed.beforeCurrentWrite = func() error { return injected }
+	if _, err := Install(context.Background(), failed); !errors.Is(err, injected) {
+		t.Fatalf("current activation failure was not returned: %v", err)
+	}
+	currentAfter, err := os.ReadFile(filepath.Join(root, "bin", "current.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryAfter, err := os.ReadFile(recoveryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(currentBefore, currentAfter) || !bytes.Equal(recoveryBefore, recoveryAfter) {
+		t.Fatal("failed current activation changed the last-known-good current or recovery engine")
+	}
+	if first.HelperSHA256 == "" || first.RecoverySHA256 != first.HelperSHA256 {
+		t.Fatalf("install result omitted the verified Helper hashes: %#v", first)
+	}
+}
+
+func TestPostReplaceSyncFailuresRestorePreviousCurrentAndRecovery(t *testing.T) {
+	for _, failureCall := range []int{1, 2, 3} {
+		t.Run(fmt.Sprintf("directory sync call %d", failureCall), func(t *testing.T) {
+			temporary := t.TempDir()
+			root := filepath.Join(temporary, "application-data")
+			cache := filepath.Join(temporary, "plugin-cache")
+			if err := os.Mkdir(cache, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			key := newSigningFixture(t)
+			source := &memorySource{}
+			firstTag := key.addRelease(t, source, "0.1.0-s3", []byte("first durable helper"))
+			secondTag := key.addRelease(t, source, "0.1.0-s4", []byte("second durable helper"))
+			tester := &fakeSelfTester{}
+			first, err := Install(context.Background(), configFor(root, cache, firstTag, source, key, tester))
+			if err != nil {
+				t.Fatal(err)
+			}
+			currentPath := filepath.Join(root, "bin", "current.json")
+			recoveryBinaryPath := filepath.Join(root, "recovery", "engine", "codex-skin")
+			recoveryEntryPath := filepath.Join(root, "recovery", "restore.command")
+			currentBefore, err := os.ReadFile(currentPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recoveryBinaryBefore, err := os.ReadFile(recoveryBinaryPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recoveryEntryBefore, err := os.ReadFile(recoveryEntryPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			failed := configFor(root, cache, secondTag, source, key, tester)
+			calls := 0
+			injected := errors.New("injected post-replace directory sync failure")
+			failed.syncDirectory = func(path string) error {
+				calls++
+				if calls == failureCall {
+					return injected
+				}
+				return syncDirectory(path)
+			}
+			if _, err := Install(context.Background(), failed); err == nil {
+				t.Fatal("post-replace directory sync failure was accepted")
+			}
+			currentAfter, err := os.ReadFile(currentPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recoveryBinaryAfter, err := os.ReadFile(recoveryBinaryPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recoveryEntryAfter, err := os.ReadFile(recoveryEntryPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(currentBefore, currentAfter) ||
+				!bytes.Equal(recoveryBinaryBefore, recoveryBinaryAfter) ||
+				!bytes.Equal(recoveryEntryBefore, recoveryEntryAfter) {
+				t.Fatal("post-replace failure left current and recovery on different closures")
+			}
+			reused, err := Install(context.Background(), configFor(root, cache, firstTag, source, key, tester))
+			if err != nil || !reused.Reused || reused.Executable != first.Executable {
+				t.Fatalf("last-known-good closure was not reusable: %#v, %v", reused, err)
+			}
+		})
+	}
+}
+
 func TestBadArtifactAndOverlappingPathsFailBeforeActivation(t *testing.T) {
 	temporary := t.TempDir()
 	root := filepath.Join(temporary, "application-data")
@@ -433,7 +553,7 @@ func TestRealHelperInstallationAndFailedUpgrade(t *testing.T) {
 	}
 	key := newSigningFixture(t)
 	source := &memorySource{}
-	tag := key.addRelease(t, source, "0.1.0-s3", payload)
+	tag := key.addRelease(t, source, buildinfo.Version, payload)
 	temporary := t.TempDir()
 	root := filepath.Join(temporary, "application-data")
 	cache := filepath.Join(temporary, "plugin-cache")
@@ -454,7 +574,7 @@ func TestRealHelperInstallationAndFailedUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.HelperVersion != "0.1.0-s3" || !strings.Contains(filepath.ToSlash(result.Executable), "/bin/0.1.0-s3/") {
+	if result.HelperVersion != buildinfo.Version || !strings.Contains(filepath.ToSlash(result.Executable), "/bin/"+buildinfo.Version+"/") {
 		t.Fatalf("unexpected native install: %#v", result)
 	}
 	pointer, ok, err := readCurrent(filepath.Join(root, "bin"), platform)
@@ -467,7 +587,7 @@ func TestRealHelperInstallationAndFailedUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	brokenUpgradeTag := key.addRelease(t, source, "0.1.0-s4", payload)
+	brokenUpgradeTag := key.addRelease(t, source, "0.1.1-paid-alpha", payload)
 	failedConfig := config
 	failedConfig.ReleaseTag = brokenUpgradeTag
 	if _, err := Install(context.Background(), failedConfig); !errors.Is(err, ErrSelfTest) {

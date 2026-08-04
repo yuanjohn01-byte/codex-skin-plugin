@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.1.0-paid-alpha - Code-stage candidate
+
+- Make restart consent terminal before renderer mutation so one approved apply performs only the required controlled Codex restart instead of first reopening a throwaway recovery process.
+- Reconnect the Scheme A keeper to the exact process identity verified by apply without re-reading the already-restored native appearance setting; use lightweight controller-marker health checks instead of repeated full layout/contrast scans.
+- Ignore ordinary conversation DOM mutations in the renderer controller, retaining structural, navigation, root-marker, and bounded safeguard repair paths to reduce typing and pointer latency.
+- Recover switch and offline Restore when Chromium has retired the prior CDP session's bootstrap identifier by installing a fixed local neutralizer and verifying immediate official cleanup.
+- Add a session-bound renderer controller: a theme is reported active only after the current controlled Codex session has an active controller, renderer reloads/rebuilt routes are rechecked during that session, and Restore asks the controller to stop before restoring the official appearance. Closing Codex or restarting the computer ends the session; no daemon, login item, or automatic reopen is installed.
+- Restore the user's native appearance settings on disk before a skin session is reported active, re-verify the live renderer afterward, and reject stale controller heartbeats after an abrupt exit or computer restart.
+- Exclude real-current-Codex macOS probes from ordinary `go test`; they require both the `realcodex` build tag and their existing explicit environment opt-in.
+- Require the shipped Helper entrypoint to opt in explicitly before CLI orchestration can start a live session controller; injected test flows are safe by default, mutating tests require explicit fake dependencies, and synthetic apply results cannot fall through to the user's recovery Helper or current Codex process.
+- Preserve the validated minimal Windows user-profile environment for detached restart/session Helpers so current-profile appearance recovery does not depend on an accidentally inherited shell.
+- Export the authoritative device-authorization start and theme release/download v1 contracts from Private.
+- Add strict same-origin device authorization start, PKCE proof generation, replay handling, native credential rotation, and one-command continuation.
+- Add authenticated theme metadata and bounded binary download clients that reject redirects, cross-origin purchase links, unknown JSON, truncation, oversize, and unexpected content types.
+- Continue a six-digit theme request through authorization and an optional bounded Pro purchase wait without asking the user to repeat the request.
+- Pass the downloaded package, canonical descriptor, and detached signature to the existing Gate B verifier and transactional engine before apply.
+- Persist only a device reference and pending six-digit theme ID outside the Plugin cache; credentials remain in Keychain or Credential Manager and Access Tokens remain memory-only.
+- Expose `theme apply`, offline `theme restore`, and local-only `status` Helper commands through dedicated Paid Alpha Skills and fixed platform wrappers.
+- Keep the wrapper fail closed until the signed Helper bootstrap has installed its fixed out-of-cache recovery-engine copy.
+- Replace the selector-only theme repair with Template v5: exact native appearance backup/pinning, the Codex dropdown token bridge, an engine-owned self-healing renderer controller, Appearance-settings pause/resume, and cleanup on switch/Restore.
+- Add Template v6 compatibility for Codex 26.727's CSS-module main-content top fade and fail verification when either the stable or module fade remains visible.
+- Reject absent late-rendered activity and diff fixtures as `not_present` instead of passing them, and require computed contrast when those fixtures exist.
+- Carry the MIT-licensed lifecycle and native-token mechanisms adapted from Codex Dream Skin v1.5.9 while excluding its artwork and other non-software assets.
+
+This candidate is not a Public or Production release. The API origin, signed Helper Release, Production deployment order, and final macOS/Windows distribution gates remain required before merge/release.
+
 ## 0.0.2 - Unreleased
 
 - Bump the read-only distribution spike from v0.0.1 to v0.0.2.

@@ -23,8 +23,8 @@ def fixture() -> dict[str, object]:
         "artifacts": [
             {
                 "platform": platform,
-                "filename": f"codex-skin-helper_0.1.0-s3_{suffix}",
-                "helperVersion": "0.1.0-s3",
+                "filename": f"codex-skin-helper_0.1.0-paid-alpha.4_{suffix}",
+                "helperVersion": "0.1.0-paid-alpha.4",
                 "builtAt": "2026-07-20T08:00:00+08:00",
                 "sha256": str(index + 1) * 64,
                 "size": 1_900_000 + index,
@@ -36,7 +36,7 @@ def fixture() -> dict[str, object]:
 
 def run(summary: dict[str, object], directory: Path) -> subprocess.CompletedProcess[str]:
     summary_path = directory / "build-summary.json"
-    output_path = directory / "release-descriptor.json"
+    output_path = directory / "helper-release-descriptor.json"
     summary_path.write_text(json.dumps(summary), encoding="utf-8")
     return subprocess.run(
         [
@@ -62,11 +62,11 @@ def main() -> int:
         result = run(fixture(), directory)
         if result.returncode != 0:
             raise AssertionError(result.stdout + result.stderr)
-        first = (directory / "release-descriptor.json").read_bytes()
+        first = (directory / "helper-release-descriptor.json").read_bytes()
         result = run(fixture(), directory)
         if result.returncode != 0:
             raise AssertionError(result.stdout + result.stderr)
-        second = (directory / "release-descriptor.json").read_bytes()
+        second = (directory / "helper-release-descriptor.json").read_bytes()
         if first != second or not first.endswith(b"\n") or b" " in first:
             raise AssertionError("release descriptor is not deterministic canonical JSON")
         descriptor = json.loads(first)

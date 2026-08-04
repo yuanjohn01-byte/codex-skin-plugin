@@ -57,6 +57,7 @@ type RecoveryPoint struct {
 	ThemePublicID      string        `json:"themePublicId,omitempty"`
 	ThemeVersion       string        `json:"themeVersion,omitempty"`
 	TemplateVersion    int           `json:"templateVersion,omitempty"`
+	AppearanceMode     string        `json:"appearanceMode,omitempty"`
 	StyleByteSize      int           `json:"styleByteSize,omitempty"`
 	StyleSHA256        string        `json:"styleSha256,omitempty"`
 	BackgroundByteSize int           `json:"backgroundByteSize,omitempty"`
@@ -223,6 +224,7 @@ func (store *Store) WriteRecoveryPoint(point RecoveryPoint, snapshot Snapshot) e
 		point.ThemePublicID = snapshot.ThemePublicID
 		point.ThemeVersion = snapshot.ThemeVersion
 		point.TemplateVersion = snapshot.TemplateVersion
+		point.AppearanceMode = snapshot.AppearanceMode
 		point.StyleByteSize = len(style)
 		point.StyleSHA256 = digestBytes(style)
 		point.BackgroundByteSize = len(background)
@@ -286,7 +288,7 @@ func (store *Store) ReadRecoveryPoint(recoveryID string) (RecoveryPoint, Snapsho
 	snapshot := Snapshot{
 		StylePresent: true, StyleText: string(style), BackgroundDataURL: string(background),
 		ThemePublicID: point.ThemePublicID, ThemeVersion: point.ThemeVersion,
-		TemplateVersion: point.TemplateVersion,
+		TemplateVersion: point.TemplateVersion, AppearanceMode: point.AppearanceMode,
 	}
 	if !validSnapshot(snapshot) {
 		return RecoveryPoint{}, Snapshot{}, fmt.Errorf("%w: invalid recovery snapshot", ErrStateUnsafe)
@@ -389,7 +391,7 @@ func validDesired(desired DesiredTheme) bool {
 	return storedThemePublicID.MatchString(desired.ThemePublicID) &&
 		storedThemeVersion.MatchString(desired.ThemeVersion) &&
 		storedDigest.MatchString(desired.PackageSHA256) &&
-		desired.TemplateVersion == TemplateVersion &&
+		supportedTemplateVersion(desired.TemplateVersion) &&
 		desired.AppliedAt != ""
 }
 
@@ -397,7 +399,8 @@ func validSnapshot(snapshot Snapshot) bool {
 	return snapshot.StylePresent &&
 		storedThemePublicID.MatchString(snapshot.ThemePublicID) &&
 		storedThemeVersion.MatchString(snapshot.ThemeVersion) &&
-		snapshot.TemplateVersion == TemplateVersion &&
+		supportedTemplateVersion(snapshot.TemplateVersion) &&
+		(snapshot.AppearanceMode == "dark" || snapshot.AppearanceMode == "light") &&
 		len(snapshot.StyleText) > 0 &&
 		len(snapshot.StyleText) <= maxRecoveryStyleBytes &&
 		len(snapshot.BackgroundDataURL) > 0 &&
@@ -405,6 +408,10 @@ func validSnapshot(snapshot Snapshot) bool {
 		(strings.HasPrefix(snapshot.BackgroundDataURL, "data:image/png;base64,") ||
 			strings.HasPrefix(snapshot.BackgroundDataURL, "data:image/jpeg;base64,") ||
 			strings.HasPrefix(snapshot.BackgroundDataURL, "data:image/webp;base64,"))
+}
+
+func supportedTemplateVersion(version int) bool {
+	return version >= MinimumTemplateVersion && version <= TemplateVersion
 }
 
 func digestBytes(content []byte) string {

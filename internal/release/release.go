@@ -92,6 +92,37 @@ func SigningMessage(canonicalDescriptor []byte) []byte {
 
 // Verify parses canonical bytes and authenticates the detached Ed25519 signature.
 func Verify(rawDescriptor, signature []byte, trustedKeys map[string]ed25519.PublicKey) (Descriptor, error) {
+	descriptor, err := parseCanonicalDescriptor(rawDescriptor)
+	if err != nil {
+		return Descriptor{}, err
+	}
+
+	publicKey, ok := trustedKeys[descriptor.SigningKeyID]
+	if !ok || len(publicKey) != ed25519.PublicKeySize {
+		return Descriptor{}, ErrUnknownSigningKey
+	}
+	if len(signature) != ed25519.SignatureSize || !ed25519.Verify(publicKey, SigningMessage(rawDescriptor), signature) {
+		return Descriptor{}, ErrSignatureInvalid
+	}
+	return descriptor, nil
+}
+
+func VerifyWithKeyset(rawDescriptor, signature []byte, keyset VerificationKeyset) (Descriptor, error) {
+	descriptor, err := parseCanonicalDescriptor(rawDescriptor)
+	if err != nil {
+		return Descriptor{}, err
+	}
+	publicKey, ok := keyset.publicKeyFor(descriptor)
+	if !ok {
+		return Descriptor{}, ErrUnknownSigningKey
+	}
+	if len(signature) != ed25519.SignatureSize || !ed25519.Verify(ed25519.PublicKey(publicKey), SigningMessage(rawDescriptor), signature) {
+		return Descriptor{}, ErrSignatureInvalid
+	}
+	return descriptor, nil
+}
+
+func parseCanonicalDescriptor(rawDescriptor []byte) (Descriptor, error) {
 	if len(rawDescriptor) == 0 || len(rawDescriptor) > MaxDescriptor {
 		return Descriptor{}, fmt.Errorf("%w: byte length", ErrDescriptorInvalid)
 	}
@@ -113,13 +144,6 @@ func Verify(rawDescriptor, signature []byte, trustedKeys map[string]ed25519.Publ
 		return Descriptor{}, ErrDescriptorCanonical
 	}
 
-	publicKey, ok := trustedKeys[descriptor.SigningKeyID]
-	if !ok || len(publicKey) != ed25519.PublicKeySize {
-		return Descriptor{}, ErrUnknownSigningKey
-	}
-	if len(signature) != ed25519.SignatureSize || !ed25519.Verify(publicKey, SigningMessage(rawDescriptor), signature) {
-		return Descriptor{}, ErrSignatureInvalid
-	}
 	return descriptor, nil
 }
 
@@ -130,6 +154,36 @@ func SelectVerified(
 	currentVersion, goos, goarch string,
 ) (Selection, error) {
 	descriptor, err := Verify(rawDescriptor, signature, trustedKeys)
+	if err != nil {
+		return Selection{}, err
+	}
+	platform, err := PlatformForRuntime(goos, goarch)
+	if err != nil {
+		return Selection{}, err
+	}
+	var selected Artifact
+	for _, artifact := range descriptor.Artifacts {
+		if artifact.Platform == platform {
+			selected = artifact
+			break
+		}
+	}
+	if selected.Platform == "" {
+		return Selection{}, fmt.Errorf("%w: missing %s", ErrDescriptorInvalid, platform)
+	}
+	relation, err := Relation(currentVersion, descriptor.HelperVersion)
+	if err != nil {
+		return Selection{}, err
+	}
+	return Selection{Descriptor: descriptor, Artifact: selected, Relation: relation}, nil
+}
+
+func SelectVerifiedWithKeyset(
+	rawDescriptor, signature []byte,
+	keyset VerificationKeyset,
+	currentVersion, goos, goarch string,
+) (Selection, error) {
+	descriptor, err := VerifyWithKeyset(rawDescriptor, signature, keyset)
 	if err != nil {
 		return Selection{}, err
 	}
