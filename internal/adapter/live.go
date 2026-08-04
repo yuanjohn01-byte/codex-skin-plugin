@@ -835,6 +835,18 @@ func (adapter *Live) Close(ctx context.Context, session engine.Session) error {
 	return live.client.Close()
 }
 
+// RestoreNativeAppearanceBackup restores the exact on-disk appearance settings
+// without launching or attaching to Codex. The session controller calls this
+// after the already-running renderer is verified, so an abrupt computer shutdown
+// cannot leave the next ordinary Codex launch pinned to a theme mode.
+func (adapter *Live) RestoreNativeAppearanceBackup() error {
+	if !adapter.currentProfile || adapter.appearance == nil {
+		return engine.ErrConfiguration
+	}
+	_, err := adapter.appearance.Restore()
+	return err
+}
+
 // FinalizeOfficialRollback completes a failed first-theme transaction. The
 // renderer has already been verified official by the engine; this method then
 // stops only the exact controlled process, restores the native appearance

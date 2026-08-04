@@ -18,6 +18,19 @@ func StartWorker(executable, requestID string) error {
 	if !requestIDPattern.MatchString(requestID) {
 		return ErrUnsafe
 	}
+	return startDetached(executable, "__restart-worker", requestID)
+}
+
+// StartSession starts the controller for one already-approved, controlled
+// Codex session. It never creates a login item or a persistent OS service.
+func StartSession(executable, sessionID string) error {
+	if !sessionIDPattern.MatchString(sessionID) {
+		return ErrUnsafe
+	}
+	return startDetached(executable, "__theme-session", sessionID)
+}
+
+func startDetached(executable string, arguments ...string) error {
 	info, err := os.Lstat(executable)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
 		return ErrUnsafe
@@ -28,7 +41,12 @@ func StartWorker(executable, requestID string) error {
 	}
 	defer devNull.Close()
 	systemRoot := os.Getenv("SystemRoot")
-	command := exec.Command(executable, "__restart-worker", requestID)
+	localAppData := os.Getenv("LOCALAPPDATA")
+	userProfile := os.Getenv("USERPROFILE")
+	if !filepath.IsAbs(systemRoot) || !filepath.IsAbs(localAppData) || !filepath.IsAbs(userProfile) {
+		return ErrUnsafe
+	}
+	command := exec.Command(executable, arguments...)
 	command.Stdin = devNull
 	command.Stdout = devNull
 	command.Stderr = devNull
@@ -36,7 +54,8 @@ func StartWorker(executable, requestID string) error {
 		"SystemRoot=" + systemRoot,
 		"WINDIR=" + systemRoot,
 		"PATH=" + filepath.Join(systemRoot, "System32"),
-		"LOCALAPPDATA=" + os.Getenv("LOCALAPPDATA"),
+		"LOCALAPPDATA=" + localAppData,
+		"USERPROFILE=" + userProfile,
 	}
 	command.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: createNewProcessGroup | detachedProcess,

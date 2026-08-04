@@ -1,5 +1,5 @@
 param(
-  [string]$HelperPath = "dist/helper/codex-skin-helper_0.1.0-paid-alpha.2_windows_x64.exe",
+  [string]$HelperPath = "dist/helper/codex-skin-helper_0.1.0-paid-alpha.3_windows_x64.exe",
   [string]$OutputPath = "dist/signing/windows-signing-spike-summary.json"
 )
 
@@ -61,8 +61,8 @@ $signTool = Resolve-SignTool
 $certutil = Join-Path $env:SystemRoot "System32\certutil.exe"
 $scratch = Join-Path ([System.IO.Path]::GetTempPath()) ("codex-skin-windows-signing-" + [guid]::NewGuid().ToString("N"))
 $null = New-Item -ItemType Directory -Path $scratch
-$target = Join-Path $scratch "codex-skin-helper_0.1.0-paid-alpha.2_windows_x64.exe"
-$tampered = Join-Path $scratch "codex-skin-helper_0.1.0-paid-alpha.2_windows_x64.tampered.exe"
+$target = Join-Path $scratch "codex-skin-helper_0.1.0-paid-alpha.3_windows_x64.exe"
+$tampered = Join-Path $scratch "codex-skin-helper_0.1.0-paid-alpha.3_windows_x64.tampered.exe"
 $publicCertificate = Join-Path $scratch "internal-spike-public.cer"
 $certificate = $null
 $thumbprint = $null
@@ -74,7 +74,7 @@ try {
 
   $beforeVersion = (& $target version --json) | ConvertFrom-Json
   $beforeDoctor = (& $target doctor --json) | ConvertFrom-Json
-  if (-not $beforeVersion.ok -or $beforeVersion.data.helperVersion -ne "0.1.0-paid-alpha.2") {
+  if (-not $beforeVersion.ok -or $beforeVersion.data.helperVersion -ne "0.1.0-paid-alpha.3") {
     throw "unsigned Helper version contract failed"
   }
   if (-not $beforeDoctor.ok -or $beforeDoctor.data.platform -ne "windows" -or $beforeDoctor.data.architecture -ne "x64" -or $beforeDoctor.data.nodeRequired) {
@@ -122,7 +122,7 @@ try {
   finally {
     $env:PATH = $originalPath
   }
-  if (-not $signedVersion.ok -or $signedVersion.data.helperVersion -ne "0.1.0-paid-alpha.2") {
+  if (-not $signedVersion.ok -or $signedVersion.data.helperVersion -ne "0.1.0-paid-alpha.3") {
     throw "signed Helper version contract failed"
   }
   if (-not $signedDoctor.ok -or $signedDoctor.data.platform -ne "windows" -or $signedDoctor.data.architecture -ne "x64" -or $signedDoctor.data.nodeRequired) {
@@ -166,7 +166,7 @@ try {
       verificationPolicy = "Authenticode /pa"
     }
     artifact = [ordered]@{
-      filename = "codex-skin-helper_0.1.0-paid-alpha.2_windows_x64.exe"
+      filename = "codex-skin-helper_0.1.0-paid-alpha.3_windows_x64.exe"
       authenticodeStatusWithSelfSignedPeerTrust = $authenticode.Status.ToString()
       signToolPublicPolicyAccepted = $signToolPolicyAccepted
       signerCertificatePresent = $true

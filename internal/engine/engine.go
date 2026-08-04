@@ -375,11 +375,21 @@ func (engine *Engine) resolveInterruptedJournals(currentOperationID string) erro
 }
 
 func (engine *Engine) loadDesiredCompiled() (*CompiledTheme, *DesiredTheme, error) {
-	desired, found, err := engine.store.ReadDesired()
+	return LoadDesiredCompiled(engine.store)
+}
+
+// LoadDesiredCompiled re-verifies and compiles the cached theme selected by
+// the user. It is intentionally offline: a session controller may only use a
+// package that was already committed by the verified apply transaction.
+func LoadDesiredCompiled(store *Store) (*CompiledTheme, *DesiredTheme, error) {
+	if store == nil {
+		return nil, nil, ErrConfiguration
+	}
+	desired, found, err := store.ReadDesired()
 	if err != nil || !found {
 		return nil, nil, err
 	}
-	cache, err := engine.store.ThemeCachePath(desired)
+	cache, err := store.ThemeCachePath(desired)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -392,7 +402,7 @@ func (engine *Engine) loadDesiredCompiled() (*CompiledTheme, *DesiredTheme, erro
 		verified.PackageSHA256 != desired.PackageSHA256 {
 		return nil, nil, fmt.Errorf("%w: cached desired theme mismatch", ErrStateUnsafe)
 	}
-	temporary, err := os.MkdirTemp(filepath.Join(engine.store.Root(), "tmp"), ".prime-")
+	temporary, err := os.MkdirTemp(filepath.Join(store.Root(), "tmp"), ".prime-")
 	if err != nil {
 		return nil, nil, fmt.Errorf("%w: create cache verification staging: %v", ErrStateUnsafe, err)
 	}
@@ -547,4 +557,11 @@ func reportAllowsCommit(report RegionReport, compiled CompiledTheme) bool {
 		report.ThemePublicID == compiled.ThemePublicID &&
 		report.BackgroundLoaded &&
 		CapabilitiesAllowApply(report)
+}
+
+// ReportAllowsTheme reports whether a renderer verification proves that the
+// exact compiled theme is present. Session controllers use the same commit
+// predicate as the original apply transaction.
+func ReportAllowsTheme(report RegionReport, compiled CompiledTheme) bool {
+	return reportAllowsCommit(report, compiled)
 }

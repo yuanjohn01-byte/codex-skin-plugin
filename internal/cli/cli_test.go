@@ -9,9 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/restartflow"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/sessionflow"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/userflow"
 )
 
@@ -98,6 +100,19 @@ type resultEnvelope struct {
 
 func run(t *testing.T, args []string, environment Runtime) (int, string, string) {
 	t.Helper()
+	if len(args) > 0 {
+		switch {
+		case args[0] == "__theme-session":
+			t.Fatal("unit tests must not start a real theme session controller")
+		case args[0] == "__restart-worker" && environment.Adapter == nil:
+			t.Fatal("restart worker tests require an injected adapter")
+		case len(args) >= 2 && args[0] == "theme" && args[1] == "restore" && environment.Adapter == nil:
+			t.Fatal("restore tests require an injected adapter")
+		case len(args) >= 2 && args[0] == "theme" && args[1] == "apply" &&
+			environment.ApplyFlow == nil && environment.Adapter == nil:
+			t.Fatal("apply tests require an injected flow or adapter")
+		}
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	code := Run(args, &stdout, &stderr, environment)
@@ -264,6 +279,214 @@ func TestThemeApplyJSONUsesOneContinuousFlow(t *testing.T) {
 	}
 	if !data.Authorized || !data.PurchaseShown || data.ThemePublicID != "100001" {
 		t.Fatalf("unexpected apply data: %+v", data)
+	}
+}
+
+func TestInjectedApplyFlowCannotFallThroughToRealSessionController(t *testing.T) {
+	flow := &fakeApplyFlow{}
+	if sessionControllerEnabled(Runtime{ApplyFlow: flow}) {
+		t.Fatal("injected ApplyFlow unexpectedly enabled the real session controller")
+	}
+	if sessionControllerEnabled(Runtime{Adapter: &restoreAdapter{}}) {
+		t.Fatal("test Adapter unexpectedly enabled the real session controller")
+	}
+	if sessionControllerEnabled(Runtime{}) {
+		t.Fatal("default runtime must be test-safe")
+	}
+	if !sessionControllerEnabled(Runtime{EnableLiveSessionController: true}) {
+		t.Fatal("shipped Helper opt-in must enable the session controller")
+	}
+	if !sessionControllerEnabled(Runtime{ApplyFlow: flow, StartSession: func(string, string) error { return nil }}) {
+		t.Fatal("explicit fake StartSession must enable controller orchestration")
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	code := Run(
+		[]string{"__theme-session", "ses_0123456789abcdef0123456789abcdef"},
+		&stdout,
+		&stderr,
+		Runtime{},
+	)
+	if code != exitInternal || stdout.String() != "" || stderr.String() != "" {
+		t.Fatalf(
+			"default runtime entered internal live session: code=%d stdout=%q stderr=%q",
+			code,
+			stdout.String(),
+			stderr.String(),
+		)
+	}
+}
+
+func TestThemeApplyReportsSuccessOnlyAfterSessionControllerIsActive(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	store, err := engine.OpenStore(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = store.Root()
+	digest := strings.Repeat("a", 64)
+	if err := store.WriteDesired(engine.DesiredTheme{
+		ThemePublicID: "100001", ThemeVersion: "1.0.0", PackageSHA256: digest,
+		TemplateVersion: engine.TemplateVersion, AppliedAt: "2026-08-04T08:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(root, "recovery", "engine", "codex-skin")
+	if err := os.MkdirAll(filepath.Dir(executable), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, []byte("helper"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	identity := engine.Identity{
+		Platform: "macos", AppIdentifier: "com.openai.codex", Publisher: "2DC432GLL2",
+		Version: "26.727.0", ExecutableHash: digest, ProcessID: 4312, ProcessStartID: "start-4312",
+	}
+	flow := &fakeApplyFlow{result: userflow.ApplyResult{
+		OperationID: "op_flow", ThemePublicID: "100001", ThemeVersion: "1.0.0",
+	}}
+	started := false
+	code, stdout, stderr := run(t, []string{"theme", "apply", "100001", "--json"}, Runtime{
+		GOOS: "darwin", GOARCH: "arm64", Root: root, Executable: executable, ApplyFlow: flow,
+		currentSessionIdentity: func(context.Context) (engine.Identity, error) { return identity, nil },
+		StartSession: func(worker, sessionID string) error {
+			if worker != executable {
+				t.Fatalf("session worker = %q, want %q", worker, executable)
+			}
+			sessions, err := sessionflow.New(root)
+			if err != nil {
+				return err
+			}
+			if _, err := sessions.Claim(sessionID, 9981); err != nil {
+				return err
+			}
+			if _, err := sessions.Activate(sessionID, 9981); err != nil {
+				return err
+			}
+			started = true
+			return nil
+		},
+	})
+	if code != exitSuccess || stderr != "" || !started {
+		t.Fatalf("apply code=%d stderr=%q started=%t", code, stderr, started)
+	}
+	result := decodeSingleResult(t, stdout)
+	var data applyData
+	if err := json.Unmarshal(result.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if !result.OK || data.SessionStatus != string(sessionflow.StatusActive) {
+		t.Fatalf("apply result=%+v data=%+v", result, data)
+	}
+
+	code, stdout, stderr = run(t, []string{"status", "--json"}, Runtime{
+		GOOS: "darwin", GOARCH: "arm64", Root: root,
+	})
+	if code != exitSuccess || stderr != "" {
+		t.Fatalf("status code=%d stderr=%q", code, stderr)
+	}
+	status := decodeSingleResult(t, stdout)
+	var currentStatus statusData
+	if err := json.Unmarshal(status.Data, &currentStatus); err != nil {
+		t.Fatal(err)
+	}
+	if currentStatus.SessionStatus != string(sessionflow.StatusActive) ||
+		currentStatus.SessionThemePublicID != "100001" {
+		t.Fatalf("status data=%+v", currentStatus)
+	}
+}
+
+func TestStatusNeverReportsStaleControllerHeartbeatAsActive(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	store, err := engine.OpenStore(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = store.Root()
+	digest := strings.Repeat("a", 64)
+	sessions, err := sessionflow.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := sessions.Start("100001", "1.0.0", digest, engine.Identity{
+		Platform: "macos", AppIdentifier: "com.openai.codex", Publisher: "2DC432GLL2",
+		Version: "26.727.0", ExecutableHash: digest, ProcessID: 4312, ProcessStartID: "start-4312",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sessions.Claim(record.SessionID, 9981); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sessions.Activate(record.SessionID, 9981); err != nil {
+		t.Fatal(err)
+	}
+	statePath := filepath.Join(root, "session", "current.json")
+	raw, err := os.ReadFile(statePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stale sessionflow.Record
+	if err := json.Unmarshal(raw, &stale); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	stale.CreatedAt = now.Add(-2 * time.Minute).Format(time.RFC3339Nano)
+	stale.UpdatedAt = now.Add(-time.Minute).Format(time.RFC3339Nano)
+	raw, err = json.Marshal(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, '\n')
+	if err := os.WriteFile(statePath, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := run(t, []string{"status", "--json"}, Runtime{
+		GOOS: "darwin", GOARCH: "arm64", Root: root,
+	})
+	if code != exitSuccess || stderr != "" {
+		t.Fatalf("status code=%d stderr=%q", code, stderr)
+	}
+	result := decodeSingleResult(t, stdout)
+	var data statusData
+	if err := json.Unmarshal(result.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.SessionStatus != string(sessionflow.StatusFailed) ||
+		data.SessionErrorCode != "CS-FLOW-SESSION-001" {
+		t.Fatalf("stale session was reported as live: %#v", data)
+	}
+}
+
+func TestStopThemeSessionEndsUnclaimedControllerWithoutWaiting(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	store, err := engine.OpenStore(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = store.Root()
+	digest := strings.Repeat("a", 64)
+	sessions, err := sessionflow.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := sessions.Start("100001", "1.0.0", digest, engine.Identity{
+		Platform: "macos", AppIdentifier: "com.openai.codex", Publisher: "2DC432GLL2",
+		Version: "26.727.0", ExecutableHash: digest, ProcessID: 4312, ProcessStartID: "start-4312",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := stopThemeSession(root, ctx); err != nil {
+		t.Fatalf("stopThemeSession() error = %v", err)
+	}
+	current, found, err := sessions.Current()
+	if err != nil || !found || current.SessionID != record.SessionID ||
+		current.Status != sessionflow.StatusEnded || current.EndedReason != "stop_before_claim" {
+		t.Fatalf("session after stop = %#v, found=%t, err=%v", current, found, err)
 	}
 }
 

@@ -43,7 +43,7 @@ def main() -> int:
         if any(item.get("cgoEnabled") is not False for item in artifacts if isinstance(item, dict)):
             raise AssertionError("Bootstrap artifacts must use CGO_ENABLED=0")
         if any(
-            item.get("helperReleaseTag") != "helper-v0.1.0-paid-alpha.2"
+            item.get("helperReleaseTag") != "helper-v0.1.0-paid-alpha.3"
             for item in artifacts
             if isinstance(item, dict)
         ):

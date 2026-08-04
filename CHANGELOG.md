@@ -2,6 +2,11 @@
 
 ## 0.1.0-paid-alpha - Code-stage candidate
 
+- Add a session-bound renderer controller: a theme is reported active only after the current controlled Codex session has an active controller, renderer reloads/rebuilt routes are rechecked during that session, and Restore asks the controller to stop before restoring the official appearance. Closing Codex or restarting the computer ends the session; no daemon, login item, or automatic reopen is installed.
+- Restore the user's native appearance settings on disk before a skin session is reported active, re-verify the live renderer afterward, and reject stale controller heartbeats after an abrupt exit or computer restart.
+- Exclude real-current-Codex macOS probes from ordinary `go test`; they require both the `realcodex` build tag and their existing explicit environment opt-in.
+- Require the shipped Helper entrypoint to opt in explicitly before CLI orchestration can start a live session controller; injected test flows are safe by default, mutating tests require explicit fake dependencies, and synthetic apply results cannot fall through to the user's recovery Helper or current Codex process.
+- Preserve the validated minimal Windows user-profile environment for detached restart/session Helpers so current-profile appearance recovery does not depend on an accidentally inherited shell.
 - Export the authoritative device-authorization start and theme release/download v1 contracts from Private.
 - Add strict same-origin device authorization start, PKCE proof generation, replay handling, native credential rotation, and one-command continuation.
 - Add authenticated theme metadata and bounded binary download clients that reject redirects, cross-origin purchase links, unknown JSON, truncation, oversize, and unexpected content types.

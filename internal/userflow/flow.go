@@ -303,8 +303,9 @@ func waitForContext(ctx context.Context, duration time.Duration) error {
 }
 
 type EngineApplier struct {
-	Engine  *engine.Engine
-	Restart *restartflow.Store
+	Engine      *engine.Engine
+	Restart     *restartflow.Store
+	BeforeApply func(context.Context) error
 }
 
 func (applier EngineApplier) Apply(ctx context.Context, release themeapi.Release, packagePath string) (engine.ApplyResult, error) {
@@ -321,6 +322,11 @@ func (applier EngineApplier) Apply(ctx context.Context, release themeapi.Release
 		!theme.EngineCompatible(engine.CurrentEngineVersion, release.MinEngineVersion) ||
 		strings.TrimSpace(release.MinEngineVersion) != release.MinEngineVersion {
 		return engine.ApplyResult{}, theme.ErrEngineIncompatible
+	}
+	if applier.BeforeApply != nil {
+		if err := applier.BeforeApply(ctx); err != nil {
+			return engine.ApplyResult{}, errors.Join(ErrApply, err)
+		}
 	}
 	result, err := applier.Engine.ApplyVerified(ctx, verified)
 	if errors.Is(err, engine.ErrRestartConsent) && applier.Restart != nil {

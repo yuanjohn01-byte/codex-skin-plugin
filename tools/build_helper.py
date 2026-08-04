@@ -19,7 +19,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = "github.com/yuanjohn01-byte/codex-skin-plugin"
-HELPER_VERSION = "0.1.0-paid-alpha.2"
+HELPER_VERSION = "0.1.0-paid-alpha.3"
 REQUIRED_GO_VERSION = "go1.26.5"
 DEFAULT_OUTPUT = ROOT / "dist" / "helper"
 

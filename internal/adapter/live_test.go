@@ -68,6 +68,47 @@ func TestCurrentProfileModeCannotBeRedirectedToIsolatedProfile(t *testing.T) {
 	}
 }
 
+func TestSessionActivationRestoresNativeAppearanceBytesBeforeSuccess(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	store, err := engine.OpenStore(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	configDirectory := filepath.Join(home, ".codex")
+	if err := os.MkdirAll(configDirectory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	configPath := filepath.Join(configDirectory, "config.toml")
+	original := []byte("[desktop]\nappearanceTheme = \"system\"\nappearanceDarkCodeThemeId = \"night\"\n")
+	if err := os.WriteFile(configPath, original, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	live, err := NewLive(Config{Root: store.Root(), CurrentProfile: true, UserHome: home})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if changed, err := live.appearance.Pin("dark"); err != nil || !changed {
+		t.Fatalf("Pin() = %t, %v", changed, err)
+	}
+	if err := live.RestoreNativeAppearanceBackup(); err != nil {
+		t.Fatalf("RestoreNativeAppearanceBackup() error = %v", err)
+	}
+	restored, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != string(original) {
+		t.Fatalf("native config was not restored\nwant: %q\n got: %q", original, restored)
+	}
+	if _, err := os.Lstat(filepath.Join(store.Root(), "recovery", "appearance.json")); !os.IsNotExist(err) {
+		t.Fatalf("appearance backup remains after activation: %v", err)
+	}
+	if err := live.RestoreNativeAppearanceBackup(); err != nil {
+		t.Fatalf("idempotent restore error = %v", err)
+	}
+}
+
 func TestSelectPrimedThemeOnlyAcceptsCurrentOrExactMigrationTemplates(t *testing.T) {
 	compiled := engine.CompiledTheme{
 		ThemePublicID: "100002", ThemeVersion: "1.0.0",
