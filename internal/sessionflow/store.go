@@ -119,7 +119,21 @@ func (store *Store) Current() (Record, bool, error) {
 	if store == nil {
 		return Record{}, false, ErrUnsafe
 	}
-	return store.read()
+	// Writers publish records with an atomic rename. A reader can otherwise
+	// observe metadata for the old inode and bytes from the new inode during the
+	// narrow Lstat/ReadFile window. Retry only a bounded number of times; durable
+	// corruption still fails closed.
+	var record Record
+	var found bool
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		record, found, err = store.read()
+		if err == nil {
+			return record, found, nil
+		}
+		time.Sleep(time.Millisecond)
+	}
+	return Record{}, false, err
 }
 
 func (store *Store) Claim(sessionID string, pid int) (Record, error) {

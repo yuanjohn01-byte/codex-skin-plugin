@@ -65,7 +65,14 @@ type Runtime struct {
 	// currentSessionIdentity is test-only dependency injection. Production always
 	// verifies the currently controlled Codex process through the platform probe.
 	currentSessionIdentity func(context.Context) (engine.Identity, error)
-	RestartDelay           time.Duration
+	// The remaining unexported session hooks keep the detached controller's real
+	// state machine deterministic under unit tests. Production leaves them nil.
+	sessionAdapterFactory func(string) (themeSessionAdapter, error)
+	sessionThemeLoader    func(*engine.Store) (*engine.CompiledTheme, *engine.DesiredTheme, error)
+	sessionStartTimeout   time.Duration
+	sessionStopTimeout    time.Duration
+	sessionWaitInterval   time.Duration
+	RestartDelay          time.Duration
 }
 
 type versionData struct {
@@ -374,13 +381,17 @@ func runThemeApply(themePublicID string, stdout, stderr io.Writer, jsonMode bool
 			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-SESSION-001", "use_offline_restore_entry", exitApply)
 		}
 		store, storeErr := engine.OpenStore(root, environment.PluginCache)
-		if storeErr != nil || startThemeSession(
-			store,
-			result.ThemePublicID,
-			result.ThemeVersion,
-			environment,
-		) != nil {
-			if storeErr == nil {
+		var sessionErr error
+		if storeErr == nil {
+			sessionErr = startThemeSession(
+				store,
+				result.ThemePublicID,
+				result.ThemeVersion,
+				environment,
+			)
+		}
+		if storeErr != nil || sessionErr != nil {
+			if storeErr == nil && sessionRollbackSafe(sessionErr) {
 				_ = rollbackAfterSessionStartFailure(store, environment)
 			}
 			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-SESSION-001", "use_offline_restore_entry", exitApply)
@@ -617,7 +628,9 @@ func runRestartWorker(requestID string, environment Runtime) int {
 	if completedRelease != nil {
 		if sessionControllerEnabled(environment) {
 			if err := startThemeSession(store, resultThemeID, resultVersion, environment); err != nil {
-				_ = rollbackAfterSessionStartFailure(store, environment)
+				if sessionRollbackSafe(err) {
+					_ = rollbackAfterSessionStartFailure(store, environment)
+				}
 				_, _ = restartStore.Fail(requestID, "CS-FLOW-SESSION-001")
 				return exitApply
 			}

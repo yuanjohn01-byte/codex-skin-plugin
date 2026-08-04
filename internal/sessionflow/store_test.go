@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -149,6 +150,53 @@ func TestFreshRequiresRecentInProgressHeartbeat(t *testing.T) {
 	}
 	if _, expiredAgain, err := store.ExpireStale(30*time.Second, "controller_heartbeat_lost"); err != nil || expiredAgain {
 		t.Fatalf("second ExpireStale() expired = %t, err = %v", expiredAgain, err)
+	}
+}
+
+func TestCurrentToleratesAtomicHeartbeatPublication(t *testing.T) {
+	root := t.TempDir()
+	store, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Start("100021", "1.0.1", testDigest(), testIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Claim(record.SessionID, 4312); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Activate(record.SessionID, 4312); err != nil {
+		t.Fatal(err)
+	}
+
+	var readers sync.WaitGroup
+	errorsSeen := make(chan error, 8)
+	for reader := 0; reader < 8; reader++ {
+		readers.Add(1)
+		go func() {
+			defer readers.Done()
+			for read := 0; read < 250; read++ {
+				current, found, err := store.Current()
+				if err != nil || !found || current.SessionID != record.SessionID {
+					select {
+					case errorsSeen <- err:
+					default:
+					}
+					return
+				}
+			}
+		}()
+	}
+	for heartbeat := 0; heartbeat < 250; heartbeat++ {
+		if _, err := store.Heartbeat(record.SessionID, 4312); err != nil {
+			t.Fatal(err)
+		}
+	}
+	readers.Wait()
+	close(errorsSeen)
+	for err := range errorsSeen {
+		t.Fatalf("Current() observed an incomplete atomic publication: %v", err)
 	}
 }
 

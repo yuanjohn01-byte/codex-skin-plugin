@@ -21,6 +21,18 @@ const (
 	sessionAppearanceSettle  = 500 * time.Millisecond
 )
 
+var errSessionStopUnconfirmed = errors.New("theme session controller stop is unconfirmed")
+
+type themeSessionAdapter interface {
+	OpenVerifiedThemeSession(context.Context, engine.CompiledTheme) (engine.Session, error)
+	Apply(context.Context, engine.Session, engine.CompiledTheme) error
+	Verify(context.Context, engine.Session, engine.CompiledTheme) (engine.RegionReport, error)
+	RestoreOfficial(context.Context, engine.Session) error
+	VerifyOfficial(context.Context, engine.Session) error
+	Close(context.Context, engine.Session) error
+	RestoreNativeAppearanceBackup() error
+}
+
 // runThemeSession owns no scheduler and never launches Codex. It only keeps
 // one previously approved, controlled Codex process themed until that process
 // exits, Restore asks it to stop, or its identity becomes unsafe.
@@ -45,7 +57,11 @@ func runThemeSession(sessionID string, environment Runtime) int {
 	if _, err := sessions.Claim(sessionID, os.Getpid()); err != nil {
 		return exitInternal
 	}
-	compiled, desired, err := engine.LoadDesiredCompiled(store)
+	loadTheme := environment.sessionThemeLoader
+	if loadTheme == nil {
+		loadTheme = engine.LoadDesiredCompiled
+	}
+	compiled, desired, err := loadTheme(store)
 	if err != nil || desired.ThemePublicID != record.ThemePublicID ||
 		desired.ThemeVersion != record.ThemeVersion || desired.PackageSHA256 != record.PackageSHA256 {
 		_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "cached_theme_invalid")
@@ -73,7 +89,13 @@ func runThemeSession(sessionID string, environment Runtime) int {
 			return exitApply
 		}
 
-		live, liveErr := adapter.NewLive(adapter.Config{Root: store.Root(), CurrentProfile: true})
+		newLive := environment.sessionAdapterFactory
+		if newLive == nil {
+			newLive = func(root string) (themeSessionAdapter, error) {
+				return adapter.NewLive(adapter.Config{Root: root, CurrentProfile: true})
+			}
+		}
+		live, liveErr := newLive(store.Root())
 		if liveErr != nil {
 			_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_configuration")
 			return exitApply
@@ -82,6 +104,14 @@ func runThemeSession(sessionID string, environment Runtime) int {
 		liveSession, openErr := live.OpenVerifiedThemeSession(sessionCtx, *compiled)
 		cancel()
 		if openErr != nil {
+			if requested, stopErr := sessions.StopRequested(sessionID); stopErr == nil && requested {
+				if appearanceErr := live.RestoreNativeAppearanceBackup(); appearanceErr != nil {
+					_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_restore_failed")
+					return exitApply
+				}
+				_, _ = sessions.Finish(sessionID, sessionflow.StatusEnded, "restore_requested")
+				return exitSuccess
+			}
 			if sessionCodexExited(ctx) {
 				_ = live.RestoreNativeAppearanceBackup()
 				_, _ = sessions.Finish(sessionID, sessionflow.StatusEnded, "codex_exited")
@@ -103,6 +133,21 @@ func runThemeSession(sessionID string, environment Runtime) int {
 			_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_identity_lost")
 			return exitApply
 		}
+		stopRequested, stopErr = sessions.StopRequested(sessionID)
+		if stopErr != nil {
+			_ = live.Close(context.Background(), liveSession)
+			return exitInternal
+		}
+		if stopRequested {
+			closeErr := live.Close(context.Background(), liveSession)
+			appearanceErr := live.RestoreNativeAppearanceBackup()
+			if errors.Join(closeErr, appearanceErr) != nil {
+				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_restore_failed")
+				return exitApply
+			}
+			_, _ = sessions.Finish(sessionID, sessionflow.StatusEnded, "restore_requested")
+			return exitSuccess
+		}
 
 		applyCtx, applyCancel := context.WithTimeout(ctx, 12*time.Second)
 		applyErr := live.Apply(applyCtx, liveSession, *compiled)
@@ -111,6 +156,19 @@ func runThemeSession(sessionID string, environment Runtime) int {
 			report, applyErr = live.Verify(applyCtx, liveSession, *compiled)
 		}
 		applyCancel()
+		stopRequested, stopErr = sessions.StopRequested(sessionID)
+		if stopErr != nil || stopRequested {
+			if restoreErr := restoreControlledSession(live, liveSession); restoreErr != nil {
+				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_restore_failed")
+				return exitApply
+			}
+			if stopErr != nil {
+				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_state_lost")
+				return exitInternal
+			}
+			_, _ = sessions.Finish(sessionID, sessionflow.StatusEnded, "restore_requested")
+			return exitSuccess
+		}
 		if applyErr != nil || !engine.ReportAllowsTheme(report, *compiled) {
 			if !lastReady.IsZero() && time.Since(lastReady) < sessionReconnectWindow {
 				_ = live.Close(context.Background(), liveSession)
@@ -119,7 +177,7 @@ func runThemeSession(sessionID string, environment Runtime) int {
 				}
 				continue
 			}
-			restoreControlledSession(live, liveSession)
+			_ = restoreControlledSession(live, liveSession)
 			_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_verify_failed")
 			return exitApply
 		}
@@ -128,12 +186,12 @@ func runThemeSession(sessionID string, environment Runtime) int {
 			// process. Restore the user's original settings on disk before
 			// claiming success, then prove the live renderer remains themed.
 			if err := live.RestoreNativeAppearanceBackup(); err != nil {
-				restoreControlledSession(live, liveSession)
+				_ = restoreControlledSession(live, liveSession)
 				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "appearance_restore_failed")
 				return exitApply
 			}
 			if !waitSession(ctx, sessionAppearanceSettle) {
-				restoreControlledSession(live, liveSession)
+				_ = restoreControlledSession(live, liveSession)
 				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_cancelled")
 				return exitApply
 			}
@@ -141,17 +199,35 @@ func runThemeSession(sessionID string, environment Runtime) int {
 			settledReport, settleErr := live.Verify(settleCtx, liveSession, *compiled)
 			settleCancel()
 			if settleErr != nil || !engine.ReportAllowsTheme(settledReport, *compiled) {
-				restoreControlledSession(live, liveSession)
+				_ = restoreControlledSession(live, liveSession)
 				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "appearance_restore_changed_renderer")
 				return exitApply
 			}
-		}
-		if _, err := sessions.Activate(sessionID, os.Getpid()); err != nil {
-			_ = live.Close(context.Background(), liveSession)
-			if requested, stopErr := sessions.StopRequested(sessionID); stopErr == nil && requested {
+			stopRequested, stopErr = sessions.StopRequested(sessionID)
+			if stopErr != nil || stopRequested {
+				if restoreErr := restoreControlledSession(live, liveSession); restoreErr != nil {
+					_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_restore_failed")
+					return exitApply
+				}
+				if stopErr != nil {
+					_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_state_lost")
+					return exitInternal
+				}
 				_, _ = sessions.Finish(sessionID, sessionflow.StatusEnded, "restore_requested")
 				return exitSuccess
 			}
+		}
+		if _, err := sessions.Activate(sessionID, os.Getpid()); err != nil {
+			restoreErr := restoreControlledSession(live, liveSession)
+			if requested, stopErr := sessions.StopRequested(sessionID); stopErr == nil && requested {
+				if restoreErr != nil {
+					_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_restore_failed")
+					return exitApply
+				}
+				_, _ = sessions.Finish(sessionID, sessionflow.StatusEnded, "restore_requested")
+				return exitSuccess
+			}
+			_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_activate_failed")
 			return exitInternal
 		}
 		lastReady = time.Now()
@@ -228,15 +304,20 @@ func waitSession(ctx context.Context, duration time.Duration) bool {
 	}
 }
 
-func restoreControlledSession(live *adapter.Live, session engine.Session) {
+func restoreControlledSession(live themeSessionAdapter, session engine.Session) error {
 	if live == nil {
-		return
+		return engine.ErrConfiguration
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	_ = live.RestoreOfficial(cleanupCtx, session)
-	_ = live.Close(cleanupCtx, session)
-	_ = live.RestoreNativeAppearanceBackup()
+	restoreErr := live.RestoreOfficial(cleanupCtx, session)
+	var verifyErr error
+	if restoreErr == nil {
+		verifyErr = live.VerifyOfficial(cleanupCtx, session)
+	}
+	closeErr := live.Close(cleanupCtx, session)
+	appearanceErr := live.RestoreNativeAppearanceBackup()
+	return errors.Join(restoreErr, verifyErr, closeErr, appearanceErr)
 }
 
 func sessionControllerEnabled(environment Runtime) bool {
@@ -300,7 +381,8 @@ func startThemeSession(
 		_, _ = sessions.Finish(record.SessionID, sessionflow.StatusFailed, "controller_launch_failed")
 		return err
 	}
-	deadline := time.Now().Add(18 * time.Second)
+	startTimeout, stopTimeout, waitInterval := sessionTimings(environment)
+	deadline := time.Now().Add(startTimeout)
 	for time.Now().Before(deadline) {
 		current, found, currentErr := sessions.Current()
 		if currentErr != nil || !found || current.SessionID != record.SessionID {
@@ -312,12 +394,84 @@ func startThemeSession(
 		case sessionflow.StatusFailed, sessionflow.StatusEnded:
 			return engine.ErrApplyFailed
 		}
-		if !waitSession(ctx, 150*time.Millisecond) {
-			return ctx.Err()
+		if !waitSession(ctx, waitInterval) {
+			cause := ctx.Err()
+			if stopErr := requestStopAndWait(sessions, record.SessionID, ctx, stopTimeout, waitInterval); stopErr != nil {
+				return errors.Join(errSessionStopUnconfirmed, cause, stopErr)
+			}
+			return cause
 		}
 	}
-	_, _, _ = sessions.RequestStop()
+	if stopErr := requestStopAndWait(sessions, record.SessionID, ctx, stopTimeout, waitInterval); stopErr != nil {
+		return errors.Join(errSessionStopUnconfirmed, engine.ErrApplyFailed, stopErr)
+	}
 	return engine.ErrApplyFailed
+}
+
+func sessionTimings(environment Runtime) (time.Duration, time.Duration, time.Duration) {
+	startTimeout := environment.sessionStartTimeout
+	if startTimeout <= 0 {
+		startTimeout = 18 * time.Second
+	}
+	stopTimeout := environment.sessionStopTimeout
+	if stopTimeout <= 0 {
+		stopTimeout = 20 * time.Second
+	}
+	waitInterval := environment.sessionWaitInterval
+	if waitInterval <= 0 {
+		waitInterval = 150 * time.Millisecond
+	}
+	return startTimeout, stopTimeout, waitInterval
+}
+
+func requestStopAndWait(
+	sessions *sessionflow.Store,
+	sessionID string,
+	parent context.Context,
+	timeout, interval time.Duration,
+) error {
+	if sessions == nil || sessionID == "" {
+		return engine.ErrConfiguration
+	}
+	if parent == nil {
+		parent = context.Background()
+	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), timeout)
+	defer cancel()
+	requested := false
+	for {
+		if !requested {
+			record, didRequest, err := sessions.RequestStop()
+			if err == nil {
+				if record.SessionID != sessionID {
+					return engine.ErrStateUnsafe
+				}
+				if record.Status == sessionflow.StatusEnded || record.Status == sessionflow.StatusFailed {
+					return nil
+				}
+				requested = didRequest || record.Status == sessionflow.StatusStopping
+			} else if !errors.Is(err, engine.ErrBusy) {
+				return err
+			}
+		}
+		current, found, err := sessions.Current()
+		if err != nil || !found || current.SessionID != sessionID {
+			if err == nil {
+				err = engine.ErrStateUnsafe
+			}
+			return err
+		}
+		if current.Status == sessionflow.StatusEnded || current.Status == sessionflow.StatusFailed {
+			return nil
+		}
+		if !waitSession(cleanupCtx, interval) {
+			return cleanupCtx.Err()
+		}
+	}
+}
+
+func sessionRollbackSafe(err error) bool {
+	return err != nil && !errors.Is(err, errSessionStopUnconfirmed)
 }
 
 func currentControlledIdentity(ctx context.Context) (engine.Identity, error) {
@@ -381,6 +535,8 @@ func rollbackAfterSessionStartFailure(store *engine.Store, environment Runtime) 
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
 	runtimeAdapter := environment.Adapter
 	if runtimeAdapter == nil {
 		live, err := adapter.NewLive(adapter.Config{
@@ -395,6 +551,6 @@ func rollbackAfterSessionStartFailure(store *engine.Store, environment Runtime) 
 	if err != nil {
 		return err
 	}
-	_, err = instance.RestoreOfficial(ctx)
+	_, err = instance.RestoreOfficial(cleanupCtx)
 	return err
 }
