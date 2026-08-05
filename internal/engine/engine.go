@@ -186,6 +186,28 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 		}
 		return ApplyResult{}, rollback("CS-VERIFY-001", err)
 	}
+	// A theme may need a temporary native light/dark preference only while the
+	// controlled Codex process starts. Restore the user's exact setting before
+	// committing the on-demand operation, then prove the already-open renderer
+	// still carries the requested theme. This deliberately avoids a background
+	// keeper whose sole job is to restore a preference later in the session.
+	if restorer, supported := engine.adapter.(NativeAppearanceRestorer); supported {
+		if err := restorer.RestoreNativeAppearanceBackup(); err != nil {
+			return ApplyResult{}, rollback("CS-APPEARANCE-001", err)
+		}
+		verification, err = engine.verifyTheme(ctx, session, compiled)
+		journal.Verification = verificationSummary(verification)
+		if writeErr := engine.store.WriteJournal(journal); writeErr != nil {
+			return ApplyResult{}, rollback("CS-STATE-001", writeErr)
+		}
+		report = verification.Report
+		if err != nil || !reportAllowsCommit(report, compiled) {
+			if err == nil {
+				err = ErrVerifyFailed
+			}
+			return ApplyResult{}, rollback("CS-VERIFY-001", err)
+		}
+	}
 
 	journal.Stage = "commit"
 	if err := engine.store.WriteJournal(journal); err != nil {

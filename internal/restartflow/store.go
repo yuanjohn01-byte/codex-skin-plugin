@@ -40,7 +40,6 @@ var (
 	ErrState   = errors.New("restart continuation state transition is invalid")
 
 	requestIDPattern = regexp.MustCompile(`^rst_[0-9a-f]{32}$`)
-	sessionIDPattern = regexp.MustCompile(`^ses_[0-9a-f]{32}$`)
 	publicIDPattern  = regexp.MustCompile(`^[0-9]{6}$`)
 	semverPattern    = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$`)
 	digestPattern    = regexp.MustCompile(`^[0-9a-f]{64}$`)

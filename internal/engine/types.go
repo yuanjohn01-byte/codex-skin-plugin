@@ -113,8 +113,8 @@ type CapabilityWaiter interface {
 	WaitForCapabilities(context.Context, Session) (RegionReport, error)
 }
 
-// ThemeVerificationWaiter lets a live adapter wait for the renderer controller
-// and Codex shell to settle after injection. The engine still commits only when
+// ThemeVerificationWaiter lets a live adapter wait for the one-time renderer
+// injection and Codex shell to settle. The engine still commits only when
 // the same strict report predicate passes; waiting never converts an unknown
 // or failed renderer into success.
 type ThemeVerificationWaiter interface {
@@ -138,6 +138,14 @@ type ThemeSessionOpener interface {
 // appearance backup before the official renderer is verified.
 type OfficialSessionOpener interface {
 	OpenVerifiedOfficialSession(context.Context) (Session, error)
+}
+
+// NativeAppearanceRestorer returns the user's saved native Codex appearance
+// setting after a verified renderer apply. The temporary native light/dark
+// pin is only a launch aid; a completed on-demand apply must not leave that
+// setting changed after its Helper exits.
+type NativeAppearanceRestorer interface {
+	RestoreNativeAppearanceBackup() error
 }
 
 // OfficialRollbackFinalizer completes a failed first-theme transaction after

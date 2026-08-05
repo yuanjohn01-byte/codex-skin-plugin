@@ -47,68 +47,31 @@ func (adapter *Live) installController(
 		compiled.AppearanceMode,
 		selectors,
 	}
-	encoded, err := json.Marshal(arguments)
-	if err != nil {
-		return engine.ErrConfiguration
-	}
-	source := `(() => { const args = ` + string(encoded) + `; (` + applyFunction + `)(...args); })();`
-	var registered struct {
-		Identifier string `json:"identifier"`
-	}
-	if err := live.client.Call(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{
-		"source": source,
-	}, &registered); err != nil || !controllerIdentifier.MatchString(registered.Identifier) {
-		return engine.ErrApplyFailed
-	}
-	removeRegistered := true
-	defer func() {
-		if removeRegistered {
-			_ = live.client.Call(context.WithoutCancel(ctx), "Page.removeScriptToEvaluateOnNewDocument", map[string]any{
-				"identifier": registered.Identifier,
-			}, nil)
-		}
-	}()
 	var applied bool
 	if err := callFunction(ctx, live.client, applyFunction, arguments, &applied); err != nil || !applied {
 		return errors.Join(engine.ErrApplyFailed, err)
 	}
-	if err := adapter.writeControllerRecord(controllerRecord{
-		SchemaVersion: 1, TargetID: live.targetID, Identifier: registered.Identifier,
-	}); err != nil {
-		return err
-	}
-	removeRegistered = false
 	return nil
 }
 
+// removeControllerBootstrap is a migration cleanup for pre-on-demand helpers.
+// New helpers never register a Page bootstrap or persist a controller record.
 func (adapter *Live) removeControllerBootstrap(ctx context.Context, live *liveSession) error {
 	record, found, err := adapter.readControllerRecord()
 	if err != nil || !found {
 		return err
 	}
 	if record.TargetID == live.targetID {
-		if err := live.client.Call(ctx, "Page.removeScriptToEvaluateOnNewDocument", map[string]any{
+		// A retired Page identifier means the old bootstrap is no longer
+		// addressable through this CDP session. We still remove its current
+		// document style below; a new on-demand transaction must never install a
+		// replacement bootstrap merely to neutralize a stale one.
+		_ = live.client.Call(ctx, "Page.removeScriptToEvaluateOnNewDocument", map[string]any{
 			"identifier": record.Identifier,
-		}, nil); err != nil {
-			// Chromium can retire a Page script identifier when the CDP session
-			// that created it disconnects. A new verified connection must still be
-			// able to switch or Restore. Install a fixed local neutralizer after
-			// the stale bootstrap and prove the current document is clean; a later
-			// theme bootstrap is registered after this guard and therefore wins.
-			neutralizer := `(() => { (` + restoreFunction + `)(); ` +
-				`globalThis["__CODEX_SKIN_RENDERER_DISABLED_V1__"] = true; })();`
-			var registered struct {
-				Identifier string `json:"identifier"`
-			}
-			if guardErr := live.client.Call(ctx, "Page.addScriptToEvaluateOnNewDocument", map[string]any{
-				"source": neutralizer,
-			}, &registered); guardErr != nil || !controllerIdentifier.MatchString(registered.Identifier) {
-				return errors.Join(err, guardErr, engine.ErrRestoreFailed)
-			}
-			var restored bool
-			if guardErr := callFunction(ctx, live.client, restoreFunction, nil, &restored); guardErr != nil || !restored {
-				return errors.Join(err, guardErr, engine.ErrRestoreFailed)
-			}
+		}, nil)
+		var restored bool
+		if err := callFunction(ctx, live.client, restoreFunction, nil, &restored); err != nil || !restored {
+			return errors.Join(engine.ErrRestoreFailed, err)
 		}
 	}
 	return adapter.clearControllerRecord()
@@ -140,43 +103,6 @@ func (adapter *Live) readControllerRecord() (controllerRecord, bool, error) {
 	return record, true, nil
 }
 
-func (adapter *Live) writeControllerRecord(record controllerRecord) error {
-	if !controllerIdentifier.MatchString(record.TargetID) ||
-		!controllerIdentifier.MatchString(record.Identifier) {
-		return engine.ErrStateUnsafe
-	}
-	path := adapter.controllerRecordPath()
-	if info, err := os.Lstat(path); err == nil && info.Mode()&os.ModeSymlink != 0 {
-		return engine.ErrStateUnsafe
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return engine.ErrStateUnsafe
-	}
-	raw, err := json.Marshal(record)
-	if err != nil {
-		return err
-	}
-	temporary, err := os.CreateTemp(filepath.Dir(path), ".renderer-controller-")
-	if err != nil {
-		return engine.ErrStateUnsafe
-	}
-	temporaryPath := temporary.Name()
-	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err != nil {
-		temporary.Close()
-		return engine.ErrStateUnsafe
-	}
-	_, writeErr := temporary.Write(raw)
-	syncErr := temporary.Sync()
-	closeErr := temporary.Close()
-	if writeErr != nil || syncErr != nil || closeErr != nil {
-		return engine.ErrStateUnsafe
-	}
-	if err := os.Rename(temporaryPath, path); err != nil {
-		return engine.ErrStateUnsafe
-	}
-	return nil
-}
-
 func (adapter *Live) clearControllerRecord() error {
 	path := adapter.controllerRecordPath()
 	if info, err := os.Lstat(path); err == nil {
@@ -200,7 +126,6 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
       (appearanceMode !== "dark" && appearanceMode !== "light") ||
       !selectors || typeof selectors !== "object") return false;
   const STATE_KEY = "__CODEX_SKIN_RENDERER_CONTROLLER_V2__";
-  const DISABLED_KEY = "__CODEX_SKIN_RENDERER_DISABLED_V1__";
   const STYLE_REGISTRY_KEY = "__CODEX_SKIN_RENDERER_STYLE_SHEETS_V1__";
   const STYLE_ID = "codex-skin-theme-v1";
   const ROOT_ATTRIBUTES = [
@@ -211,7 +136,6 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
   ];
   const previous = globalThis[STATE_KEY];
   if (typeof previous?.cleanup === "function") previous.cleanup();
-  globalThis[DISABLED_KEY] = false;
 
   const existingStyleRegistry = globalThis[STYLE_REGISTRY_KEY];
   const styleRegistry = existingStyleRegistry instanceof Set ? existingStyleRegistry : new Set();
@@ -229,11 +153,6 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
   let styleMode = "fallback";
   let styleSheet = null;
   let styleNode = null;
-  let rootObserver = null;
-  let partObserver = null;
-  let bodyReadyHandler = null;
-  let timer = null;
-  let interval = null;
   let currentMain = null;
   let stopped = false;
 
@@ -348,63 +267,18 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
     }
     return true;
   };
-  const ensure = () => {
-    timer = null;
-    if (stopped || globalThis[DISABLED_KEY]) return;
-    if (settingsScope()) {
-      removeMainMarkers();
-      currentMain = null;
-    }
-    activate();
-  };
-  const schedule = () => {
-    if (stopped || timer !== null) return;
-    timer = setTimeout(ensure, 40);
-  };
-  const containsMainSurface = (node) => node instanceof Element && (
-    node.matches(MAIN_SELECTOR) || Boolean(node.querySelector(MAIN_SELECTOR))
-  );
-  const structuralMutationHandler = (records) => {
-    if (stopped) return;
-    // Conversation streaming can emit hundreds of subtree mutations. While
-    // the bound main surface remains connected, those message mutations cannot
-    // require a shell rebind, so keep the watcher off the typing hot path.
-    if (currentMain) {
-      if (!currentMain.isConnected) schedule();
-      return;
-    }
-    for (const record of records) {
-      if (record.type !== "childList") continue;
-      if ([...record.addedNodes].some(containsMainSurface)) {
-        schedule();
-        return;
-      }
-    }
-  };
-  const navigationHandler = () => schedule();
   const cleanup = () => {
     if (stopped) return;
     stopped = true;
-    if (timer !== null) clearTimeout(timer);
-    if (interval !== null) clearInterval(interval);
-    rootObserver?.disconnect();
-    partObserver?.disconnect();
-    if (bodyReadyHandler && typeof document.removeEventListener === "function") {
-      document.removeEventListener("DOMContentLoaded", bodyReadyHandler);
-    }
-    try { globalThis.navigation?.removeEventListener("navigate", navigationHandler); } catch {}
-    globalThis.removeEventListener("popstate", navigationHandler);
-    globalThis.removeEventListener("hashchange", navigationHandler);
     deactivate();
     styleNode?.remove();
     if (styleRegistry.size === 0) delete globalThis[STYLE_REGISTRY_KEY];
     URL.revokeObjectURL(backgroundURL);
     if (globalThis[STATE_KEY]?.cleanup === cleanup) delete globalThis[STATE_KEY];
-    globalThis[DISABLED_KEY] = true;
   };
   globalThis[STATE_KEY] = {
-    cleanup, ensure, styleText, backgroundURL, themeId, themeVersion, selectors,
-    templateVersion, appearanceMode, runtimeVersion: 2,
+    cleanup, styleText, backgroundURL, themeId, themeVersion,
+    templateVersion, appearanceMode, runtimeVersion: 3,
     get styleMode() { return styleMode; },
     get installed() {
       return styleMode === "adopted"
@@ -413,39 +287,5 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
     },
     get active() { return document.documentElement?.getAttribute("data-codex-skin") === "active"; }
   };
-  if (typeof MutationObserver === "function") {
-    rootObserver = new MutationObserver(schedule);
-    partObserver = new MutationObserver(structuralMutationHandler);
-  }
-  const observeAttributes = (node) => {
-    if (!rootObserver || !node) return;
-    rootObserver.observe(node, {
-      attributes: true,
-      attributeFilter: [
-        "class", "data-theme", "data-appearance", "data-color-mode",
-        "data-codex-skin", "data-codex-skin-theme", "data-codex-skin-template"
-      ]
-    });
-  };
-  const observeBody = () => {
-    observeAttributes(document.documentElement);
-    observeAttributes(document.body);
-    partObserver?.observe(document.documentElement, { childList: true, subtree: true });
-  };
-  observeAttributes(document.documentElement);
-  if (document.body) observeBody();
-  else if (typeof document.addEventListener === "function") {
-    bodyReadyHandler = () => {
-      if (!globalThis[DISABLED_KEY]) {
-        observeBody();
-        schedule();
-      }
-    };
-    document.addEventListener("DOMContentLoaded", bodyReadyHandler, { once: true });
-  }
-  try { globalThis.navigation?.addEventListener("navigate", navigationHandler); } catch {}
-  globalThis.addEventListener("popstate", navigationHandler);
-  globalThis.addEventListener("hashchange", navigationHandler);
-  interval = setInterval(ensure, 30000);
   return activate();
 }`

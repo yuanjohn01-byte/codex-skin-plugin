@@ -15,15 +15,6 @@ func StartWorker(executable, requestID string) error {
 	return startDetached(executable, "__restart-worker", requestID)
 }
 
-// StartSession starts the controller for one already-approved, controlled
-// Codex session. It never creates a login item or a persistent OS service.
-func StartSession(executable, sessionID string) error {
-	if !sessionIDPattern.MatchString(sessionID) {
-		return ErrUnsafe
-	}
-	return startDetached(executable, "__theme-session", sessionID)
-}
-
 func startDetached(executable string, arguments ...string) error {
 	info, err := os.Lstat(executable)
 	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {

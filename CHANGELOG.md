@@ -2,23 +2,17 @@
 
 ## 0.1.0-paid-alpha - Code-stage candidate
 
-- Replace the restart-worker-to-keeper handoff with one external Runtime Supervisor that owns controlled launch, apply, visible verification, session keep-alive, in-place switching, and terminal status.
+- Replace the restart-worker-to-keeper handoff and all session controller state with one bounded on-demand Helper transaction for apply, direct switch, and Restore.
 - Add `theme launch` as the primary restart-confirmation command while retaining `theme continue` only as a compatibility alias.
-- Report visible success only when the exact theme and `runtimeStatus: active` agree; stale runtime heartbeats become terminal runtime failures even if a signed package remains committed locally.
+- Report success only after the exact theme is visibly verified, the original native appearance bytes are restored, and the current renderer is re-verified; the Helper then exits and status never reports `runtimeStatus` or `sessionStatus`.
 - Add a versioned renderer selector contract pinned to the MIT-licensed Codex Dream Skin v1.5.11 mechanisms, with L1/L2 compatibility tiers and stable data/CSS-module fallbacks.
 - Add Template v7 for current Codex header and top-fade data/module selectors, preserving Template v6 as the exact migration/rollback style.
-- Keep the MutationObserver off streaming message mutations while retaining new-document bootstrap, route repair, structural shell rebind, target rediscovery, and low-frequency health checks.
-- Serialize active-runtime health with foreground apply/switch transactions and wait briefly for health locks instead of surfacing random Busy failures.
+- Replace the persistent Page bootstrap, MutationObserver, route repair, periodic health checks, and controller heartbeat with a current-document-only injector to remove typing-path work and session-lifetime failures.
+- Permit direct theme replacement after any historical session/runtime failure; only the current operation's unconfirmed rollback can require Offline Restore.
 - Recover from macOS LaunchServices dropping Chromium arguments by stopping only the exact verified ordinary process it created, rediscovering the stable signed app, and retrying with the verified executable.
 - Make restart consent terminal before renderer mutation so one approved apply performs only the required controlled Codex restart instead of first reopening a throwaway recovery process.
-- Reconnect the Scheme A keeper to the exact process identity verified by apply without re-reading the already-restored native appearance setting; use lightweight controller-marker health checks instead of repeated full layout/contrast scans.
-- Ignore ordinary conversation DOM mutations in the renderer controller, retaining structural, navigation, root-marker, and bounded safeguard repair paths to reduce typing and pointer latency.
-- Recover switch and offline Restore when Chromium has retired the prior CDP session's bootstrap identifier by installing a fixed local neutralizer and verifying immediate official cleanup.
-- Add a session-bound renderer controller: a theme is reported active only after the current controlled Codex session has an active controller, renderer reloads/rebuilt routes are rechecked during that session, and Restore asks the controller to stop before restoring the official appearance. Closing Codex or restarting the computer ends the session; no daemon, login item, or automatic reopen is installed.
-- Restore the user's native appearance settings on disk before a skin session is reported active, re-verify the live renderer afterward, and reject stale controller heartbeats after an abrupt exit or computer restart.
 - Exclude real-current-Codex macOS probes from ordinary `go test`; they require both the `realcodex` build tag and their existing explicit environment opt-in.
-- Require the shipped Helper entrypoint to opt in explicitly before CLI orchestration can start a live session controller; injected test flows are safe by default, mutating tests require explicit fake dependencies, and synthetic apply results cannot fall through to the user's recovery Helper or current Codex process.
-- Preserve the validated minimal Windows user-profile environment for detached restart/session Helpers so current-profile appearance recovery does not depend on an accidentally inherited shell.
+- Preserve the validated minimal Windows user-profile environment for detached restart Helpers so current-profile appearance recovery does not depend on an accidentally inherited shell.
 - Export the authoritative device-authorization start and theme release/download v1 contracts from Private.
 - Add strict same-origin device authorization start, PKCE proof generation, replay handling, native credential rotation, and one-command continuation.
 - Add authenticated theme metadata and bounded binary download clients that reject redirects, cross-origin purchase links, unknown JSON, truncation, oversize, and unexpected content types.

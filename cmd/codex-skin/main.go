@@ -7,7 +7,5 @@ import (
 )
 
 func main() {
-	os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr, cli.Runtime{
-		EnableLiveSessionController: true,
-	}))
+	os.Exit(cli.Run(os.Args[1:], os.Stdout, os.Stderr, cli.Runtime{}))
 }

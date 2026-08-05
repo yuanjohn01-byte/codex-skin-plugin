@@ -97,7 +97,6 @@ jobs:
           internal/protocol
           internal/release
           internal/restartflow
-          internal/sessionflow
           internal/theme
           internal/themeapi
           internal/userflow
@@ -122,7 +121,6 @@ jobs:
           ./internal/protocol
           ./internal/release
           ./internal/restartflow
-          ./internal/sessionflow
           ./internal/theme
           ./internal/themeapi
           ./internal/userflow
@@ -147,7 +145,6 @@ jobs:
           ./internal/protocol
           ./internal/release
           ./internal/restartflow
-          ./internal/sessionflow
           ./internal/theme
           ./internal/themeapi
           ./internal/userflow

@@ -269,53 +269,26 @@ func TestApplyFunctionKeepsRuntimeBackgroundInOwnedStylesheet(t *testing.T) {
 	}
 }
 
-func TestRendererControllerSelfHealsAndSuspendsMainScopeInSettings(t *testing.T) {
+func TestRendererInjectorDoesNotInstallAWatcherOrPersistentBootstrap(t *testing.T) {
 	for _, fragment := range []string{
-		`Page.addScriptToEvaluateOnNewDocument`,
-		`new MutationObserver(schedule)`,
-		`partObserver = new MutationObserver(structuralMutationHandler)`,
-		`if (currentMain) {`,
-		`if (!currentMain.isConnected) schedule()`,
-		`[...record.addedNodes].some(containsMainSurface)`,
-		`partObserver?.observe(document.documentElement, { childList: true, subtree: true })`,
-		`document.addEventListener("DOMContentLoaded", bodyReadyHandler, { once: true })`,
-		`globalThis.navigation?.addEventListener("navigate", navigationHandler)`,
-		`setInterval(ensure, 30000)`,
 		`selector("settings-panel")`,
 		`selector("appearance-radio")`,
 		`if (!main) return settingsScope() ? activateRoot() : false`,
-		`if (settingsScope()) {`,
 		`removeMainMarkers()`,
 		`URL.revokeObjectURL(backgroundURL)`,
 	} {
-		source := applyFunction
-		if strings.HasPrefix(fragment, "Page.") {
-			source = mustReadControllerSource(t)
-		}
-		if !strings.Contains(source, fragment) {
-			t.Fatalf("renderer controller is missing %q", fragment)
+		if !strings.Contains(applyFunction, fragment) {
+			t.Fatalf("renderer injector is missing %q", fragment)
 		}
 	}
-	if strings.Contains(applyFunction, `partObserver = new MutationObserver(schedule)`) {
-		t.Fatal("renderer controller still schedules a full reapply for every conversation mutation")
-	}
-	if strings.Contains(applyFunction, `changed.some((node) => node === currentMain || containsMainSurface(node))`) {
-		t.Fatal("renderer controller still scans every conversation mutation while main is connected")
-	}
-	for _, expensive := range []string{`getComputedStyle`, `getBoundingClientRect`, `thread-scroll-container`} {
-		if strings.Contains(themeSessionHealthFunction, expensive) {
-			t.Fatalf("steady-state health probe contains expensive traversal %q", expensive)
+	for _, forbidden := range []string{
+		`MutationObserver`, `setInterval(`, `addEventListener("popstate"`,
+		`addEventListener("hashchange"`, `Page.addScriptToEvaluateOnNewDocument`,
+	} {
+		if strings.Contains(applyFunction, forbidden) {
+			t.Fatalf("on-demand injector still contains watcher/bootstrap %q", forbidden)
 		}
 	}
-}
-
-func mustReadControllerSource(t *testing.T) string {
-	t.Helper()
-	content, err := os.ReadFile("controller.go")
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(content)
 }
 
 func TestIsolatedProfileRemainsAvailableOnlyForExplicitCalibration(t *testing.T) {
