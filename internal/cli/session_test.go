@@ -167,8 +167,12 @@ func TestActiveSessionUsesBoundIdentityAndLightweightHealthChecks(t *testing.T) 
 		go func() {
 			controllerDone <- runThemeSession(sessionID, Runtime{
 				GOOS: "darwin", GOARCH: "arm64", Root: store.Root(), Context: context.Background(),
-				sessionControlPoll:      time.Millisecond,
-				sessionHealthInterval:   3 * time.Millisecond,
+				sessionControlPoll: time.Millisecond,
+				// Keep the health cadence short enough to prove that foreground
+				// transactions exclude probes, without phase-locking a 3 ms probe
+				// interval against the test's 1 ms stop-poll interval. Production
+				// health checks run every 10 seconds.
+				sessionHealthInterval:   20 * time.Millisecond,
 				sessionHealthTimeout:    20 * time.Millisecond,
 				sessionAppearanceSettle: time.Millisecond,
 				sessionAdapterFactory:   func(string) (themeSessionAdapter, error) { return adapter, nil },
@@ -216,7 +220,8 @@ func TestActiveSessionUsesBoundIdentityAndLightweightHealthChecks(t *testing.T) 
 		t.Fatal("foreground apply transaction could not acquire the operation lock")
 	}
 	_, _, _, healthBeforeLockWait := adapter.metrics()
-	time.Sleep(15 * time.Millisecond)
+	// Hold the foreground transaction across more than one health interval.
+	time.Sleep(50 * time.Millisecond)
 	_, _, _, healthDuringLock := adapter.metrics()
 	if healthDuringLock != healthBeforeLockWait {
 		t.Fatalf(
