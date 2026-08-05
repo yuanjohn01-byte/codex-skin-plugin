@@ -638,6 +638,16 @@ func requestStopAndWait(
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(parent), timeout)
 	defer cancel()
 	requested := false
+	// A health probe and a Restore request share the operation lock. Fixed
+	// retry intervals can phase-lock on a fast renderer: each Restore attempt
+	// arrives while the same lightweight probe owns the lock. Back off only
+	// after a busy lock so the request yields a bounded, different window; a
+	// successful stop request immediately returns to the caller's cadence.
+	waitInterval := interval
+	maxBusyWait := 25 * time.Millisecond
+	if interval > maxBusyWait {
+		maxBusyWait = interval
+	}
 	for {
 		if !requested {
 			record, didRequest, err := sessions.RequestStop()
@@ -649,8 +659,14 @@ func requestStopAndWait(
 					return nil
 				}
 				requested = didRequest || record.Status == sessionflow.StatusStopping
+				waitInterval = interval
 			} else if !errors.Is(err, engine.ErrBusy) {
 				return err
+			} else if waitInterval < maxBusyWait {
+				waitInterval *= 2
+				if waitInterval > maxBusyWait {
+					waitInterval = maxBusyWait
+				}
 			}
 		}
 		current, found, err := sessions.Current()
@@ -663,7 +679,7 @@ func requestStopAndWait(
 		if current.Status == sessionflow.StatusEnded || current.Status == sessionflow.StatusFailed {
 			return nil
 		}
-		if !waitSession(cleanupCtx, interval) {
+		if !waitSession(cleanupCtx, waitInterval) {
 			return cleanupCtx.Err()
 		}
 	}
