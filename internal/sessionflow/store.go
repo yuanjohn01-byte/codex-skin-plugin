@@ -21,6 +21,13 @@ import (
 const (
 	schemaVersion = 1
 	maxStateBytes = 12 * 1024
+	// An atomic session publication can take longer than a few scheduler ticks
+	// on a busy desktop or CI runner because writers sync before renaming. Keep
+	// the reader bounded, but give a controller enough time to observe the
+	// complete replacement instead of treating a transient publication window
+	// as an unsafe state and abandoning a requested Restore.
+	currentReadAttempts = 20
+	currentReadRetry    = 2 * time.Millisecond
 )
 
 var (
@@ -121,17 +128,19 @@ func (store *Store) Current() (Record, bool, error) {
 	}
 	// Writers publish records with an atomic rename. A reader can otherwise
 	// observe metadata for the old inode and bytes from the new inode during the
-	// narrow Lstat/ReadFile window. Retry only a bounded number of times; durable
+	// narrow Lstat/ReadFile window. Retry only for a bounded window; durable
 	// corruption still fails closed.
 	var record Record
 	var found bool
 	var err error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < currentReadAttempts; attempt++ {
 		record, found, err = store.read()
 		if err == nil {
 			return record, found, nil
 		}
-		time.Sleep(time.Millisecond)
+		if attempt+1 < currentReadAttempts {
+			time.Sleep(currentReadRetry)
+		}
 	}
 	return Record{}, false, err
 }
