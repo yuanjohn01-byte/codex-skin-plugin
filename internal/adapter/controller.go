@@ -10,9 +10,10 @@ import (
 	"regexp"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/renderer"
 )
 
-const controllerStateKey = "__CODEX_SKIN_RENDERER_CONTROLLER_V1__"
+const controllerStateKey = "__CODEX_SKIN_RENDERER_CONTROLLER_V2__"
 
 var controllerIdentifier = regexp.MustCompile(`^[A-Za-z0-9._:-]{1,256}$`)
 
@@ -33,6 +34,10 @@ func (adapter *Live) installController(
 	if err := adapter.removeControllerBootstrap(ctx, live); err != nil {
 		return err
 	}
+	selectors, err := renderer.SelectorMap()
+	if err != nil {
+		return engine.ErrConfiguration
+	}
 	arguments := []any{
 		compiled.StyleText,
 		compiled.BackgroundDataURL,
@@ -40,6 +45,7 @@ func (adapter *Live) installController(
 		compiled.ThemeVersion,
 		compiled.TemplateVersion,
 		compiled.AppearanceMode,
+		selectors,
 	}
 	encoded, err := json.Marshal(arguments)
 	if err != nil {
@@ -188,18 +194,20 @@ func (adapter *Live) clearControllerRecord() error {
 	return nil
 }
 
-const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVersion, templateVersion, appearanceMode) {
+const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVersion, templateVersion, appearanceMode, selectors) {
   if (!/^[0-9]{6}$/.test(themeId) || !themeVersion ||
       !Number.isInteger(templateVersion) || templateVersion < 1 ||
-      (appearanceMode !== "dark" && appearanceMode !== "light")) return false;
-  const STATE_KEY = "__CODEX_SKIN_RENDERER_CONTROLLER_V1__";
+      (appearanceMode !== "dark" && appearanceMode !== "light") ||
+      !selectors || typeof selectors !== "object") return false;
+  const STATE_KEY = "__CODEX_SKIN_RENDERER_CONTROLLER_V2__";
   const DISABLED_KEY = "__CODEX_SKIN_RENDERER_DISABLED_V1__";
   const STYLE_REGISTRY_KEY = "__CODEX_SKIN_RENDERER_STYLE_SHEETS_V1__";
   const STYLE_ID = "codex-skin-theme-v1";
   const ROOT_ATTRIBUTES = [
     "data-codex-skin", "data-codex-skin-theme",
     "data-codex-skin-theme-version", "data-codex-skin-template",
-    "data-codex-skin-appearance", "data-codex-skin-background-url"
+    "data-codex-skin-appearance", "data-codex-skin-background-url",
+    "data-codex-skin-runtime"
   ];
   const previous = globalThis[STATE_KEY];
   if (typeof previous?.cleanup === "function") previous.cleanup();
@@ -229,13 +237,13 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
   let currentMain = null;
   let stopped = false;
 
-  const mainSurface = () => document.querySelector(
-    'main.main-surface, main[class*="_MainContentSurface_"]'
-  );
+  const selector = (key) => typeof selectors[key] === "string" ? selectors[key] : "";
+  const MAIN_SELECTOR = selector("shell-main");
+  if (!MAIN_SELECTOR) return false;
+  const mainSurface = () => document.querySelector(MAIN_SELECTOR);
   const settingsScope = () => Boolean(
-    document.querySelector('input[name="appearance-theme"]') ||
-    document.querySelector('[data-testid="theme-preview"]') ||
-    !mainSurface()
+    document.querySelector(selector("settings-panel")) ||
+    document.querySelector(selector("appearance-radio"))
   );
   const removeMainMarkers = (keep = null) => {
     for (const node of document.querySelectorAll('main[data-codex-skin-main="true"]')) {
@@ -305,9 +313,22 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
       root.style.removeProperty("--cs-background-image");
     }
   };
+  const activateRoot = () => {
+    const root = document.documentElement;
+    installStyle();
+    root.style.removeProperty("--cs-background-image");
+    setAttribute(root, "data-codex-skin", "active");
+    setAttribute(root, "data-codex-skin-theme", themeId);
+    setAttribute(root, "data-codex-skin-theme-version", themeVersion);
+    setAttribute(root, "data-codex-skin-template", String(templateVersion));
+    setAttribute(root, "data-codex-skin-appearance", appearanceMode);
+    setAttribute(root, "data-codex-skin-runtime", "2");
+    setAttribute(root, "data-codex-skin-background-url", backgroundURL);
+    return true;
+  };
   const activate = () => {
     const main = mainSurface();
-    if (!main) return false;
+    if (!main) return settingsScope() ? activateRoot() : false;
     const root = document.documentElement;
     const styleInstalled = styleMode === "adopted"
       ? Boolean(styleSheet && document.adoptedStyleSheets.includes(styleSheet))
@@ -319,45 +340,42 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
         Number(root.getAttribute("data-codex-skin-template") || 0) === templateVersion &&
         styleInstalled &&
         document.querySelectorAll("#codex-skin-theme-v1").length === 1) return true;
-    installStyle();
+    activateRoot();
     if (currentMain !== main) {
       removeMainMarkers(main);
       currentMain = main;
       setAttribute(main, "data-codex-skin-main", "true");
     }
-    root.style.removeProperty("--cs-background-image");
-    setAttribute(root, "data-codex-skin", "active");
-    setAttribute(root, "data-codex-skin-theme", themeId);
-    setAttribute(root, "data-codex-skin-theme-version", themeVersion);
-    setAttribute(root, "data-codex-skin-template", String(templateVersion));
-    setAttribute(root, "data-codex-skin-appearance", appearanceMode);
-    setAttribute(root, "data-codex-skin-background-url", backgroundURL);
     return true;
   };
   const ensure = () => {
     timer = null;
     if (stopped || globalThis[DISABLED_KEY]) return;
-    if (settingsScope()) deactivate();
-    else activate();
+    if (settingsScope()) {
+      removeMainMarkers();
+      currentMain = null;
+    }
+    activate();
   };
   const schedule = () => {
     if (stopped || timer !== null) return;
     timer = setTimeout(ensure, 40);
   };
   const containsMainSurface = (node) => node instanceof Element && (
-    node.matches('main.main-surface, main[class*="_MainContentSurface_"]') ||
-    Boolean(node.querySelector('main.main-surface, main[class*="_MainContentSurface_"]'))
+    node.matches(MAIN_SELECTOR) || Boolean(node.querySelector(MAIN_SELECTOR))
   );
   const structuralMutationHandler = (records) => {
     if (stopped) return;
-    if (currentMain && !currentMain.isConnected) {
-      schedule();
+    // Conversation streaming can emit hundreds of subtree mutations. While
+    // the bound main surface remains connected, those message mutations cannot
+    // require a shell rebind, so keep the watcher off the typing hot path.
+    if (currentMain) {
+      if (!currentMain.isConnected) schedule();
       return;
     }
     for (const record of records) {
       if (record.type !== "childList") continue;
-      const changed = [...record.addedNodes, ...record.removedNodes];
-      if (changed.some((node) => node === currentMain || containsMainSurface(node))) {
+      if ([...record.addedNodes].some(containsMainSurface)) {
         schedule();
         return;
       }
@@ -385,8 +403,8 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
     globalThis[DISABLED_KEY] = true;
   };
   globalThis[STATE_KEY] = {
-    cleanup, ensure, styleText, backgroundURL, themeId, themeVersion,
-    templateVersion, appearanceMode,
+    cleanup, ensure, styleText, backgroundURL, themeId, themeVersion, selectors,
+    templateVersion, appearanceMode, runtimeVersion: 2,
     get styleMode() { return styleMode; },
     get installed() {
       return styleMode === "adopted"
@@ -429,9 +447,5 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
   globalThis.addEventListener("popstate", navigationHandler);
   globalThis.addEventListener("hashchange", navigationHandler);
   interval = setInterval(ensure, 30000);
-  if (settingsScope()) {
-    deactivate();
-    return true;
-  }
   return activate();
 }`

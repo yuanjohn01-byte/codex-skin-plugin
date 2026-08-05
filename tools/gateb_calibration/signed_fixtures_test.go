@@ -73,7 +73,10 @@ func TestCompileSignedDarkLightFixtures(t *testing.T) {
 		for _, fragment := range []string{
 			"--cs-native-token-contract: 5",
 			"--cs-top-fade-contract: 6",
+			"--cs-shell-edge-contract: 7",
 			`[class*="_MainContentTopFade_"]`,
+			`[data-app-shell-header-edge-scroll]`,
+			`[class*="_Header_"]`,
 			"--color-token-foreground: var(--cs-text-primary)",
 			"--color-token-description-foreground: var(--cs-text-secondary)",
 			"color-scheme: " + wantMode,

@@ -38,9 +38,10 @@ type themeSessionAdapter interface {
 	RestoreNativeAppearanceBackup() error
 }
 
-// runThemeSession owns no scheduler and never launches Codex. It only keeps
-// one previously approved, controlled Codex process themed until that process
-// exits, Restore asks it to stop, or its identity becomes unsafe.
+// runThemeSession is the v2 session Runtime Supervisor. On the restart path it
+// runs inside the same detached process that launched and themed Codex; it does
+// not hand ownership to a second keeper process. It remains alive only until
+// Codex exits, Restore asks it to stop, or identity becomes unsafe.
 func runThemeSession(sessionID string, environment Runtime) int {
 	controlPoll, healthInterval, healthTimeout, appearanceSettle := sessionControllerTimings(environment)
 	goos, _, _ := environment.values()
@@ -90,9 +91,27 @@ func runThemeSession(sessionID string, environment Runtime) int {
 		}
 
 		currentDesired, desiredFound, desiredErr := store.ReadDesired()
-		if desiredErr != nil || !desiredFound || currentDesired != *desired {
-			_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "desired_theme_changed")
+		if desiredErr != nil || !desiredFound {
+			_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "desired_theme_missing")
 			return exitApply
+		}
+		if currentDesired != *desired {
+			nextCompiled, nextDesired, loadErr := loadTheme(store)
+			if loadErr != nil || nextDesired == nil || nextCompiled == nil || *nextDesired != currentDesired {
+				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "cached_theme_invalid")
+				return exitApply
+			}
+			updated, switchErr := sessions.Switch(
+				sessionID,
+				nextDesired.ThemePublicID,
+				nextDesired.ThemeVersion,
+				nextDesired.PackageSHA256,
+			)
+			if switchErr != nil {
+				return exitInternal
+			}
+			record = updated
+			compiled, desired = nextCompiled, nextDesired
 		}
 
 		newLive := environment.sessionAdapterFactory
@@ -236,6 +255,14 @@ func runThemeSession(sessionID string, environment Runtime) int {
 			_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_activate_failed")
 			return exitInternal
 		}
+		if lastReady.IsZero() && environment.SessionActivated != nil {
+			if err := environment.SessionActivated(); err != nil {
+				_ = restoreControlledSession(live, liveSession)
+				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "runtime_commit_failed")
+				return exitInternal
+			}
+			environment.SessionActivated = nil
+		}
 		lastReady = time.Now()
 		lastHeartbeat := lastReady
 		nextHealth := lastReady.Add(healthInterval)
@@ -252,13 +279,81 @@ func runThemeSession(sessionID string, environment Runtime) int {
 				return exitSuccess
 			}
 			currentDesired, desiredFound, desiredErr = store.ReadDesired()
-			if desiredErr != nil || !desiredFound || currentDesired != *desired {
+			if desiredErr != nil || !desiredFound {
 				_ = live.Close(context.Background(), liveSession)
-				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "desired_theme_changed")
+				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "desired_theme_missing")
 				return exitApply
 			}
 			now := time.Now()
+			if currentDesired == *desired && now.Before(nextHealth) {
+				wait := controlPoll
+				if remaining := time.Until(nextHealth); remaining < wait {
+					wait = remaining
+				}
+				if !waitSession(ctx, wait) {
+					_ = live.Close(context.Background(), liveSession)
+					return exitInternal
+				}
+				continue
+			}
+
+			// The foreground Plugin process holds this lock while applying and
+			// committing an in-place switch. Acquire it only when a desired-theme
+			// change is visible or a health probe is due. Taking it on every
+			// control tick can starve Restore's stop request on fast renderers.
+			releaseOperation, lockErr := store.Lock()
+			if errors.Is(lockErr, engine.ErrBusy) {
+				if !waitSession(ctx, controlPoll) {
+					_ = live.Close(context.Background(), liveSession)
+					return exitInternal
+				}
+				continue
+			}
+			if lockErr != nil {
+				_ = live.Close(context.Background(), liveSession)
+				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_state_lost")
+				return exitInternal
+			}
+			currentDesired, desiredFound, desiredErr = store.ReadDesired()
+			if desiredErr != nil || !desiredFound {
+				_ = releaseOperation()
+				_ = live.Close(context.Background(), liveSession)
+				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "desired_theme_missing")
+				return exitApply
+			}
+			if currentDesired != *desired {
+				if err := releaseOperation(); err != nil {
+					_ = live.Close(context.Background(), liveSession)
+					_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_state_lost")
+					return exitInternal
+				}
+				nextCompiled, nextDesired, loadErr := loadTheme(store)
+				if loadErr != nil || nextDesired == nil || nextCompiled == nil || *nextDesired != currentDesired {
+					_ = live.Close(context.Background(), liveSession)
+					_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "cached_theme_invalid")
+					return exitApply
+				}
+				updated, switchErr := sessions.Switch(
+					sessionID,
+					nextDesired.ThemePublicID,
+					nextDesired.ThemeVersion,
+					nextDesired.PackageSHA256,
+				)
+				_ = live.Close(context.Background(), liveSession)
+				if switchErr != nil {
+					return exitInternal
+				}
+				record = updated
+				compiled, desired = nextCompiled, nextDesired
+				break
+			}
+			now = time.Now()
 			if now.Before(nextHealth) {
+				if err := releaseOperation(); err != nil {
+					_ = live.Close(context.Background(), liveSession)
+					_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_state_lost")
+					return exitInternal
+				}
 				wait := controlPoll
 				if remaining := time.Until(nextHealth); remaining < wait {
 					wait = remaining
@@ -272,7 +367,8 @@ func runThemeSession(sessionID string, environment Runtime) int {
 			healthCtx, healthCancel := context.WithTimeout(ctx, healthTimeout)
 			healthy, healthErr := live.ThemeSessionHealthy(healthCtx, liveSession, *compiled)
 			healthCancel()
-			if healthErr != nil || !healthy {
+			unlockErr := releaseOperation()
+			if healthErr != nil || unlockErr != nil || !healthy {
 				_ = live.Close(context.Background(), liveSession)
 				break
 			}
@@ -365,6 +461,53 @@ func sessionControllerEnabled(environment Runtime) bool {
 	// default and may exercise orchestration only with a fake StartSession.
 	return environment.StartSession != nil ||
 		(environment.EnableLiveSessionController && environment.ApplyFlow == nil && environment.Adapter == nil)
+}
+
+func ensureThemeSession(
+	store *engine.Store,
+	themePublicID, themeVersion string,
+	environment Runtime,
+) error {
+	if store == nil {
+		return engine.ErrConfiguration
+	}
+	sessions, err := sessionflow.New(store.Root())
+	if err != nil {
+		return err
+	}
+	current, found, err := sessions.Current()
+	if err != nil {
+		return err
+	}
+	if !found || !current.InProgress() || !current.Fresh(time.Now(), sessionHeartbeatMaxAge) {
+		return startThemeSession(store, themePublicID, themeVersion, environment)
+	}
+	ctx := environment.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	startTimeout, _, waitInterval := sessionTimings(environment)
+	deadline := time.Now().Add(startTimeout)
+	for time.Now().Before(deadline) {
+		current, found, err = sessions.Current()
+		if err != nil || !found {
+			if err == nil {
+				err = engine.ErrStateUnsafe
+			}
+			return err
+		}
+		if current.Status == sessionflow.StatusActive &&
+			current.ThemePublicID == themePublicID && current.ThemeVersion == themeVersion {
+			return nil
+		}
+		if current.Status == sessionflow.StatusFailed || current.Status == sessionflow.StatusEnded {
+			return engine.ErrApplyFailed
+		}
+		if !waitSession(ctx, waitInterval) {
+			return ctx.Err()
+		}
+	}
+	return engine.ErrApplyFailed
 }
 
 func startThemeSession(
@@ -536,33 +679,52 @@ func stopThemeSession(root string, ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, expired, err := sessions.ExpireStale(sessionHeartbeatMaxAge, "controller_heartbeat_lost"); err != nil {
-		return err
-	} else if expired {
-		return nil
-	}
-	record, requested, err := sessions.RequestStop()
-	if err != nil || !requested {
+	record, found, err := sessions.Current()
+	if err != nil || !found || !record.InProgress() {
 		return err
 	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	deadline := time.Now().Add(12 * time.Second)
-	for time.Now().Before(deadline) {
-		current, found, currentErr := sessions.Current()
-		if currentErr != nil || !found || current.SessionID != record.SessionID {
-			return engine.ErrStateUnsafe
+	if !record.Fresh(time.Now(), sessionHeartbeatMaxAge) {
+		deadline := time.Now().Add(2 * time.Second)
+		for {
+			_, expired, expireErr := sessions.ExpireStale(
+				sessionHeartbeatMaxAge,
+				"controller_heartbeat_lost",
+			)
+			if expireErr == nil {
+				if expired {
+					return nil
+				}
+				break
+			}
+			if !errors.Is(expireErr, engine.ErrBusy) || !time.Now().Before(deadline) {
+				return expireErr
+			}
+			if !waitSession(context.WithoutCancel(ctx), 25*time.Millisecond) {
+				return context.Canceled
+			}
 		}
-		if current.Status == sessionflow.StatusEnded {
-			return nil
+	}
+	if err := requestStopAndWait(
+		sessions,
+		record.SessionID,
+		ctx,
+		12*time.Second,
+		150*time.Millisecond,
+	); err != nil {
+		return err
+	}
+	current, found, err := sessions.Current()
+	if err != nil || !found || current.SessionID != record.SessionID {
+		if err == nil {
+			err = engine.ErrStateUnsafe
 		}
-		if current.Status == sessionflow.StatusFailed {
-			return engine.ErrApplyFailed
-		}
-		if !waitSession(ctx, 150*time.Millisecond) {
-			return ctx.Err()
-		}
+		return err
+	}
+	if current.Status == sessionflow.StatusEnded {
+		return nil
 	}
 	return engine.ErrApplyFailed
 }

@@ -13,7 +13,7 @@ import (
 	"testing"
 )
 
-const bootstrapFilename = "codex-skin-bootstrap_0.1.0-paid-alpha.3_windows_x64.exe"
+const bootstrapFilename = "codex-skin-bootstrap_0.1.0-paid-alpha.4_windows_x64.exe"
 
 func TestMain(main *testing.M) {
 	if os.Getenv("CODEX_SKIN_WINDOWS_ENTRY_FIXTURE") == "1" {
@@ -38,7 +38,7 @@ func fixtureProcess() {
 		if err := copyFile(os.Args[0], filepath.Join(destination, "codex-skin.exe")); err != nil {
 			os.Exit(80)
 		}
-		fmt.Println(`{"type":"result","protocolVersion":1,"ok":true,"status":"completed","data":{"helperVersion":"0.1.0-paid-alpha.4"},"error":null}`)
+		fmt.Println(`{"type":"result","protocolVersion":1,"ok":true,"status":"completed","data":{"helperVersion":"0.1.0-paid-alpha.5"},"error":null}`)
 		return
 	}
 	logLine(os.Getenv("CODEX_SKIN_FIXTURE_HELPER_LOG"), strings.Join(os.Args[1:], " "))
@@ -69,8 +69,8 @@ func TestPowerShellEntryBootstrapsOnlyApplyAndFailsClosed(t *testing.T) {
 	}
 	digest := sha256.Sum256(content)
 	pins := fmt.Sprintf(`# Generated fixture pins.
-$bootstrapReleaseTag = "helper-v0.1.0-paid-alpha.4"
-$bootstrapVersion = "0.1.0-paid-alpha.3"
+$bootstrapReleaseTag = "helper-v0.1.0-paid-alpha.5"
+$bootstrapVersion = "0.1.0-paid-alpha.4"
 $bootstrapBuildCommit = "%s"
 $bootstrapBuiltAt = "2026-08-03T00:00:00Z"
 $bootstrapFilename = "%s"

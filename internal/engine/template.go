@@ -207,7 +207,7 @@ func CompileTheme(verified theme.Verified, stagedRoot string) (CompiledTheme, er
 		surfaceRGB,
 		RootMarkerAttribute,
 	)
-	previousStyle, err := compileTemplateV5(
+	previousStyle, err := compileTemplateV6(
 		manifest.Design.Mode,
 		tokens,
 		sidebarRGB,
@@ -217,7 +217,7 @@ func CompileTheme(verified theme.Verified, stagedRoot string) (CompiledTheme, er
 	if err != nil {
 		return CompiledTheme{}, err
 	}
-	style, err := compileTemplateV6(
+	style, err := compileTemplateV7(
 		manifest.Design.Mode,
 		tokens,
 		sidebarRGB,
@@ -237,6 +237,65 @@ func CompileTheme(verified theme.Verified, stagedRoot string) (CompiledTheme, er
 		LegacyStyleText:   legacyStyle,
 		BackgroundDataURL: imageURL,
 	}, nil
+}
+
+func compileTemplateV7(
+	mode string,
+	tokens theme.Tokens,
+	sidebarRGB string,
+	surfaceRGB string,
+	shadowAlpha string,
+) (string, error) {
+	style, err := compileTemplateV6(mode, tokens, sidebarRGB, surfaceRGB, shadowAlpha)
+	if err != nil {
+		return "", err
+	}
+	const shellEdgeContract = `
+
+/* Fixed shell-edge contract v7. Codex 26.727 exposes stable data attributes
+   and CSS-module prefixes for the header and top fade. Keep all fallbacks in
+   the signed Helper template; theme packages cannot provide selectors. */
+:root[__MARKER__="active"] {
+  --cs-shell-edge-contract: 7;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"] :is(.composer-surface-chrome, .thread-scroll-container)
+  )
+  main[data-codex-skin-main="true"]
+  > header:is(
+    .app-header-tint,
+    [data-app-shell-header-edge-scroll],
+    [class*="_Header_"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  background: transparent !important;
+  border-bottom: 0 !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  text-shadow:
+    0 1px 2px rgb(var(--cs-text-shadow-rgb) / .82),
+    0 0 10px rgb(var(--cs-text-shadow-rgb) / .56);
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"] :is(.composer-surface-chrome, .thread-scroll-container)
+  )
+  :is(
+    .app-shell-main-content-top-fade,
+    [data-app-shell-main-content-top-fade],
+    [class*="_MainContentTopFade_"]
+  ) {
+  display: none !important;
+  opacity: 0 !important;
+  background: none !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  transition: none !important;
+}
+`
+	return style + strings.ReplaceAll(shellEdgeContract, "__MARKER__", RootMarkerAttribute), nil
 }
 
 func compileTemplateV6(

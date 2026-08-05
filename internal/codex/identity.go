@@ -3,6 +3,7 @@
 package codex
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -12,6 +13,14 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
+)
+
+const (
+	stableInstallationPollInterval  = 500 * time.Millisecond
+	stableInstallationConfirmations = 5
+	currentInstancePollInterval     = 250 * time.Millisecond
+	currentInstanceConfirmations    = 4
 )
 
 var (
@@ -49,6 +58,127 @@ type CurrentInstance struct {
 	Process        ProcessIdentity
 	Profile        string
 	ControlledPort int
+}
+
+// DiscoverStableInstallation rediscovers the official Codex installation at
+// the launch boundary and requires the complete verified identity to remain
+// unchanged across several probes. Codex may replace its bundle/package while
+// an older process is still running; a stop-and-relaunch flow must never reuse
+// the pre-update executable hash after that replacement.
+func DiscoverStableInstallation(ctx context.Context) (Installation, error) {
+	return discoverStableInstallation(
+		ctx,
+		DiscoverInstallation,
+		stableInstallationPollInterval,
+		stableInstallationConfirmations,
+	)
+}
+
+func discoverStableInstallation(
+	ctx context.Context,
+	discover func(context.Context) (Installation, error),
+	interval time.Duration,
+	confirmations int,
+) (Installation, error) {
+	if ctx == nil || discover == nil || interval <= 0 || confirmations < 2 {
+		return Installation{}, ErrIdentityUntrusted
+	}
+	var candidate Installation
+	consecutive := 0
+	for {
+		current, err := discover(ctx)
+		if err == nil {
+			if consecutive > 0 && sameInstallation(candidate, current) {
+				consecutive++
+			} else {
+				candidate = current
+				consecutive = 1
+			}
+			if consecutive >= confirmations {
+				return candidate, nil
+			}
+		} else {
+			candidate = Installation{}
+			consecutive = 0
+		}
+		select {
+		case <-ctx.Done():
+			return Installation{}, errors.Join(ErrIdentityUntrusted, ctx.Err())
+		case <-time.After(interval):
+		}
+	}
+}
+
+// WaitForCurrentInstance positively confirms that an official Codex process
+// remains the same process for a bounded series of probes. LaunchServices and
+// packaged-app activation can accept a request even when the app exits before
+// showing a usable window, so an accepted launch request alone is not success.
+func WaitForCurrentInstance(ctx context.Context, installation Installation) (CurrentInstance, error) {
+	return waitForCurrentInstance(
+		ctx,
+		installation,
+		DiscoverCurrentInstance,
+		currentInstancePollInterval,
+		currentInstanceConfirmations,
+	)
+}
+
+func waitForCurrentInstance(
+	ctx context.Context,
+	installation Installation,
+	discover func(context.Context, Installation) (CurrentInstance, error),
+	interval time.Duration,
+	confirmations int,
+) (CurrentInstance, error) {
+	if ctx == nil || discover == nil || interval <= 0 || confirmations < 2 {
+		return CurrentInstance{}, ErrCurrentUnsafe
+	}
+	var candidate CurrentInstance
+	consecutive := 0
+	for {
+		current, err := discover(ctx, installation)
+		if err == nil {
+			if consecutive > 0 && sameCurrentInstance(candidate, current) {
+				consecutive++
+			} else {
+				candidate = current
+				consecutive = 1
+			}
+			if consecutive >= confirmations {
+				return candidate, nil
+			}
+		} else {
+			candidate = CurrentInstance{}
+			consecutive = 0
+		}
+		select {
+		case <-ctx.Done():
+			return CurrentInstance{}, errors.Join(ErrCurrentMissing, ctx.Err())
+		case <-time.After(interval):
+		}
+	}
+}
+
+func sameInstallation(left, right Installation) bool {
+	return left.Platform == right.Platform &&
+		left.AppIdentifier == right.AppIdentifier &&
+		left.Publisher == right.Publisher &&
+		left.Version == right.Version &&
+		samePath(left.Root, right.Root) &&
+		samePath(left.Executable, right.Executable) &&
+		left.ExecutableSHA256 == right.ExecutableSHA256 &&
+		left.PackageFullName == right.PackageFullName &&
+		left.PackageFamilyName == right.PackageFamilyName &&
+		left.AppUserModelID == right.AppUserModelID
+}
+
+func sameCurrentInstance(left, right CurrentInstance) bool {
+	return left.Process.ProcessID == right.Process.ProcessID &&
+		left.Process.ProcessStartID == right.Process.ProcessStartID &&
+		left.Process.ExecutableSHA256 == right.Process.ExecutableSHA256 &&
+		samePath(left.Process.Executable, right.Process.Executable) &&
+		samePath(left.Profile, right.Profile) &&
+		left.ControlledPort == right.ControlledPort
 }
 
 func hashOrdinaryFile(path string) (string, error) {

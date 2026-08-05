@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 )
@@ -826,6 +827,43 @@ func TestStoreRejectsPluginOverlapSymlinkAndConcurrentWriter(t *testing.T) {
 	defer unlock()
 	if _, err := store.Lock(); !errors.Is(err, ErrBusy) {
 		t.Fatalf("second lock error = %v", err)
+	}
+}
+
+func TestForegroundOperationWaitsForShortRuntimeHealthLock(t *testing.T) {
+	store := testStore(t)
+	releaseHealth, err := store.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_ = releaseHealth()
+		close(released)
+	}()
+	unlock, err := acquireOperationLock(context.Background(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+	<-released
+}
+
+func TestForegroundOperationLockWaitHonorsCancellation(t *testing.T) {
+	store := testStore(t)
+	releaseHealth, err := store.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseHealth()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := acquireOperationLock(ctx, store); !errors.Is(err, context.Canceled) ||
+		!errors.Is(err, ErrBusy) {
+		t.Fatalf("lock wait error = %v", err)
 	}
 }
 

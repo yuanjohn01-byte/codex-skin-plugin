@@ -14,7 +14,11 @@ import (
 
 var themePublicIDPattern = regexp.MustCompile(`^[0-9]{6}$`)
 
-const rollbackTimeout = 20 * time.Second
+const (
+	rollbackTimeout   = 20 * time.Second
+	operationLockWait = 5 * time.Second
+	operationLockPoll = 25 * time.Millisecond
+)
 
 type Engine struct {
 	store   *Store
@@ -35,7 +39,7 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 		verified.PackageSHA256 == "" {
 		return ApplyResult{}, ErrConfiguration
 	}
-	unlock, err := engine.store.Lock()
+	unlock, err := acquireOperationLock(ctx, engine.store)
 	if err != nil {
 		return ApplyResult{}, err
 	}
@@ -211,7 +215,7 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 }
 
 func (engine *Engine) RestoreOfficial(ctx context.Context) (result RestoreResult, returnErr error) {
-	unlock, err := engine.store.Lock()
+	unlock, err := acquireOperationLock(ctx, engine.store)
 	if err != nil {
 		return RestoreResult{}, err
 	}
@@ -277,7 +281,7 @@ func (engine *Engine) openOfficialSession(ctx context.Context) (Session, error) 
 // RecoverInterrupted restores the last-known-good snapshot for an apply that
 // was interrupted after renderer mutation became possible.
 func (engine *Engine) RecoverInterrupted(ctx context.Context) (returnErr error) {
-	unlock, err := engine.store.Lock()
+	unlock, err := acquireOperationLock(ctx, engine.store)
 	if err != nil {
 		return err
 	}
@@ -285,6 +289,35 @@ func (engine *Engine) RecoverInterrupted(ctx context.Context) (returnErr error) 
 		returnErr = errors.Join(returnErr, unlock())
 	}()
 	return engine.recoverInterruptedLocked(ctx)
+}
+
+func acquireOperationLock(ctx context.Context, store *Store) (func() error, error) {
+	if store == nil {
+		return nil, ErrConfiguration
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	deadline := time.Now().Add(operationLockWait)
+	for {
+		unlock, err := store.Lock()
+		if err == nil {
+			return unlock, nil
+		}
+		if !errors.Is(err, ErrBusy) {
+			return nil, err
+		}
+		if !time.Now().Before(deadline) {
+			return nil, ErrBusy
+		}
+		timer := time.NewTimer(operationLockPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, errors.Join(ErrBusy, ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func (engine *Engine) recoverInterruptedLocked(ctx context.Context) error {
@@ -530,28 +563,34 @@ func CapabilitiesAllowApply(report RegionReport) bool {
 			!themePublicIDPattern.MatchString(report.ThemePublicID)) {
 		return false
 	}
-	required := []string{
-		"home",
-		"mainBoundary",
-		"sidebar",
-		"composer",
-		"topFade",
-		"bottomFade",
-		"templateScope",
-		"themeContrast",
+	if report.RuntimeVersion != 0 && report.RuntimeVersion != 2 {
+		return false
+	}
+	// Codex can replace the complete shell while Settings is open. The v2
+	// renderer commits an L0 root runtime there and activates L1 when the normal
+	// shell returns; missing shell nodes in Settings are not a global failure.
+	if report.Scope == "settings" {
+		return report.StyleMarkerCount <= 1
+	}
+	required := []string{"home", "mainBoundary", "sidebar", "composer", "topFade", "bottomFade", "templateScope", "themeContrast"}
+	if _, v2 := report.Regions["shellMain"]; v2 {
+		required = []string{"shellMain", "sidebar", "headerTint", "templateScope", "themeContrast"}
 	}
 	for _, name := range required {
 		if report.Regions[name] != RegionPass {
 			return false
 		}
 	}
-	for _, name := range []string{
-		"composerUtilityBar",
+	optional := []string{"composerUtilityBar",
 		"conversationActivity",
 		"conversationDiffResource",
 		"suggestionCards",
 		"projectPicker",
-	} {
+	}
+	if _, v2 := report.Regions["shellMain"]; v2 {
+		optional = append(optional, "home", "mainBoundary", "composer", "topFade", "bottomFade")
+	}
+	for _, name := range optional {
 		if report.Regions[name] != RegionPass && report.Regions[name] != RegionNotPresent {
 			return false
 		}

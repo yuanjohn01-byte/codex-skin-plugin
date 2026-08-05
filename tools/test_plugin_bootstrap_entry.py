@@ -48,7 +48,7 @@ def fixture(root: Path, bootstrap_body: str) -> tuple[Path, Path, Path, Path, Pa
     digest = hashlib.sha256(launcher.read_bytes()).hexdigest()
     (scripts / "bootstrap-pins.sh").write_text(
         "# Generated fixture pins.\n"
-        "bootstrap_release_tag='helper-v0.1.0-paid-alpha.4'\n"
+        "bootstrap_release_tag='helper-v0.1.0-paid-alpha.5'\n"
         f"bootstrap_filename='{launcher_name}'\n"
         f"bootstrap_sha256='{digest}'\n",
         encoding="utf-8",
@@ -78,7 +78,7 @@ destination="$HOME/Library/Application Support/CodexSkin/recovery/engine"
 mkdir -p "$destination"
 cp "$TEST_HELPER_TEMPLATE" "$destination/codex-skin"
 chmod 700 "$destination/codex-skin"
-printf '%s\n' '{"type":"result","protocolVersion":1,"ok":true,"status":"completed","data":{"helperVersion":"0.1.0-paid-alpha.4"},"error":null}'
+printf '%s\n' '{"type":"result","protocolVersion":1,"ok":true,"status":"completed","data":{"helperVersion":"0.1.0-paid-alpha.5"},"error":null}'
 """
         scripts, home, helper_template, helper_log, bootstrap_log = fixture(root, bootstrap)
         extra = {

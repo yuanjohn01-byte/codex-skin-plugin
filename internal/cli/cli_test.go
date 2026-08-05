@@ -14,6 +14,7 @@ import (
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/restartflow"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/sessionflow"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/userflow"
 )
 
@@ -28,6 +29,72 @@ type fakeApplyFlow struct {
 	err    error
 	id     string
 }
+
+type restartApplyAdapter struct {
+	identity engine.Identity
+	current  engine.CompiledTheme
+	applies  int
+}
+
+func (adapter *restartApplyAdapter) OpenVerifiedSession(context.Context) (engine.Session, error) {
+	return engine.Session{OpaqueID: "restart-apply", Identity: adapter.identity}, nil
+}
+
+func (adapter *restartApplyAdapter) Probe(context.Context, engine.Session) (engine.RegionReport, error) {
+	report := passingThemeReport(adapter.current)
+	if adapter.current.ThemePublicID == "" {
+		report.StyleMarkerCount = 0
+		report.TemplateVersion = 0
+		report.ThemePublicID = ""
+		report.BackgroundLoaded = false
+	}
+	return report, nil
+}
+
+func (adapter *restartApplyAdapter) Capture(context.Context, engine.Session) (engine.Snapshot, error) {
+	return engine.Snapshot{}, nil
+}
+
+func (adapter *restartApplyAdapter) Apply(
+	_ context.Context,
+	_ engine.Session,
+	compiled engine.CompiledTheme,
+) error {
+	adapter.current = compiled
+	adapter.applies++
+	return nil
+}
+
+func (adapter *restartApplyAdapter) Verify(
+	_ context.Context,
+	_ engine.Session,
+	compiled engine.CompiledTheme,
+) (engine.RegionReport, error) {
+	return passingThemeReport(compiled), nil
+}
+
+func (adapter *restartApplyAdapter) Restore(
+	context.Context,
+	engine.Session,
+	engine.Snapshot,
+) error {
+	adapter.current = engine.CompiledTheme{}
+	return nil
+}
+
+func (adapter *restartApplyAdapter) RestoreOfficial(context.Context, engine.Session) error {
+	adapter.current = engine.CompiledTheme{}
+	return nil
+}
+
+func (adapter *restartApplyAdapter) VerifyOfficial(context.Context, engine.Session) error {
+	if adapter.current.ThemePublicID != "" {
+		return engine.ErrRestoreFailed
+	}
+	return nil
+}
+
+func (*restartApplyAdapter) Close(context.Context, engine.Session) error { return nil }
 
 func (flow *fakeApplyFlow) Apply(_ context.Context, themePublicID string) (userflow.ApplyResult, error) {
 	flow.id = themePublicID
@@ -375,7 +442,8 @@ func TestThemeApplyReportsSuccessOnlyAfterSessionControllerIsActive(t *testing.T
 	if err := json.Unmarshal(result.Data, &data); err != nil {
 		t.Fatal(err)
 	}
-	if !result.OK || data.SessionStatus != string(sessionflow.StatusActive) {
+	if !result.OK || data.SessionStatus != string(sessionflow.StatusActive) ||
+		data.RuntimeStatus != string(sessionflow.StatusActive) {
 		t.Fatalf("apply result=%+v data=%+v", result, data)
 	}
 
@@ -391,7 +459,9 @@ func TestThemeApplyReportsSuccessOnlyAfterSessionControllerIsActive(t *testing.T
 		t.Fatal(err)
 	}
 	if currentStatus.SessionStatus != string(sessionflow.StatusActive) ||
-		currentStatus.SessionThemePublicID != "100001" {
+		currentStatus.SessionThemePublicID != "100001" ||
+		currentStatus.RuntimeStatus != string(sessionflow.StatusActive) ||
+		currentStatus.RuntimeThemePublicID != "100001" {
 		t.Fatalf("status data=%+v", currentStatus)
 	}
 }
@@ -454,7 +524,9 @@ func TestStatusNeverReportsStaleControllerHeartbeatAsActive(t *testing.T) {
 		t.Fatal(err)
 	}
 	if data.SessionStatus != string(sessionflow.StatusFailed) ||
-		data.SessionErrorCode != "CS-FLOW-SESSION-001" {
+		data.SessionErrorCode != "CS-FLOW-SESSION-001" ||
+		data.RuntimeStatus != string(sessionflow.StatusFailed) ||
+		data.RuntimeErrorCode != "CS-FLOW-RUNTIME-001" {
 		t.Fatalf("stale session was reported as live: %#v", data)
 	}
 }
@@ -572,7 +644,7 @@ func TestThemeContinueApprovesAndStartsFixedRecoveryWorker(t *testing.T) {
 	}
 	var startedExecutable string
 	var startedRequestID string
-	code, stdout, stderr := run(t, []string{"theme", "continue", "--json"}, Runtime{
+	code, stdout, stderr := run(t, []string{"theme", "launch", "--json"}, Runtime{
 		GOOS: "darwin", GOARCH: "arm64", Root: root, Executable: executable,
 		StartWorker: func(worker, requestID string) error {
 			startedExecutable = worker
@@ -604,7 +676,7 @@ func TestThemeContinueApprovesAndStartsFixedRecoveryWorker(t *testing.T) {
 	if err := json.Unmarshal(result.Data, &data); err != nil {
 		t.Fatal(err)
 	}
-	if data.Command != "theme continue" ||
+	if data.Command != "theme launch" ||
 		!data.RestartAccepted ||
 		data.Kind != "restore" ||
 		data.ThemePublicID != "" {
@@ -613,6 +685,53 @@ func TestThemeContinueApprovesAndStartsFixedRecoveryWorker(t *testing.T) {
 	current, found, err := restartStore.Current()
 	if err != nil || !found || current.Status != restartflow.StatusApproved {
 		t.Fatalf("approved request = %#v, found=%t, error=%v", current, found, err)
+	}
+}
+
+func TestThemeContinueRemainsCompatibilityAlias(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	opened, err := engine.OpenStore(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = opened.Root()
+	restartStore, err := restartflow.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := restartStore.StageRestore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable := filepath.Join(root, "recovery", "engine", "codex-skin")
+	if err := os.MkdirAll(filepath.Dir(executable), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(executable, []byte("helper"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := recoveryExecutable(root, "darwin", executable); err != nil {
+		t.Fatalf("recovery executable setup: %v", err)
+	}
+	code, stdout, stderr := run(t, []string{"theme", "continue", "--json"}, Runtime{
+		GOOS: "darwin", GOARCH: "arm64", Root: root, Executable: executable,
+		StartWorker: func(_ string, requestID string) error {
+			if requestID != request.RequestID {
+				t.Fatalf("request id = %s", requestID)
+			}
+			return nil
+		},
+	})
+	if code != exitSuccess || stderr != "" {
+		t.Fatalf("alias code=%d stdout=%q stderr=%q", code, stdout, stderr)
+	}
+	result := decodeSingleResult(t, stdout)
+	var data restartData
+	if err := json.Unmarshal(result.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.Command != "theme continue" || !data.RestartAccepted {
+		t.Fatalf("alias data = %#v", data)
 	}
 }
 
@@ -667,6 +786,116 @@ func TestRestartWorkerCompletesRestoreAndStatusReportsTerminalFact(t *testing.T)
 		data.RestartStatus != string(restartflow.StatusCompleted) {
 		t.Fatalf("status data = %#v", data)
 	}
+}
+
+func TestRestartWorkerBecomesSingleRuntimeSupervisorWithoutSecondProcess(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	store, err := engine.OpenStore(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	root = store.Root()
+	verified := verifiedRestartTheme(t)
+	restartStore, err := restartflow.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := restartStore.StageApply(verified)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restartStore.Approve(request.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	digest := strings.Repeat("a", 64)
+	identity := engine.Identity{
+		Platform: "macos", AppIdentifier: "com.openai.codex", Publisher: "2DC432GLL2",
+		Version: "26.727.0", ExecutableHash: digest, ProcessID: 4312, ProcessStartID: "start-4312",
+	}
+	initial := &restartApplyAdapter{identity: identity}
+	supervisor := &gatedThemeSessionAdapter{identity: identity}
+	secondProcessStarted := false
+	stopDone := make(chan error, 1)
+	go func() {
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			current, found, readErr := restartStore.Current()
+			if readErr == nil && found && current.Status == restartflow.StatusCompleted {
+				sessions, sessionErr := sessionflow.New(root)
+				if sessionErr != nil {
+					stopDone <- sessionErr
+					return
+				}
+				_, _, sessionErr = sessions.RequestStop()
+				stopDone <- sessionErr
+				return
+			}
+			time.Sleep(time.Millisecond)
+		}
+		stopDone <- errors.New("runtime never reached completed restart state")
+	}()
+
+	code, stdout, stderr := run(t, []string{"__restart-worker", request.RequestID}, Runtime{
+		GOOS: "darwin", GOARCH: "arm64", Root: root, Adapter: initial,
+		RestartDelay: -1,
+		StartSession: func(string, string) error {
+			secondProcessStarted = true
+			return errors.New("v2 must not launch a second session process")
+		},
+		sessionControlPoll:      time.Millisecond,
+		sessionHealthInterval:   5 * time.Millisecond,
+		sessionHealthTimeout:    20 * time.Millisecond,
+		sessionAppearanceSettle: time.Millisecond,
+		sessionAdapterFactory: func(string) (themeSessionAdapter, error) {
+			return supervisor, nil
+		},
+	})
+	if stopErr := <-stopDone; stopErr != nil {
+		t.Fatal(stopErr)
+	}
+	if code != exitSuccess || stdout != "" || stderr != "" || secondProcessStarted {
+		t.Fatalf(
+			"worker code=%d stdout=%q stderr=%q secondProcess=%t",
+			code,
+			stdout,
+			stderr,
+			secondProcessStarted,
+		)
+	}
+	current, found, err := restartStore.Current()
+	if err != nil || !found || current.Status != restartflow.StatusCompleted ||
+		current.ResultThemeID != verified.Manifest.ThemePublicID {
+		t.Fatalf("restart result=%#v found=%t err=%v", current, found, err)
+	}
+	if initial.applies != 1 {
+		t.Fatalf("initial apply count=%d", initial.applies)
+	}
+	applyCount, _, appearanceRestores, _ := supervisor.state()
+	if applyCount != 1 || appearanceRestores != 1 {
+		t.Fatalf("supervisor apply=%d appearanceRestores=%d", applyCount, appearanceRestores)
+	}
+}
+
+func verifiedRestartTheme(t *testing.T) theme.Verified {
+	t.Helper()
+	fixture := filepath.Join("..", "..", "fixtures", "free-test-theme-v1", "signed-release-v1")
+	descriptor, err := os.ReadFile(filepath.Join(fixture, "release-descriptor.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := os.ReadFile(filepath.Join(fixture, "release-descriptor.sig"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := theme.Verify(
+		filepath.Join(fixture, "package.cskin"),
+		descriptor,
+		signature,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return verified
 }
 
 func TestStatusReportsOnlyDurableLocalState(t *testing.T) {

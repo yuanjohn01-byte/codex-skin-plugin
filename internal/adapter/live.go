@@ -22,11 +22,12 @@ import (
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/cdp"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/codex"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/renderer"
 )
 
 const (
 	defaultLaunchWait   = 25 * time.Second
-	openRollbackTimeout = 20 * time.Second
+	openRollbackTimeout = 45 * time.Second
 )
 
 var sixDigitID = regexp.MustCompile(`^[0-9]{6}$`)
@@ -38,6 +39,7 @@ type Live struct {
 	launchWait      time.Duration
 	currentProfile  bool
 	restartApproved bool
+	boundIdentity   *engine.Identity
 	appearance      *appearance.Manager
 	mu              sync.Mutex
 	sessions        map[string]*liveSession
@@ -61,7 +63,11 @@ type Config struct {
 	LaunchWait      time.Duration
 	CurrentProfile  bool
 	RestartApproved bool
-	UserHome        string
+	// BoundIdentity lets an already-active v2 Runtime Supervisor switch themes
+	// inside the exact controlled Codex process without rewriting native
+	// appearance settings or requesting another restart.
+	BoundIdentity *engine.Identity
+	UserHome      string
 }
 
 type remoteObject struct {
@@ -161,6 +167,14 @@ func NewLive(config Config) (*Live, error) {
 		currentProfile: config.CurrentProfile, restartApproved: config.RestartApproved,
 		sessions: map[string]*liveSession{},
 	}
+	if config.BoundIdentity != nil {
+		copy := *config.BoundIdentity
+		if !config.CurrentProfile || copy.ProcessID < 1 || copy.ProcessStartID == "" ||
+			copy.ExecutableHash == "" {
+			return nil, engine.ErrConfiguration
+		}
+		live.boundIdentity = &copy
+	}
 	if config.CurrentProfile {
 		home := config.UserHome
 		if home == "" {
@@ -232,6 +246,10 @@ func (adapter *Live) openVerifiedSession(
 	appearanceRestart := false
 	mutated := false
 	var process codex.ProcessIdentity
+	if boundIdentity == nil && !restoreAppearance && targetAppearance != "" && adapter.boundIdentity != nil {
+		copy := *adapter.boundIdentity
+		boundIdentity = &copy
+	}
 	if boundIdentity != nil && (!adapter.currentProfile || restoreAppearance) {
 		return engine.Session{}, engine.ErrConfiguration
 	}
@@ -286,6 +304,24 @@ func (adapter *Live) openVerifiedSession(
 	}
 
 	if process.ProcessID == 0 {
+		if adapter.currentProfile {
+			// The official app may update its on-disk bundle while the old
+			// process is still open. Once that process has been stopped, never
+			// launch with the cached pre-stop identity: rediscover the complete
+			// signed installation and require it to settle first.
+			installation, err = codex.DiscoverStableInstallation(ctx)
+			if err != nil {
+				return engine.Session{}, adapter.recoverOpenFailure(
+					ctx, installation, launchedPID, port, profile, process, mutated, err,
+				)
+			}
+			profile, err = codex.DefaultUserProfile(installation)
+			if err != nil {
+				return engine.Session{}, adapter.recoverOpenFailure(
+					ctx, installation, launchedPID, port, profile, process, mutated, err,
+				)
+			}
+		}
 		if adapter.currentProfile && adapter.appearance != nil && appearanceRestart {
 			if restoreAppearance {
 				appearanceChanged, err = adapter.appearance.Restore()
@@ -461,20 +497,54 @@ func reopenOrdinaryIfMissing(
 	installation codex.Installation,
 	cause error,
 ) error {
-	_, currentErr := codex.DiscoverCurrentInstance(ctx, installation)
+	return reopenOrdinaryIfMissingWith(ctx, cause, codexRecoveryOperations{
+		discoverStableInstallation: codex.DiscoverStableInstallation,
+		discoverCurrentInstance:    codex.DiscoverCurrentInstance,
+		launchOrdinary:             codex.LaunchOrdinary,
+		waitForCurrentInstance:     codex.WaitForCurrentInstance,
+	})
+}
+
+type codexRecoveryOperations struct {
+	discoverStableInstallation func(context.Context) (codex.Installation, error)
+	discoverCurrentInstance    func(context.Context, codex.Installation) (codex.CurrentInstance, error)
+	launchOrdinary             func(context.Context, codex.Installation) error
+	waitForCurrentInstance     func(context.Context, codex.Installation) (codex.CurrentInstance, error)
+}
+
+func reopenOrdinaryIfMissingWith(
+	ctx context.Context,
+	cause error,
+	operations codexRecoveryOperations,
+) error {
+	if ctx == nil ||
+		operations.discoverStableInstallation == nil ||
+		operations.discoverCurrentInstance == nil ||
+		operations.launchOrdinary == nil ||
+		operations.waitForCurrentInstance == nil {
+		return errors.Join(cause, codex.ErrIdentityUntrusted)
+	}
+	// Always reacquire the official installation here. The caller's identity
+	// may be the exact reason the controlled launch failed (for example, an
+	// in-place Codex update between user consent and relaunch).
+	fresh, err := operations.discoverStableInstallation(ctx)
+	if err != nil {
+		return errors.Join(cause, err)
+	}
+	_, currentErr := operations.discoverCurrentInstance(ctx, fresh)
 	switch {
 	case currentErr == nil:
 		return cause
-	case errors.Is(currentErr, codex.ErrCurrentMissing):
-		reopenCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 20*time.Second)
-		defer cancel()
-		if reopenErr := codex.LaunchOrdinary(reopenCtx, installation); reopenErr != nil {
-			return errors.Join(cause, reopenErr)
-		}
-		return cause
-	default:
+	case !errors.Is(currentErr, codex.ErrCurrentMissing):
 		return errors.Join(cause, currentErr)
 	}
+	if err := operations.launchOrdinary(ctx, fresh); err != nil {
+		return errors.Join(cause, err)
+	}
+	if _, err := operations.waitForCurrentInstance(ctx, fresh); err != nil {
+		return errors.Join(cause, err)
+	}
+	return cause
 }
 
 func (adapter *Live) Probe(ctx context.Context, session engine.Session) (engine.RegionReport, error) {
@@ -482,8 +552,12 @@ func (adapter *Live) Probe(ctx context.Context, session engine.Session) (engine.
 	if err != nil {
 		return engine.RegionReport{}, err
 	}
+	selectors, err := renderer.SelectorMap()
+	if err != nil {
+		return engine.RegionReport{}, engine.ErrConfiguration
+	}
 	var report engine.RegionReport
-	if err := callFunction(ctx, live.client, probeFunction, nil, &report); err != nil {
+	if err := callFunction(ctx, live.client, probeFunction, []any{selectors}, &report); err != nil {
 		return engine.RegionReport{}, err
 	}
 	return report, nil
@@ -628,12 +702,16 @@ func (adapter *Live) Verify(ctx context.Context, session engine.Session, compile
 	if err != nil {
 		return engine.RegionReport{}, err
 	}
+	selectors, err := renderer.SelectorMap()
+	if err != nil {
+		return engine.RegionReport{}, engine.ErrConfiguration
+	}
 	var report engine.RegionReport
 	if err := callFunction(
 		ctx,
 		live.client,
 		verifyFunction,
-		[]any{compiled.TemplateVersion},
+		[]any{compiled.TemplateVersion, selectors},
 		&report,
 	); err != nil {
 		return engine.RegionReport{}, err
@@ -1079,14 +1157,22 @@ func validBackgroundDataURL(value string) bool {
 	return false
 }
 
-const probeFunction = `function () {
+const probeFunction = `function (selectors) {
   const status = (node, optional) => node ? "pass" : (optional ? "not_present" : "fail");
+  const query = (key) => typeof selectors?.[key] === "string"
+    ? document.querySelector(selectors[key]) : null;
   const style = document.querySelectorAll("#codex-skin-theme-v1");
   const root = document.documentElement;
-  const mainSelector = 'main.main-surface, main[class*="_MainContentSurface_"]';
-  const suggestions = document.querySelector(".group\\/home-suggestions");
-  const topFade = document.querySelector(".app-shell-main-content-top-fade");
-  const main = document.querySelector(mainSelector);
+  const suggestions = query("home-suggestions");
+  const topFade = query("main-content-top-fade");
+  const main = query("shell-main");
+  const sidebar = query("left-panel");
+  const header = query("header-tint");
+  const composer = query("composer-chrome");
+  const home = query("home-icon") || query("home-route");
+  const thread = query("thread-surface");
+  const settings = query("settings-panel") || query("appearance-radio");
+  const scope = settings ? "settings" : home ? "home" : thread ? "thread" : "shell";
   const activityHeader = document.querySelector(
     ".thread-scroll-container button.group\\/activity-header"
   );
@@ -1099,24 +1185,28 @@ const probeFunction = `function () {
     main?.querySelector('div.sticky:has(input[type="text"],textarea)') ||
     document.querySelector('[data-testid*="project" i]');
   return {
+    scope,
+    runtimeVersion: Number(root.getAttribute("data-codex-skin-runtime") || 0),
     styleMarkerCount: style.length,
     templateVersion: Number(root.getAttribute("data-codex-skin-template") || 0),
     themePublicId: root.getAttribute("data-codex-skin-theme") || "",
     backgroundLoaded: false,
     regions: {
       home: status(main, false),
+      shellMain: status(main, false),
       mainBoundary: status(main, false),
-      sidebar: status(document.querySelector("aside.app-shell-left-panel"), false),
+      sidebar: status(sidebar, false),
+      headerTint: status(header, false),
       composerUtilityBar: status(composerUtilityBar, true),
-      topFade: "pass",
-      bottomFade: "pass",
+      topFade: status(topFade, true),
+      bottomFade: "not_present",
       templateScope: status(main, false),
       themeContrast: "pass",
       conversationActivity: status(activityHeader, true),
 		conversationDiffResource: status(diffResource, true),
       suggestionCards: status(suggestions, true),
       projectPicker: status(project, true),
-      composer: status(document.querySelector(".composer-surface-chrome"), false)
+      composer: status(composer, true)
     }
   };
 }`
@@ -1126,7 +1216,7 @@ const captureFunction = `function () {
   if (styles.length > 1) throw new Error("invalid marker count");
   const root = document.documentElement;
   const style = styles[0] || null;
-  const state = globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V1__"];
+  const state = globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V2__"];
   return {
 	stylePresent: Boolean(style && state),
 	styleText: state?.styleText || "",
@@ -1138,15 +1228,16 @@ const captureFunction = `function () {
 }`
 
 const themeSessionHealthFunction = `function (expectedThemeId, expectedThemeVersion, expectedTemplateVersion) {
-  const state = globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V1__"];
+  const state = globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V2__"];
   if (!state || state.themeId !== expectedThemeId ||
       state.themeVersion !== expectedThemeVersion ||
       state.templateVersion !== expectedTemplateVersion ||
       typeof state.ensure !== "function" || typeof state.cleanup !== "function") return false;
-  const main = document.querySelector('main.main-surface, main[class*="_MainContentSurface_"]');
+  const query = (key) => typeof state.selectors?.[key] === "string"
+    ? document.querySelector(state.selectors[key]) : null;
+  const main = query("shell-main");
   const settings = Boolean(
-    document.querySelector('input[name="appearance-theme"]') ||
-    document.querySelector('[data-testid="theme-preview"]')
+    query("settings-panel") || query("appearance-radio")
   );
   if (settings) return true;
   const root = document.documentElement;
@@ -1160,7 +1251,7 @@ const themeSessionHealthFunction = `function (expectedThemeId, expectedThemeVers
     Number(root.getAttribute("data-codex-skin-template") || 0) === expectedTemplateVersion;
 }`
 
-const verifyFunction = `function (expectedTemplateVersion) {
+const verifyFunction = `function (expectedTemplateVersion, selectors) {
   const visible = (node) => {
     if (!node) return false;
     const box = node.getBoundingClientRect();
@@ -1252,13 +1343,21 @@ const verifyFunction = `function (expectedTemplateVersion) {
 			layer.rgb[2] * layer.alpha + under[2] * (1 - layer.alpha)
 		], base);
 	};
-  const root = document.documentElement;
-  const styles = document.querySelectorAll("#codex-skin-theme-v1");
-  const style = styles[0] || null;
-  const main = document.querySelector('main[data-codex-skin-main="true"]');
-  const sidebar = document.querySelector("aside.app-shell-left-panel");
-  const composer = document.querySelector(".composer-surface-chrome");
-  const suggestions = document.querySelector(".group\\/home-suggestions");
+	  const root = document.documentElement;
+	  const query = (key) => typeof selectors?.[key] === "string"
+	    ? document.querySelector(selectors[key]) : null;
+	  const styles = document.querySelectorAll("#codex-skin-theme-v1");
+	  const style = styles[0] || null;
+	  const shellMain = query("shell-main");
+	  const main = shellMain?.getAttribute("data-codex-skin-main") === "true" ? shellMain : null;
+	  const sidebar = query("left-panel");
+	  const header = query("header-tint");
+	  const composer = query("composer-chrome");
+	  const suggestions = query("home-suggestions");
+	  const home = query("home-icon") || query("home-route");
+	  const thread = query("thread-surface");
+	  const settings = query("settings-panel") || query("appearance-radio");
+	  const scope = settings ? "settings" : home ? "home" : thread ? "thread" : "shell";
 	const activityHeaders = [...document.querySelectorAll(
 		'.thread-scroll-container :is(button.group\\/activity-header, ' +
 		'button[class~="group/activity-header"])'
@@ -1273,10 +1372,9 @@ const verifyFunction = `function (expectedTemplateVersion) {
 		)].filter(visible)
 	);
   const legacyTopFade = document.querySelector(".app-shell-main-content-top-fade");
-  const topFades = [...document.querySelectorAll(
-    '.app-shell-main-content-top-fade, [class*="_MainContentTopFade_"]'
-  )];
-  const composerUtilityBar = main?.querySelector('[class*="_homeUtilityBar_"]') || null;
+	  const topFades = typeof selectors?.["main-content-top-fade"] === "string"
+	    ? [...document.querySelectorAll(selectors["main-content-top-fade"])] : [];
+	  const composerUtilityBar = query("home-utility");
   const cards = suggestions ? [...suggestions.querySelectorAll("button")].filter(visible) : [];
   const project = main?.querySelector('button[class*="_utilityBarLabel_"]') ||
     main?.querySelector('div.sticky:has(input[type="text"],textarea)') ||
@@ -1286,6 +1384,11 @@ const verifyFunction = `function (expectedTemplateVersion) {
   const topFadeContractSafe = expectedTemplateVersion < 6 || Boolean(style &&
     style.textContent.includes("--cs-top-fade-contract: 6") &&
     style.textContent.includes('[class*="_MainContentTopFade_"]'));
+  const shellEdgeContractSafe = expectedTemplateVersion < 7 || Boolean(style &&
+    style.textContent.includes("--cs-shell-edge-contract: 7") &&
+    style.textContent.includes('[data-app-shell-header-edge-scroll]') &&
+    style.textContent.includes('[class*="_Header_"]') &&
+    style.textContent.includes('[data-app-shell-main-content-top-fade]'));
   const topFadeNeutralized = expectedTemplateVersion < 6
     ? (!legacyTopFade || Boolean(getComputedStyle(legacyTopFade) &&
         getComputedStyle(legacyTopFade).backgroundImage === "none" &&
@@ -1376,8 +1479,10 @@ const verifyFunction = `function (expectedTemplateVersion) {
 					const background = effectiveBackground(control, surface);
 					return foreground && contrast(foreground, background) >= 4.5;
 				});
-  return {
-    styleMarkerCount: styles.length,
+	  return {
+	    scope,
+	    runtimeVersion: Number(root.getAttribute("data-codex-skin-runtime") || 0),
+	    styleMarkerCount: styles.length,
     templateVersion: Number(root.getAttribute("data-codex-skin-template") || 0),
     themePublicId: root.getAttribute("data-codex-skin-theme") || "",
     backgroundLoaded: Boolean(style && style.sheet && style.sheet.cssRules.length > 0 &&
@@ -1386,12 +1491,14 @@ const verifyFunction = `function (expectedTemplateVersion) {
     backgroundTokenSet: rootBackground.includes("blob:"),
     bodyBackgroundSet: background.includes("blob:"),
     regions: {
-      home: visible(main) ? "pass" : "fail",
-      mainBoundary: mainBoundaryNeutralized ? "pass" : "fail",
-      sidebar: visible(sidebar) ? "pass" : "fail",
-      composerUtilityBar: optional(composerUtilityBar, composerUtilityNeutralized),
-      topFade: topFadeNeutralized ? "pass" : "fail",
-      bottomFade: bottomFadeNeutralized ? "pass" : "fail",
+	      home: visible(main) ? "pass" : "fail",
+	      shellMain: visible(main) ? "pass" : "fail",
+	      mainBoundary: mainBoundaryNeutralized ? "pass" : "fail",
+	      sidebar: visible(sidebar) ? "pass" : "fail",
+	      headerTint: visible(header) && shellEdgeContractSafe ? "pass" : "fail",
+	      composerUtilityBar: optional(composerUtilityBar, composerUtilityNeutralized),
+	      topFade: topFades.length === 0 ? "not_present" : (topFadeNeutralized ? "pass" : "fail"),
+	      bottomFade: optional(bottomFade, bottomFadeNeutralized),
       templateScope: templateScopeSafe ? "pass" : "fail",
       themeContrast: themeContrastSafe ? "pass" : "fail",
 		conversationActivity: activityHeaders.length === 0
@@ -1402,15 +1509,15 @@ const verifyFunction = `function (expectedTemplateVersion) {
 			: (conversationDiffResourceSafe ? "pass" : "fail"),
       suggestionCards: optional(suggestions, cards.length > 0),
       projectPicker: optional(project, visible(project)),
-      composer: visible(composer) ? "pass" : "fail"
+	      composer: optional(composer, visible(composer))
     }
   };
 }`
 
 const restoreFunction = `function () {
-	const state = globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V1__"];
+	const state = globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V2__"];
 	if (typeof state?.cleanup === "function") state.cleanup();
-	delete globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V1__"];
+	delete globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V2__"];
   for (const style of document.querySelectorAll("#codex-skin-theme-v1")) style.remove();
   for (const main of document.querySelectorAll('main[data-codex-skin-main="true"]')) {
     main.removeAttribute("data-codex-skin-main");
@@ -1423,6 +1530,7 @@ const restoreFunction = `function () {
   root.removeAttribute("data-codex-skin-theme-version");
 	root.removeAttribute("data-codex-skin-template");
 	root.removeAttribute("data-codex-skin-appearance");
+	root.removeAttribute("data-codex-skin-runtime");
   root.removeAttribute("data-codex-skin-background-url");
   root.style.removeProperty("--cs-background-image");
   return document.querySelectorAll("#codex-skin-theme-v1").length === 0;
@@ -1430,7 +1538,7 @@ const restoreFunction = `function () {
 
 const officialFunction = `function () {
   const root = document.documentElement;
-	return !globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V1__"] &&
+	return !globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V2__"] &&
 		document.querySelectorAll("#codex-skin-theme-v1").length === 0 &&
     document.querySelectorAll('main[data-codex-skin-main="true"]').length === 0 &&
     !root.hasAttribute("data-codex-skin") &&
@@ -1438,6 +1546,7 @@ const officialFunction = `function () {
     !root.hasAttribute("data-codex-skin-theme-version") &&
 		!root.hasAttribute("data-codex-skin-template") &&
 		!root.hasAttribute("data-codex-skin-appearance") &&
+		!root.hasAttribute("data-codex-skin-runtime") &&
     !root.hasAttribute("data-codex-skin-background-url") &&
     !root.style.getPropertyValue("--cs-background-image");
 }`

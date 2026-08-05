@@ -122,6 +122,44 @@ func TestSessionCanFailBeforeControllerClaimsPID(t *testing.T) {
 	}
 }
 
+func TestActiveRuntimeSwitchesInPlaceAndRequiresReactivation(t *testing.T) {
+	root := t.TempDir()
+	store, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	record, err := store.Start("100021", "1.0.1", testDigest(), testIdentity())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Claim(record.SessionID, 4312); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Activate(record.SessionID, 4312); err != nil {
+		t.Fatal(err)
+	}
+	switched, err := store.Switch(
+		record.SessionID,
+		"100012",
+		"1.0.1",
+		"abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if switched.Status != StatusStarting || switched.ControllerPID != 4312 ||
+		switched.Codex != testIdentity() || switched.ThemePublicID != "100012" {
+		t.Fatalf("switch record = %#v", switched)
+	}
+	if _, err := store.Heartbeat(record.SessionID, 4312); !errors.Is(err, ErrState) {
+		t.Fatalf("unverified switch heartbeat error = %v, want ErrState", err)
+	}
+	reactivated, err := store.Activate(record.SessionID, 4312)
+	if err != nil || reactivated.Status != StatusActive || reactivated.ThemePublicID != "100012" {
+		t.Fatalf("reactivated record = %#v, error = %v", reactivated, err)
+	}
+}
+
 func TestFreshRequiresRecentInProgressHeartbeat(t *testing.T) {
 	root := t.TempDir()
 	store, err := New(root)

@@ -255,3 +255,31 @@ func TestCurrentTemplateNeutralizesStableAndModuleTopFades(t *testing.T) {
 		}
 	}
 }
+
+func TestCurrentTemplateUsesStableAndModuleShellEdges(t *testing.T) {
+	tokens := theme.Tokens{
+		TextPrimary: "#FFF5EC", TextSecondary: "#D9C0AE", Accent: "#E78A4E",
+	}
+	previous, err := compileTemplateV6("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := compileTemplateV7("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous == current || strings.Contains(previous, `--cs-shell-edge-contract: 7`) {
+		t.Fatal("Template v6 migration style was not preserved")
+	}
+	for _, fragment := range []string{
+		`--cs-shell-edge-contract: 7`,
+		`[data-app-shell-header-edge-scroll]`,
+		`[class*="_Header_"]`,
+		`[data-app-shell-main-content-top-fade]`,
+		`[class*="_MainContentTopFade_"]`,
+	} {
+		if !strings.Contains(current, fragment) {
+			t.Fatalf("Template v7 is missing %q", fragment)
+		}
+	}
+}

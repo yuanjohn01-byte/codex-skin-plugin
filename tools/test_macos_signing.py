@@ -19,8 +19,8 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_HELPER_DIR = ROOT / "dist" / "helper"
 DEFAULT_OUTPUT = ROOT / "dist" / "signing" / "macos-signing-spike-summary.json"
 HELPERS = (
-    "codex-skin-helper_0.1.0-paid-alpha.4_macos_arm64",
-    "codex-skin-helper_0.1.0-paid-alpha.4_macos_x64",
+    "codex-skin-helper_0.1.0-paid-alpha.5_macos_arm64",
+    "codex-skin-helper_0.1.0-paid-alpha.5_macos_x64",
 )
 
 

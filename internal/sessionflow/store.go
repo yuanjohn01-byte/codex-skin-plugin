@@ -166,6 +166,24 @@ func (store *Store) Heartbeat(sessionID string, pid int) (Record, error) {
 	})
 }
 
+// Switch moves the single active Runtime Supervisor to an already verified
+// desired theme without changing its PID or Codex process identity.
+func (store *Store) Switch(sessionID, themePublicID, themeVersion, packageSHA256 string) (Record, error) {
+	if !publicIDPattern.MatchString(themePublicID) || !semverPattern.MatchString(themeVersion) ||
+		!digestPattern.MatchString(packageSHA256) {
+		return Record{}, ErrUnsafe
+	}
+	return store.transition(sessionID, []Status{StatusActive}, func(record *Record) error {
+		record.ThemePublicID = themePublicID
+		record.ThemeVersion = themeVersion
+		record.PackageSHA256 = packageSHA256
+		// A switch is not active until the same supervisor has applied and
+		// verified the new renderer payload.
+		record.Status = StatusStarting
+		return nil
+	})
+}
+
 func (store *Store) RequestStop() (Record, bool, error) {
 	if store == nil {
 		return Record{}, false, ErrUnsafe

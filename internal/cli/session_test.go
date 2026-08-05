@@ -199,11 +199,180 @@ func TestActiveSessionUsesBoundIdentityAndLightweightHealthChecks(t *testing.T) 
 	if verifyCount != 2 || healthCount < 2 {
 		t.Fatalf("session checks: full_verify=%d lightweight_health=%d", verifyCount, healthCount)
 	}
+	var releaseOperation func() error
+	var lockErr error
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		releaseOperation, lockErr = store.Lock()
+		if lockErr == nil {
+			break
+		}
+		if !errors.Is(lockErr, engine.ErrBusy) {
+			t.Fatal(lockErr)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if releaseOperation == nil {
+		t.Fatal("foreground apply transaction could not acquire the operation lock")
+	}
+	_, _, _, healthBeforeLockWait := adapter.metrics()
+	time.Sleep(15 * time.Millisecond)
+	_, _, _, healthDuringLock := adapter.metrics()
+	if healthDuringLock != healthBeforeLockWait {
+		t.Fatalf(
+			"health check raced with foreground apply transaction: before=%d during=%d",
+			healthBeforeLockWait,
+			healthDuringLock,
+		)
+	}
+	if err := releaseOperation(); err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		_, _, _, healthAfterUnlock := adapter.metrics()
+		if healthAfterUnlock > healthDuringLock {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	_, _, _, healthAfterUnlock := adapter.metrics()
+	if healthAfterUnlock <= healthDuringLock {
+		t.Fatalf("health checks did not resume after transaction unlock: %d", healthAfterUnlock)
+	}
 	sessions, err := sessionflow.New(store.Root())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := sessions.RequestStop(); err != nil {
+	record, found, err := sessions.Current()
+	if err != nil || !found {
+		t.Fatalf("active session missing: found=%t err=%v", found, err)
+	}
+	if err := requestStopAndWait(
+		sessions,
+		record.SessionID,
+		context.Background(),
+		3*time.Second,
+		time.Millisecond,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if code := awaitCode(t, controllerDone); code != exitSuccess {
+		t.Fatalf("controller code = %d", code)
+	}
+}
+
+func TestActiveRuntimeSwitchesThemeInPlaceWithoutLaunchingAnotherProcess(t *testing.T) {
+	store, identity, firstCompiled, firstDesired, executable := newSessionControllerTestState(t)
+	secondDesired := firstDesired
+	secondDesired.ThemePublicID = "100002"
+	secondDesired.ThemeVersion = "2.0.0"
+	secondDesired.PackageSHA256 = strings.Repeat("b", 64)
+	secondDesired.AppliedAt = "2026-08-05T08:00:00Z"
+	secondCompiled := firstCompiled
+	secondCompiled.ThemePublicID = secondDesired.ThemePublicID
+	secondCompiled.ThemeVersion = secondDesired.ThemeVersion
+	secondCompiled.StyleText = "second-theme"
+	adapter := &gatedThemeSessionAdapter{identity: identity}
+	controllerDone := make(chan int, 1)
+	load := func(current *engine.Store) (*engine.CompiledTheme, *engine.DesiredTheme, error) {
+		desired, found, err := current.ReadDesired()
+		if err != nil || !found {
+			return nil, nil, engine.ErrStateUnsafe
+		}
+		compiled := firstCompiled
+		if desired.ThemePublicID == secondDesired.ThemePublicID {
+			compiled = secondCompiled
+		}
+		return &compiled, &desired, nil
+	}
+	parent := Runtime{
+		GOOS: "darwin", GOARCH: "arm64", Root: store.Root(), Executable: executable,
+		currentSessionIdentity: func(context.Context) (engine.Identity, error) { return identity, nil },
+		sessionStartTimeout:    time.Second,
+		sessionStopTimeout:     time.Second,
+		sessionWaitInterval:    time.Millisecond,
+	}
+	parent.StartSession = func(_ string, sessionID string) error {
+		go func() {
+			controllerDone <- runThemeSession(sessionID, Runtime{
+				GOOS: "darwin", GOARCH: "arm64", Root: store.Root(), Context: context.Background(),
+				sessionControlPoll:      time.Millisecond,
+				sessionHealthInterval:   5 * time.Millisecond,
+				sessionHealthTimeout:    20 * time.Millisecond,
+				sessionAppearanceSettle: time.Millisecond,
+				sessionAdapterFactory:   func(string) (themeSessionAdapter, error) { return adapter, nil },
+				sessionThemeLoader:      load,
+			})
+		}()
+		return nil
+	}
+	if err := startThemeSession(store, firstDesired.ThemePublicID, firstDesired.ThemeVersion, parent); err != nil {
+		t.Fatal(err)
+	}
+	var unlock func() error
+	var lockErr error
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		unlock, lockErr = store.Lock()
+		if lockErr == nil {
+			break
+		}
+		if !errors.Is(lockErr, engine.ErrBusy) {
+			t.Fatal(lockErr)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if unlock == nil {
+		t.Fatal("switch transaction did not acquire operation lock")
+	}
+	if err := store.WriteDesired(secondDesired); err != nil {
+		_ = unlock()
+		t.Fatal(err)
+	}
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+	sessions, err := sessionflow.New(store.Root())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline = time.Now().Add(time.Second)
+	var current sessionflow.Record
+	for time.Now().Before(deadline) {
+		current, _, err = sessions.Current()
+		if err == nil && current.Status == sessionflow.StatusActive &&
+			current.ThemePublicID == secondDesired.ThemePublicID {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if err != nil || current.Status != sessionflow.StatusActive ||
+		current.ThemePublicID != secondDesired.ThemePublicID ||
+		current.ControllerPID == 0 || current.Codex.ProcessID != identity.ProcessID {
+		t.Fatalf("switched runtime = %#v, err=%v", current, err)
+	}
+	ordinaryOpenCount, boundOpenCount, verifyCount, _ := adapter.metrics()
+	applyCount, _, appearanceRestores, themed := adapter.state()
+	if ordinaryOpenCount != 0 || boundOpenCount != 2 || verifyCount != 3 ||
+		applyCount != 2 || appearanceRestores != 1 || !themed {
+		t.Fatalf(
+			"in-place switch opens=%d/%d verify=%d apply=%d appearance=%d themed=%t",
+			ordinaryOpenCount,
+			boundOpenCount,
+			verifyCount,
+			applyCount,
+			appearanceRestores,
+			themed,
+		)
+	}
+	if err := requestStopAndWait(
+		sessions,
+		current.SessionID,
+		context.Background(),
+		3*time.Second,
+		time.Millisecond,
+	); err != nil {
 		t.Fatal(err)
 	}
 	if code := awaitCode(t, controllerDone); code != exitSuccess {
@@ -221,7 +390,7 @@ func TestSessionStartTimeoutWaitsForPausedControllerBeforeRollback(t *testing.T)
 		GOOS: "darwin", GOARCH: "arm64", Root: store.Root(), Executable: executable,
 		currentSessionIdentity: func(context.Context) (engine.Identity, error) { return identity, nil },
 		sessionStartTimeout:    25 * time.Millisecond,
-		sessionStopTimeout:     time.Second,
+		sessionStopTimeout:     3 * time.Second,
 		sessionWaitInterval:    2 * time.Millisecond,
 	}
 	parent.StartSession = func(_ string, sessionID string) error {
@@ -273,7 +442,7 @@ func TestSessionStartCancellationRestoresPausedPostApplyBeforeReturning(t *testi
 		Context:                parentCtx,
 		currentSessionIdentity: func(context.Context) (engine.Identity, error) { return identity, nil },
 		sessionStartTimeout:    time.Second,
-		sessionStopTimeout:     time.Second,
+		sessionStopTimeout:     3 * time.Second,
 		sessionWaitInterval:    2 * time.Millisecond,
 	}
 	parent.StartSession = func(_ string, sessionID string) error {
@@ -391,7 +560,7 @@ func awaitControllerGate(
 
 func awaitSessionStatus(t *testing.T, root string, wanted sessionflow.Status) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		sessions, err := sessionflow.New(root)
 		if err != nil {
@@ -423,7 +592,7 @@ func awaitError(t *testing.T, result <-chan error) error {
 	select {
 	case err := <-result:
 		return err
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for start result")
 		return nil
 	}
@@ -434,7 +603,7 @@ func awaitCode(t *testing.T, result <-chan int) int {
 	select {
 	case code := <-result:
 		return code
-	case <-time.After(2 * time.Second):
+	case <-time.After(5 * time.Second):
 		t.Fatal("timed out waiting for controller result")
 		return -1
 	}

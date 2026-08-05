@@ -81,16 +81,24 @@ func LaunchControlled(ctx context.Context, installation Installation, profile st
 		}
 	}
 
-	// Codex Dream Skin's macOS incident review records that LaunchServices can
-	// discard Chromium arguments. If the verified bundle did not start at all,
-	// use its already-hashed official executable directly. Never do this when an
-	// ordinary or partially controlled instance exists: that would create an
-	// ambiguous second Codex process.
-	if pids, err := darwinExecutablePIDs(ctx, installation.Executable); err != nil {
+	// LaunchServices can acknowledge the bundle launch while discarding the
+	// Chromium arguments. If it produced one exact official ordinary process,
+	// stop that verified process and retry with the freshly verified executable.
+	// This is still the user-approved restart transaction; ambiguous or partially
+	// controlled processes fail closed and are never stopped by name alone.
+	installation, err = prepareDirectDarwinFallback(ctx, installation, darwinFallbackOperations{
+		discoverCurrent: DiscoverCurrentInstance,
+		stopCurrent:     StopCurrentInstance,
+		discoverStable:  DiscoverStableInstallation,
+	})
+	if err != nil {
 		return 0, err
-	} else if len(pids) != 0 {
-		return 0, fmt.Errorf("%w: uncontrolled process appeared after LaunchServices", ErrLaunchFailed)
 	}
+	profile, err = DefaultUserProfile(installation)
+	if err != nil {
+		return 0, err
+	}
+	arguments = controlledDarwinExecutableArguments(profile, port)
 	direct := exec.Command(installation.Executable, arguments...)
 	if err := direct.Start(); err != nil {
 		return 0, fmt.Errorf("%w: verified executable start", ErrLaunchFailed)
@@ -104,6 +112,42 @@ func LaunchControlled(ctx context.Context, installation Installation, profile st
 		return pid, err
 	}
 	return 0, fmt.Errorf("%w: controlled process was not found", ErrLaunchFailed)
+}
+
+type darwinFallbackOperations struct {
+	discoverCurrent func(context.Context, Installation) (CurrentInstance, error)
+	stopCurrent     func(context.Context, Installation, CurrentInstance) error
+	discoverStable  func(context.Context) (Installation, error)
+}
+
+func prepareDirectDarwinFallback(
+	ctx context.Context,
+	installation Installation,
+	operations darwinFallbackOperations,
+) (Installation, error) {
+	if ctx == nil || operations.discoverCurrent == nil || operations.stopCurrent == nil ||
+		operations.discoverStable == nil {
+		return Installation{}, ErrLaunchFailed
+	}
+	current, err := operations.discoverCurrent(ctx, installation)
+	switch {
+	case errors.Is(err, ErrCurrentMissing):
+		// LaunchServices did not leave a process behind. Revalidate the bundle
+		// anyway because an in-place app update can complete during this window.
+	case err != nil:
+		return Installation{}, errors.Join(ErrLaunchFailed, err)
+	case current.ControlledPort != 0:
+		return Installation{}, fmt.Errorf("%w: unexpected controlled process after LaunchServices", ErrLaunchFailed)
+	default:
+		if err := operations.stopCurrent(ctx, installation, current); err != nil {
+			return Installation{}, errors.Join(ErrLaunchFailed, err)
+		}
+	}
+	fresh, err := operations.discoverStable(ctx)
+	if err != nil {
+		return Installation{}, errors.Join(ErrLaunchFailed, err)
+	}
+	return fresh, nil
 }
 
 func controlledDarwinOpenArguments(bundle, profile string, port int) []string {

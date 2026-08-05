@@ -59,6 +59,11 @@ type Runtime struct {
 	Executable   string
 	StartWorker  func(string, string) error
 	StartSession func(string, string) error
+	// SessionActivated runs once after the detached runtime has verified the
+	// visible renderer and restored the user's native appearance bytes. The v2
+	// restart worker uses it to commit restart success before serving the rest
+	// of the Codex session in the same process.
+	SessionActivated func() error
 	// EnableLiveSessionController is set only by the shipped Helper entrypoint.
 	// Tests are safe by default and must provide a fake StartSession to opt in.
 	EnableLiveSessionController bool
@@ -125,6 +130,7 @@ type applyData struct {
 	Authorized    bool   `json:"authorizedDuringCommand"`
 	PurchaseShown bool   `json:"purchaseShownDuringCommand"`
 	SessionStatus string `json:"sessionStatus,omitempty"`
+	RuntimeStatus string `json:"runtimeStatus,omitempty"`
 }
 
 type restartData struct {
@@ -132,6 +138,7 @@ type restartData struct {
 	RestartAccepted bool   `json:"restartAccepted"`
 	Kind            string `json:"kind"`
 	ThemePublicID   string `json:"themePublicId,omitempty"`
+	RuntimePhase    string `json:"runtimePhase,omitempty"`
 }
 
 type statusData struct {
@@ -147,6 +154,9 @@ type statusData struct {
 	SessionStatus        string `json:"sessionStatus,omitempty"`
 	SessionThemePublicID string `json:"sessionThemePublicId,omitempty"`
 	SessionErrorCode     string `json:"sessionErrorCode,omitempty"`
+	RuntimeStatus        string `json:"runtimeStatus,omitempty"`
+	RuntimeThemePublicID string `json:"runtimeThemePublicId,omitempty"`
+	RuntimeErrorCode     string `json:"runtimeErrorCode,omitempty"`
 }
 
 func (r Runtime) values() (string, string, string) {
@@ -200,12 +210,12 @@ func Run(args []string, stdout, stderr io.Writer, environment Runtime) int {
 			}
 			return runThemeApply(args[2], stdout, stderr, jsonMode, environment)
 		}
-		if len(args) >= 2 && args[1] == "continue" {
+		if len(args) >= 2 && (args[1] == "launch" || args[1] == "continue") {
 			if (len(args) != 2 && len(args) != 3) ||
 				(len(args) == 3 && args[2] != "--json") {
 				return usageFailure(stdout, stderr, jsonMode)
 			}
-			return runThemeContinue(stdout, stderr, jsonMode, environment)
+			return runThemeContinue(args[1], stdout, stderr, jsonMode, environment)
 		}
 		return usageFailure(stdout, stderr, jsonMode)
 	}
@@ -387,7 +397,7 @@ func runThemeApply(themePublicID string, stdout, stderr io.Writer, jsonMode bool
 		store, storeErr := engine.OpenStore(root, environment.PluginCache)
 		var sessionErr error
 		if storeErr == nil {
-			sessionErr = startThemeSession(
+			sessionErr = ensureThemeSession(
 				store,
 				result.ThemePublicID,
 				result.ThemeVersion,
@@ -401,6 +411,7 @@ func runThemeApply(themePublicID string, stdout, stderr io.Writer, jsonMode bool
 			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-SESSION-001", "use_offline_restore_entry", exitApply)
 		}
 		data.SessionStatus = string(sessionflow.StatusActive)
+		data.RuntimeStatus = string(sessionflow.StatusActive)
 	}
 	if jsonMode {
 		if writeJSON(stdout, stderr, protocol.SuccessWithOperation(result.OperationID, data)) != exitSuccess {
@@ -444,8 +455,17 @@ func buildApplyFlow(environment Runtime) (ApplyFlow, error) {
 	}
 	runtimeAdapter := environment.Adapter
 	if runtimeAdapter == nil {
+		var boundIdentity *engine.Identity
+		if sessions, sessionErr := sessionflow.New(store.Root()); sessionErr == nil {
+			if current, found, readErr := sessions.Current(); readErr == nil && found &&
+				current.Status == sessionflow.StatusActive &&
+				current.Fresh(time.Now(), sessionHeartbeatMaxAge) {
+				copy := current.Codex
+				boundIdentity = &copy
+			}
+		}
 		runtimeAdapter, err = adapter.NewLive(adapter.Config{
-			Root: store.Root(), CurrentProfile: true,
+			Root: store.Root(), CurrentProfile: true, BoundIdentity: boundIdentity,
 		})
 		if err != nil {
 			return nil, err
@@ -460,11 +480,6 @@ func buildApplyFlow(environment Runtime) (ApplyFlow, error) {
 		return nil, err
 	}
 	applier := userflow.EngineApplier{Engine: instance, Restart: restartStore}
-	if sessionControllerEnabled(environment) {
-		applier.BeforeApply = func(ctx context.Context) error {
-			return stopThemeSession(store.Root(), ctx)
-		}
-	}
 	return userflow.New(userflow.Config{
 		Root:              store.Root(),
 		BaseURL:           buildinfo.APIBaseURL,
@@ -480,7 +495,10 @@ func buildApplyFlow(environment Runtime) (ApplyFlow, error) {
 	})
 }
 
-func runThemeContinue(stdout, stderr io.Writer, jsonMode bool, environment Runtime) int {
+func runThemeContinue(command string, stdout, stderr io.Writer, jsonMode bool, environment Runtime) int {
+	if command != "launch" && command != "continue" {
+		return usageFailure(stdout, stderr, jsonMode)
+	}
 	goos, _, _ := environment.values()
 	root, err := resolveRoot(goos, environment)
 	if err != nil {
@@ -516,15 +534,15 @@ func runThemeContinue(stdout, stderr io.Writer, jsonMode bool, environment Runti
 		return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-RESTART-003", "run_theme_again", exitRestart)
 	}
 	data := restartData{
-		Command: "theme continue", RestartAccepted: true,
-		Kind: request.Kind, ThemePublicID: request.ThemePublicID,
+		Command: "theme " + command, RestartAccepted: true,
+		Kind: request.Kind, ThemePublicID: request.ThemePublicID, RuntimePhase: "launching",
 	}
 	if jsonMode {
 		if writeJSON(stdout, stderr, protocol.Success(data)) != exitSuccess {
 			return exitInternal
 		}
 	} else {
-		fmt.Fprintln(stdout, "Restart accepted. Codex will reopen with the same profile and finish the requested theme action.")
+		fmt.Fprintln(stdout, "Runtime launch accepted. Codex will reopen once; the same external runtime will verify and keep the skin active for this session.")
 	}
 	return exitSuccess
 }
@@ -587,6 +605,7 @@ func runRestartWorker(requestID string, environment Runtime) int {
 	operationID := ""
 	resultThemeID := ""
 	resultVersion := ""
+	var resultIdentity engine.Identity
 	var completedRelease *themeapi.Release
 	applyStartedAt := time.Time{}
 	switch request.Kind {
@@ -606,6 +625,7 @@ func runRestartWorker(requestID string, environment Runtime) int {
 		operationID = result.OperationID
 		resultThemeID = result.ThemePublicID
 		resultVersion = result.ThemeVersion
+		resultIdentity = result.Identity
 		completedRelease = &themeapi.Release{
 			ThemePublicID:    verified.Manifest.ThemePublicID,
 			ThemeVersion:     verified.Manifest.ThemeVersion,
@@ -632,16 +652,54 @@ func runRestartWorker(requestID string, environment Runtime) int {
 		_, _ = restartStore.Fail(requestID, "CS-FLOW-RESTART-004")
 		return exitInternal
 	}
-	if completedRelease != nil {
-		if sessionControllerEnabled(environment) {
-			if err := startThemeSession(store, resultThemeID, resultVersion, environment); err != nil {
-				if sessionRollbackSafe(err) {
-					_ = rollbackAfterSessionStartFailure(store, environment)
-				}
-				_, _ = restartStore.Fail(requestID, "CS-FLOW-SESSION-001")
-				return exitApply
-			}
+	if completedRelease != nil && sessionControllerEnabled(environment) {
+		sessions, sessionErr := sessionflow.New(store.Root())
+		if sessionErr != nil {
+			_, _ = restartStore.Fail(requestID, "CS-FLOW-SESSION-001")
+			return exitApply
 		}
+		if _, _, sessionErr = sessions.ExpireStale(sessionHeartbeatMaxAge, "runtime_heartbeat_lost"); sessionErr != nil {
+			_, _ = restartStore.Fail(requestID, "CS-FLOW-SESSION-001")
+			return exitApply
+		}
+		desired, desiredFound, desiredErr := store.ReadDesired()
+		if desiredErr != nil || !desiredFound || desired.ThemePublicID != resultThemeID ||
+			desired.ThemeVersion != resultVersion {
+			_, _ = restartStore.Fail(requestID, "CS-FLOW-SESSION-001")
+			return exitApply
+		}
+		record, sessionErr := sessions.Start(
+			desired.ThemePublicID,
+			desired.ThemeVersion,
+			desired.PackageSHA256,
+			resultIdentity,
+		)
+		if sessionErr != nil {
+			_, _ = restartStore.Fail(requestID, "CS-FLOW-SESSION-001")
+			return exitApply
+		}
+		environment.SessionActivated = func() error {
+			if _, completeErr := restartStore.Complete(
+				requestID,
+				operationID,
+				resultThemeID,
+				resultVersion,
+			); completeErr != nil {
+				return completeErr
+			}
+			recordRestartApply(
+				store.Root(),
+				*completedRelease,
+				applyStartedAt,
+				time.Now(),
+				environment,
+			)
+			return nil
+		}
+		// The restart worker itself is now the single session Runtime
+		// Supervisor. It commits restart success through SessionActivated and
+		// remains alive only until Codex exits or Restore requests a stop.
+		return runThemeSession(record.SessionID, environment)
 	}
 	if _, err := restartStore.Complete(
 		requestID,
@@ -757,13 +815,18 @@ func runStatus(stdout, stderr io.Writer, jsonMode bool, environment Runtime) int
 	} else if sessionFound {
 		data.SessionStatus = string(session.Status)
 		data.SessionThemePublicID = session.ThemePublicID
+		data.RuntimeStatus = string(session.Status)
+		data.RuntimeThemePublicID = session.ThemePublicID
 		if session.InProgress() && !session.Fresh(time.Now(), sessionHeartbeatMaxAge) {
 			// A hard exit or computer restart cannot write a terminal record.
 			// Never repeat a stale heartbeat as a live skin session.
 			data.SessionStatus = string(sessionflow.StatusFailed)
+			data.RuntimeStatus = string(sessionflow.StatusFailed)
 			data.SessionErrorCode = "CS-FLOW-SESSION-001"
+			data.RuntimeErrorCode = "CS-FLOW-RUNTIME-001"
 		} else if session.Status == sessionflow.StatusFailed {
 			data.SessionErrorCode = "CS-FLOW-SESSION-001"
+			data.RuntimeErrorCode = "CS-FLOW-RUNTIME-001"
 		}
 	}
 	restartStore, restartErr := restartflow.New(store.Root())
@@ -926,7 +989,7 @@ func usageFailure(stdout, stderr io.Writer, jsonMode bool) int {
 			return exitInternal
 		}
 	} else {
-		fmt.Fprintln(stderr, "usage: codex-skin <version|doctor|status> [--json] | codex-skin theme <apply THEME_ID|restore|continue> [--json]")
+		fmt.Fprintln(stderr, "usage: codex-skin <version|doctor|status> [--json] | codex-skin theme <apply THEME_ID|restore|launch> [--json]")
 	}
 	return exitInternal
 }

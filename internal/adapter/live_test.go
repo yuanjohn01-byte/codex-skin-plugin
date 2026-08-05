@@ -8,20 +8,22 @@ import (
 	"testing"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/renderer"
 )
 
 func TestRuntimeFunctionsSupportStableAndModuleMainSurfaces(t *testing.T) {
-	for name, function := range map[string]string{
-		"probe": probeFunction,
-		"apply": applyFunction,
-	} {
-		for _, selector := range []string{
-			"main.main-surface",
-			`main[class*="_MainContentSurface_"]`,
-		} {
-			if !strings.Contains(function, selector) {
-				t.Fatalf("%s function is missing %q", name, selector)
-			}
+	selectors, err := renderer.SelectorMap()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, selector := range []string{".main-surface", `_MainContentSurface_`, "data-app-shell-main-surface"} {
+		if !strings.Contains(selectors["shell-main"], selector) {
+			t.Fatalf("selector contract is missing %q", selector)
+		}
+	}
+	for name, function := range map[string]string{"probe": probeFunction, "apply": applyFunction} {
+		if !strings.Contains(function, `"shell-main"`) {
+			t.Fatalf("%s function does not consume the selector contract", name)
 		}
 	}
 	for name, function := range map[string]string{
@@ -39,6 +41,12 @@ func TestRuntimeFunctionsSupportStableAndModuleMainSurfaces(t *testing.T) {
 		`--cs-top-fade-contract: 6`,
 		`expectedTemplateVersion < 6`,
 		`topFades.every`,
+		`--cs-shell-edge-contract: 7`,
+		`expectedTemplateVersion < 7`,
+		`[data-app-shell-header-edge-scroll]`,
+		`[class*="_Header_"]`,
+		`[data-app-shell-main-content-top-fade]`,
+		`visible(header) && shellEdgeContractSafe`,
 	} {
 		if !strings.Contains(verifyFunction, fragment) {
 			t.Fatalf("verify function is missing top-fade contract %q", fragment)
@@ -261,20 +269,23 @@ func TestApplyFunctionKeepsRuntimeBackgroundInOwnedStylesheet(t *testing.T) {
 	}
 }
 
-func TestRendererControllerSelfHealsAndPausesInAppearanceSettings(t *testing.T) {
+func TestRendererControllerSelfHealsAndSuspendsMainScopeInSettings(t *testing.T) {
 	for _, fragment := range []string{
 		`Page.addScriptToEvaluateOnNewDocument`,
 		`new MutationObserver(schedule)`,
 		`partObserver = new MutationObserver(structuralMutationHandler)`,
-		`changed.some((node) => node === currentMain || containsMainSurface(node))`,
+		`if (currentMain) {`,
+		`if (!currentMain.isConnected) schedule()`,
+		`[...record.addedNodes].some(containsMainSurface)`,
 		`partObserver?.observe(document.documentElement, { childList: true, subtree: true })`,
 		`document.addEventListener("DOMContentLoaded", bodyReadyHandler, { once: true })`,
 		`globalThis.navigation?.addEventListener("navigate", navigationHandler)`,
 		`setInterval(ensure, 30000)`,
-		`input[name="appearance-theme"]`,
-		`[data-testid="theme-preview"]`,
-		`!mainSurface()`,
-		`if (settingsScope()) deactivate()`,
+		`selector("settings-panel")`,
+		`selector("appearance-radio")`,
+		`if (!main) return settingsScope() ? activateRoot() : false`,
+		`if (settingsScope()) {`,
+		`removeMainMarkers()`,
 		`URL.revokeObjectURL(backgroundURL)`,
 	} {
 		source := applyFunction
@@ -287,6 +298,9 @@ func TestRendererControllerSelfHealsAndPausesInAppearanceSettings(t *testing.T) 
 	}
 	if strings.Contains(applyFunction, `partObserver = new MutationObserver(schedule)`) {
 		t.Fatal("renderer controller still schedules a full reapply for every conversation mutation")
+	}
+	if strings.Contains(applyFunction, `changed.some((node) => node === currentMain || containsMainSurface(node))`) {
+		t.Fatal("renderer controller still scans every conversation mutation while main is connected")
 	}
 	for _, expensive := range []string{`getComputedStyle`, `getBoundingClientRect`, `thread-scroll-container`} {
 		if strings.Contains(themeSessionHealthFunction, expensive) {

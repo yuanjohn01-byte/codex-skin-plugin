@@ -34,11 +34,13 @@ OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 Codex Dream Skin Studio
 https://github.com/Fei-Away/Codex-Dream-Skin
 
-Codex Skin's fixed renderer controller, native appearance synchronization,
-dropdown-token bridge and verified macOS controlled-launch fallback include
-reviewed adaptations of software mechanisms from
-Codex Dream Skin Studio v1.5.9 (commit cd71dfd120034e73a46d10b2fe3118601d251b8d).
-No Dream Skin demo, preset, reference or user-supplied artwork is included.
+Codex Skin's renderer selector contract, window-readiness model, renderer
+watcher, native appearance synchronization and verified controlled-launch
+fallback include reviewed adaptations of software mechanisms from Codex Dream
+Skin Studio v1.5.11
+(commit 1c7a859ed51bcfe4923f6483a5625a6e63f97657). No Dream Skin demo,
+preset, reference, third-party or user-supplied artwork, product name, installer
+shell, trademark, or theme package is included.
 
 MIT License
 

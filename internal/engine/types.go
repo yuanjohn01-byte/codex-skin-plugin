@@ -9,7 +9,7 @@ const (
 	StateSchemaVersion     = 1
 	CurrentEngineVersion   = "0.2.0"
 	MinimumTemplateVersion = 1
-	TemplateVersion        = 6
+	TemplateVersion        = 7
 	MarkerID               = "codex-skin-theme-v1"
 	RootMarkerAttribute    = "data-codex-skin"
 	ThemeMarkerAttribute   = "data-codex-skin-theme"
@@ -53,6 +53,8 @@ const (
 )
 
 type RegionReport struct {
+	Scope              string                  `json:"scope,omitempty"`
+	RuntimeVersion     int                     `json:"runtimeVersion,omitempty"`
 	StyleMarkerCount   int                     `json:"styleMarkerCount"`
 	TemplateVersion    int                     `json:"templateVersion"`
 	ThemePublicID      string                  `json:"themePublicId"`
