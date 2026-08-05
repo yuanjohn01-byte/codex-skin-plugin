@@ -619,7 +619,7 @@ func runRestartWorker(requestID string, environment Runtime) int {
 		applyStartedAt = time.Now()
 		result, applyErr := instance.ApplyVerified(ctx, verified)
 		if applyErr != nil {
-			_, _ = restartStore.Fail(requestID, "CS-FLOW-RESTART-006")
+			_, _ = restartStore.Fail(requestID, restartApplyFailureCode(applyErr))
 			return exitApply
 		}
 		operationID = result.OperationID
@@ -719,6 +719,17 @@ func runRestartWorker(requestID string, environment Runtime) int {
 		)
 	}
 	return exitSuccess
+}
+
+func restartApplyFailureCode(err error) string {
+	switch {
+	case errors.Is(err, engine.ErrRollbackFailed):
+		return "CS-FLOW-ROLLBACK-001"
+	case errors.Is(err, engine.ErrVerifyFailed):
+		return "CS-FLOW-VERIFY-001"
+	default:
+		return "CS-FLOW-RESTART-006"
+	}
 }
 
 func recordRestartApply(

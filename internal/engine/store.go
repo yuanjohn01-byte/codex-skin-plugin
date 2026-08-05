@@ -35,17 +35,35 @@ type Store struct {
 }
 
 type Journal struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	OperationID   string `json:"operationId"`
-	Kind          string `json:"kind"`
-	Stage         string `json:"stage"`
-	Status        string `json:"status"`
-	ThemePublicID string `json:"themePublicId,omitempty"`
-	ThemeVersion  string `json:"themeVersion,omitempty"`
-	StartedAt     string `json:"startedAt"`
-	UpdatedAt     string `json:"updatedAt"`
-	ErrorCode     string `json:"errorCode,omitempty"`
-	RecoveryID    string `json:"recoveryId,omitempty"`
+	SchemaVersion int                  `json:"schemaVersion"`
+	OperationID   string               `json:"operationId"`
+	Kind          string               `json:"kind"`
+	Stage         string               `json:"stage"`
+	Status        string               `json:"status"`
+	ThemePublicID string               `json:"themePublicId,omitempty"`
+	ThemeVersion  string               `json:"themeVersion,omitempty"`
+	StartedAt     string               `json:"startedAt"`
+	UpdatedAt     string               `json:"updatedAt"`
+	ErrorCode     string               `json:"errorCode,omitempty"`
+	RecoveryID    string               `json:"recoveryId,omitempty"`
+	Verification  *VerificationSummary `json:"verification,omitempty"`
+}
+
+// VerificationSummary is the durable, redacted explanation for an apply
+// verification result. It stores only allowlisted contract booleans and region
+// statuses so diagnostics can distinguish a timing failure from a bad package
+// without retaining a user's Codex content or raw renderer data.
+type VerificationSummary struct {
+	Attempts         int                     `json:"attempts"`
+	ReapplyAttempted bool                    `json:"reapplyAttempted"`
+	ProbeCompleted   bool                    `json:"probeCompleted"`
+	Scope            string                  `json:"scope,omitempty"`
+	RuntimeVersion   int                     `json:"runtimeVersion,omitempty"`
+	StyleMarkerCount int                     `json:"styleMarkerCount"`
+	TemplateVersion  int                     `json:"templateVersion"`
+	ThemePublicID    string                  `json:"themePublicId,omitempty"`
+	BackgroundLoaded bool                    `json:"backgroundLoaded"`
+	Regions          map[string]RegionStatus `json:"regions,omitempty"`
 }
 
 type RecoveryPoint struct {
@@ -156,6 +174,9 @@ func (store *Store) WriteJournal(journal Journal) error {
 	if !safeIdentifier(journal.OperationID, "op_") {
 		return fmt.Errorf("%w: invalid operation id", ErrStateUnsafe)
 	}
+	if journal.Verification != nil && !validVerificationSummary(*journal.Verification) {
+		return fmt.Errorf("%w: invalid verification summary", ErrStateUnsafe)
+	}
 	return writeJSONAtomic(filepath.Join(store.root, "state", "operations", journal.OperationID+".json"), journal)
 }
 
@@ -178,7 +199,8 @@ func (store *Store) RunningJournals() ([]Journal, error) {
 		}
 		if !found || journal.SchemaVersion != StateSchemaVersion ||
 			!safeIdentifier(journal.OperationID, "op_") ||
-			entry.Name() != journal.OperationID+".json" {
+			entry.Name() != journal.OperationID+".json" ||
+			(journal.Verification != nil && !validVerificationSummary(*journal.Verification)) {
 			return nil, fmt.Errorf("%w: operation journal identity", ErrStateUnsafe)
 		}
 		if journal.Status == "running" {
@@ -393,6 +415,78 @@ func validDesired(desired DesiredTheme) bool {
 		storedDigest.MatchString(desired.PackageSHA256) &&
 		supportedTemplateVersion(desired.TemplateVersion) &&
 		desired.AppliedAt != ""
+}
+
+var verificationRegionNames = []string{
+	"home", "shellMain", "mainBoundary", "sidebar", "headerTint", "composer",
+	"composerUtilityBar", "topFade", "bottomFade", "templateScope", "themeContrast",
+	"conversationActivity", "conversationDiffResource", "suggestionCards", "projectPicker",
+}
+
+func verificationSummary(result ThemeVerificationResult) *VerificationSummary {
+	if result.Attempts < 1 || result.Attempts > 128 {
+		return nil
+	}
+	summary := &VerificationSummary{
+		Attempts:         result.Attempts,
+		ReapplyAttempted: result.ReapplyAttempted,
+		ProbeCompleted:   result.ProbeCompleted,
+		RuntimeVersion:   result.Report.RuntimeVersion,
+		StyleMarkerCount: result.Report.StyleMarkerCount,
+		TemplateVersion:  result.Report.TemplateVersion,
+		BackgroundLoaded: result.Report.BackgroundLoaded,
+		Regions:          map[string]RegionStatus{},
+	}
+	if result.Report.Scope == "home" || result.Report.Scope == "thread" ||
+		result.Report.Scope == "shell" || result.Report.Scope == "settings" {
+		summary.Scope = result.Report.Scope
+	}
+	if storedThemePublicID.MatchString(result.Report.ThemePublicID) {
+		summary.ThemePublicID = result.Report.ThemePublicID
+	}
+	for _, name := range verificationRegionNames {
+		status := result.Report.Regions[name]
+		if status == RegionPass || status == RegionFail || status == RegionNotPresent {
+			summary.Regions[name] = status
+		}
+	}
+	if len(summary.Regions) == 0 {
+		summary.Regions = nil
+	}
+	if !validVerificationSummary(*summary) {
+		return nil
+	}
+	return summary
+}
+
+func validVerificationSummary(summary VerificationSummary) bool {
+	if summary.Attempts < 1 || summary.Attempts > 128 ||
+		summary.RuntimeVersion < 0 || summary.RuntimeVersion > 64 ||
+		summary.StyleMarkerCount < 0 || summary.StyleMarkerCount > 8 ||
+		summary.TemplateVersion < 0 || summary.TemplateVersion > TemplateVersion ||
+		(summary.ThemePublicID != "" && !storedThemePublicID.MatchString(summary.ThemePublicID)) {
+		return false
+	}
+	if summary.Scope != "" && summary.Scope != "home" && summary.Scope != "thread" &&
+		summary.Scope != "shell" && summary.Scope != "settings" {
+		return false
+	}
+	if len(summary.Regions) > len(verificationRegionNames) {
+		return false
+	}
+	for name, status := range summary.Regions {
+		known := false
+		for _, allowed := range verificationRegionNames {
+			if name == allowed {
+				known = true
+				break
+			}
+		}
+		if !known || (status != RegionPass && status != RegionFail && status != RegionNotPresent) {
+			return false
+		}
+	}
+	return true
 }
 
 func validSnapshot(snapshot Snapshot) bool {

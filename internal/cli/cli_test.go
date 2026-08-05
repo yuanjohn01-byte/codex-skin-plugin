@@ -935,3 +935,15 @@ func TestFailedRestartIsHiddenAfterSameThemeAppliesDirectly(t *testing.T) {
 		t.Fatal("different applied theme incorrectly superseded the failed restart")
 	}
 }
+
+func TestRestartApplyFailureCodePreservesVerificationAndRollbackOutcomes(t *testing.T) {
+	if got := restartApplyFailureCode(engine.ErrVerifyFailed); got != "CS-FLOW-VERIFY-001" {
+		t.Fatalf("verification failure code = %q", got)
+	}
+	if got := restartApplyFailureCode(errors.Join(engine.ErrVerifyFailed, engine.ErrRollbackFailed)); got != "CS-FLOW-ROLLBACK-001" {
+		t.Fatalf("rollback failure code = %q", got)
+	}
+	if got := restartApplyFailureCode(errors.New("other failure")); got != "CS-FLOW-RESTART-006" {
+		t.Fatalf("fallback failure code = %q", got)
+	}
+}

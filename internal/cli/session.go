@@ -22,6 +22,7 @@ const (
 	sessionHeartbeatInterval = 10 * time.Second
 	sessionHeartbeatMaxAge   = 30 * time.Second
 	sessionAppearanceSettle  = 500 * time.Millisecond
+	sessionVerificationWait  = 35 * time.Second
 )
 
 var errSessionStopUnconfirmed = errors.New("theme session controller stop is unconfirmed")
@@ -174,11 +175,11 @@ func runThemeSession(sessionID string, environment Runtime) int {
 			return exitSuccess
 		}
 
-		applyCtx, applyCancel := context.WithTimeout(ctx, 12*time.Second)
+		applyCtx, applyCancel := context.WithTimeout(ctx, sessionVerificationWait)
 		applyErr := live.Apply(applyCtx, liveSession, *compiled)
 		var report engine.RegionReport
 		if applyErr == nil {
-			report, applyErr = live.Verify(applyCtx, liveSession, *compiled)
+			report, applyErr = waitForSessionThemeVerification(applyCtx, live, liveSession, *compiled)
 		}
 		applyCancel()
 		stopRequested, stopErr = sessions.StopRequested(sessionID)
@@ -220,8 +221,10 @@ func runThemeSession(sessionID string, environment Runtime) int {
 				_, _ = sessions.Finish(sessionID, sessionflow.StatusFailed, "controller_cancelled")
 				return exitApply
 			}
-			settleCtx, settleCancel := context.WithTimeout(ctx, 6*time.Second)
-			settledReport, settleErr := live.Verify(settleCtx, liveSession, *compiled)
+			settleCtx, settleCancel := context.WithTimeout(ctx, sessionVerificationWait)
+			settledReport, settleErr := waitForSessionThemeVerification(
+				settleCtx, live, liveSession, *compiled,
+			)
 			settleCancel()
 			if settleErr != nil || !engine.ReportAllowsTheme(settledReport, *compiled) {
 				_ = restoreControlledSession(live, liveSession)
@@ -386,6 +389,19 @@ func runThemeSession(sessionID string, environment Runtime) int {
 			nextHealth = time.Now().Add(healthInterval)
 		}
 	}
+}
+
+func waitForSessionThemeVerification(
+	ctx context.Context,
+	live themeSessionAdapter,
+	session engine.Session,
+	compiled engine.CompiledTheme,
+) (engine.RegionReport, error) {
+	if waiter, supported := live.(engine.ThemeVerificationWaiter); supported {
+		result, err := waiter.WaitForThemeVerification(ctx, session, compiled)
+		return result.Report, err
+	}
+	return live.Verify(ctx, session, compiled)
 }
 
 func sessionControllerTimings(environment Runtime) (

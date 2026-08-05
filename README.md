@@ -42,7 +42,7 @@ The candidate Skills expose version, apply, local status, and offline restore. O
 
 The Helper's API origin is a build-time value and is intentionally empty in ordinary source builds. This prevents an installed Plugin from accepting an arbitrary server URL or depending on an undeployed endpoint. Staging/Production artifacts must pin the approved HTTPS origin during their release build and pass the corresponding environment gate.
 
-The last immutable Scheme A Staging artifact is Helper `0.1.0-paid-alpha.4` with Bootstrap `0.1.0-paid-alpha.3`; Runtime v2 deliberately does not reuse or overwrite those bytes. Runtime v2 is built as the new Helper `0.1.0-paid-alpha.5` with Bootstrap `0.1.0-paid-alpha.4`; those revisions are source-candidate identities until the exact Staging-origin artifacts are signed and published. Production promotion requires another immutable revision, the approved Production origin, and the release gate for those exact artifacts; the Plugin version remains `0.1.0-paid-alpha` during the invited Alpha line.
+The last immutable Runtime v2 Staging artifact is Helper `0.1.0-paid-alpha.5` with Bootstrap `0.1.0-paid-alpha.4`; Runtime v2.1 deliberately does not reuse or overwrite those bytes. The renderer-settle repair is built as Helper `0.1.0-paid-alpha.6` with Bootstrap `0.1.0-paid-alpha.5`; those revisions are source-candidate identities until the exact Staging-origin artifacts are signed and published. Production promotion requires another immutable revision, the approved Production origin, and the release gate for those exact artifacts; the Plugin version remains `0.1.0-paid-alpha` during the invited Alpha line.
 
 ## Helper development
 

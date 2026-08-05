@@ -174,7 +174,12 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 	if err := engine.store.WriteJournal(journal); err != nil {
 		return ApplyResult{}, rollback("CS-STATE-001", err)
 	}
-	report, err := engine.adapter.Verify(ctx, session, compiled)
+	verification, err := engine.verifyTheme(ctx, session, compiled)
+	journal.Verification = verificationSummary(verification)
+	if writeErr := engine.store.WriteJournal(journal); writeErr != nil {
+		return ApplyResult{}, rollback("CS-STATE-001", writeErr)
+	}
+	report := verification.Report
 	if err != nil || !reportAllowsCommit(report, compiled) {
 		if err == nil {
 			err = ErrVerifyFailed
@@ -549,6 +554,22 @@ func (engine *Engine) probeCapabilities(ctx context.Context, session Session) (R
 		return waiter.WaitForCapabilities(ctx, session)
 	}
 	return engine.adapter.Probe(ctx, session)
+}
+
+func (engine *Engine) verifyTheme(
+	ctx context.Context,
+	session Session,
+	compiled CompiledTheme,
+) (ThemeVerificationResult, error) {
+	if waiter, supported := engine.adapter.(ThemeVerificationWaiter); supported {
+		return waiter.WaitForThemeVerification(ctx, session, compiled)
+	}
+	report, err := engine.adapter.Verify(ctx, session, compiled)
+	return ThemeVerificationResult{
+		Report:         report,
+		Attempts:       1,
+		ProbeCompleted: err == nil,
+	}, err
 }
 
 func CapabilitiesAllowApply(report RegionReport) bool {

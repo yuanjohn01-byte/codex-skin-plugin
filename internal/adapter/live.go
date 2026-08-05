@@ -28,6 +28,13 @@ import (
 const (
 	defaultLaunchWait   = 25 * time.Second
 	openRollbackTimeout = 45 * time.Second
+	// A renderer controller is installed only after official identity and
+	// capability probes pass. Codex can still be attaching its first shell,
+	// Blob background, and renderer observers at that point, so verification
+	// needs a bounded settle window rather than a single immediate snapshot.
+	themeVerifyInitialWait = 15 * time.Second
+	themeVerifyRepairWait  = 12 * time.Second
+	themeVerifyPoll        = 250 * time.Millisecond
 )
 
 var sixDigitID = regexp.MustCompile(`^[0-9]{6}$`)
@@ -717,6 +724,120 @@ func (adapter *Live) Verify(ctx context.Context, session engine.Session, compile
 		return engine.RegionReport{}, err
 	}
 	return report, nil
+}
+
+// WaitForThemeVerification follows the same fail-closed contract as Verify,
+// but lets a newly started renderer settle before it is judged. A first
+// bounded wait is followed by one idempotent controller replacement and a
+// second bounded wait. It never treats a timeout as success and never retries
+// an untrusted session or a malformed theme.
+func (adapter *Live) WaitForThemeVerification(
+	ctx context.Context,
+	session engine.Session,
+	compiled engine.CompiledTheme,
+) (engine.ThemeVerificationResult, error) {
+	return waitForThemeVerificationWithRepair(
+		ctx, themeVerifyInitialWait, themeVerifyRepairWait, themeVerifyPoll,
+		func(checkCtx context.Context) (engine.RegionReport, error) {
+			return adapter.Verify(checkCtx, session, compiled)
+		},
+		func(applyCtx context.Context) error { return adapter.Apply(applyCtx, session, compiled) },
+		compiled,
+	)
+}
+
+func waitForThemeVerificationWithRepair(
+	ctx context.Context,
+	initialWait time.Duration,
+	repairWait time.Duration,
+	poll time.Duration,
+	verify func(context.Context) (engine.RegionReport, error),
+	reapply func(context.Context) error,
+	compiled engine.CompiledTheme,
+) (engine.ThemeVerificationResult, error) {
+	initial, initialErr := waitForThemeVerificationPass(ctx, initialWait, poll, verify, compiled)
+	if initialErr == nil {
+		return initial, nil
+	}
+	if !retryableThemeVerificationError(initialErr) || reapply == nil {
+		return initial, initialErr
+	}
+
+	initial.ReapplyAttempted = true
+	if err := reapply(ctx); err != nil {
+		return initial, err
+	}
+	repaired, repairedErr := waitForThemeVerificationPass(ctx, repairWait, poll, verify, compiled)
+	repaired.Attempts += initial.Attempts
+	repaired.ReapplyAttempted = true
+	if !repaired.ProbeCompleted && initial.ProbeCompleted {
+		repaired.Report = initial.Report
+	}
+	return repaired, repairedErr
+}
+
+func retryableThemeVerificationError(err error) bool {
+	return err != nil &&
+		!errors.Is(err, context.Canceled) &&
+		!errors.Is(err, context.DeadlineExceeded) &&
+		!errors.Is(err, engine.ErrConfiguration) &&
+		!errors.Is(err, codex.ErrListenerUntrusted)
+}
+
+func waitForThemeVerificationPass(
+	ctx context.Context,
+	wait time.Duration,
+	poll time.Duration,
+	verify func(context.Context) (engine.RegionReport, error),
+	compiled engine.CompiledTheme,
+) (engine.ThemeVerificationResult, error) {
+	if wait <= 0 || poll <= 0 || verify == nil {
+		return engine.ThemeVerificationResult{}, engine.ErrConfiguration
+	}
+	deadline := time.Now().Add(wait)
+	result := engine.ThemeVerificationResult{}
+	var lastErr error
+	for {
+		if err := ctx.Err(); err != nil {
+			return result, err
+		}
+		report, err := verify(ctx)
+		result.Attempts++
+		if err == nil {
+			result.Report = report
+			result.ProbeCompleted = true
+			if engine.ReportAllowsTheme(report, compiled) {
+				return result, nil
+			}
+			lastErr = engine.ErrVerifyFailed
+		} else {
+			result.ProbeCompleted = false
+			lastErr = err
+		}
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			break
+		}
+		if remaining > poll {
+			remaining = poll
+		}
+		timer := time.NewTimer(remaining)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return result, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	if lastErr == nil {
+		lastErr = engine.ErrVerifyFailed
+	}
+	return result, lastErr
 }
 
 // ThemeSessionHealthy is the steady-state Scheme A liveness probe. Unlike the

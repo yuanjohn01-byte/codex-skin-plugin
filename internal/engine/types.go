@@ -64,6 +64,16 @@ type RegionReport struct {
 	Regions            map[string]RegionStatus `json:"regions"`
 }
 
+// ThemeVerificationResult is the bounded, post-injection verification result.
+// It deliberately contains only renderer contract fields, never DOM text,
+// conversation data, screenshots, or raw CDP errors.
+type ThemeVerificationResult struct {
+	Report           RegionReport
+	Attempts         int
+	ReapplyAttempted bool
+	ProbeCompleted   bool
+}
+
 type Snapshot struct {
 	StylePresent      bool   `json:"stylePresent"`
 	StyleText         string `json:"styleText"`
@@ -101,6 +111,14 @@ type Adapter interface {
 // loading before the engine evaluates fail-closed capability probes.
 type CapabilityWaiter interface {
 	WaitForCapabilities(context.Context, Session) (RegionReport, error)
+}
+
+// ThemeVerificationWaiter lets a live adapter wait for the renderer controller
+// and Codex shell to settle after injection. The engine still commits only when
+// the same strict report predicate passes; waiting never converts an unknown
+// or failed renderer into success.
+type ThemeVerificationWaiter interface {
+	WaitForThemeVerification(context.Context, Session, CompiledTheme) (ThemeVerificationResult, error)
 }
 
 // SessionPrimer lets an adapter re-establish trusted in-memory context from a

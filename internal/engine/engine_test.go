@@ -41,6 +41,21 @@ type restartConsentThemeAdapter struct {
 	*fakeAdapter
 }
 
+type boundedVerificationAdapter struct {
+	*fakeAdapter
+	verification ThemeVerificationResult
+	waitErr      error
+}
+
+func (adapter *boundedVerificationAdapter) WaitForThemeVerification(
+	context.Context,
+	Session,
+	CompiledTheme,
+) (ThemeVerificationResult, error) {
+	adapter.events = append(adapter.events, "wait_verify")
+	return adapter.verification, adapter.waitErr
+}
+
 func (adapter *restartConsentThemeAdapter) OpenVerifiedThemeSession(
 	context.Context,
 	CompiledTheme,
@@ -280,6 +295,67 @@ func TestApplyFailureRollsBackAndDoesNotCommitDesired(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(adapter.events, ","), "verify,rollback") {
 		t.Fatalf("events = %v", adapter.events)
+	}
+}
+
+func TestApplyVerifiedPersistsBoundedVerificationSummaryBeforeRollback(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	store := testStore(t)
+	report := passingReport()
+	report.StyleMarkerCount = 1
+	report.TemplateVersion = TemplateVersion
+	report.ThemePublicID = verified.Manifest.ThemePublicID
+	report.BackgroundLoaded = false
+	report.Regions["sidebar"] = RegionFail
+	adapter := &boundedVerificationAdapter{
+		fakeAdapter: &fakeAdapter{probe: passingReport()},
+		verification: ThemeVerificationResult{
+			Report: report, Attempts: 4, ReapplyAttempted: true, ProbeCompleted: true,
+		},
+		waitErr: ErrVerifyFailed,
+	}
+	instance, err := New(store, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instance.ApplyVerified(context.Background(), verified); !errors.Is(err, ErrVerifyFailed) {
+		t.Fatalf("ApplyVerified() error = %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(store.Root(), "state", "operations"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("operation journals = %#v, error = %v", entries, err)
+	}
+	var journal Journal
+	found, err := readJSON(filepath.Join(store.Root(), "state", "operations", entries[0].Name()), &journal)
+	if err != nil || !found || journal.Verification == nil {
+		t.Fatalf("journal = %#v, found=%t, error=%v", journal, found, err)
+	}
+	if journal.ErrorCode != "CS-VERIFY-001" || journal.Verification.Attempts != 4 ||
+		!journal.Verification.ReapplyAttempted || !journal.Verification.ProbeCompleted ||
+		journal.Verification.BackgroundLoaded ||
+		journal.Verification.Regions["sidebar"] != RegionFail {
+		t.Fatalf("verification journal = %#v", journal)
+	}
+	if got := strings.Join(adapter.events, ","); got != "open,capture,probe,apply,wait_verify,rollback,verify_official,close" {
+		t.Fatalf("events = %s", got)
+	}
+}
+
+func TestJournalRejectsUnallowlistedVerificationFields(t *testing.T) {
+	store := testStore(t)
+	operationID, err := store.NewOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.WriteJournal(Journal{
+		OperationID: operationID, Kind: "apply", Stage: "verify", Status: "running",
+		Verification: &VerificationSummary{
+			Attempts: 1,
+			Regions:  map[string]RegionStatus{"untrusted-dom-text": RegionPass},
+		},
+	})
+	if !errors.Is(err, ErrStateUnsafe) {
+		t.Fatalf("WriteJournal() error = %v, want state safety rejection", err)
 	}
 }
 

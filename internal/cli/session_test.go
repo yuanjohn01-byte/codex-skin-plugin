@@ -389,9 +389,12 @@ func TestSessionStartTimeoutWaitsForPausedControllerBeforeRollback(t *testing.T)
 	parent := Runtime{
 		GOOS: "darwin", GOARCH: "arm64", Root: store.Root(), Executable: executable,
 		currentSessionIdentity: func(context.Context) (engine.Identity, error) { return identity, nil },
-		sessionStartTimeout:    25 * time.Millisecond,
-		sessionStopTimeout:     3 * time.Second,
-		sessionWaitInterval:    2 * time.Millisecond,
+		// Keep this above normal CI scheduling jitter. The test still exercises
+		// the timeout path because the controller remains blocked until the
+		// explicit release below.
+		sessionStartTimeout: 100 * time.Millisecond,
+		sessionStopTimeout:  3 * time.Second,
+		sessionWaitInterval: 2 * time.Millisecond,
 	}
 	parent.StartSession = func(_ string, sessionID string) error {
 		go func() {
