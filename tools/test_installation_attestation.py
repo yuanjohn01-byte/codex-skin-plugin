@@ -31,31 +31,31 @@ def main() -> int:
         temporary_root = Path(temporary)
         plugin = temporary_root / "plugin"
         shutil.copytree(ROOT / "plugins" / "codex-skin", plugin)
-        launcher = plugin / "scripts" / ".bootstrap" / "codex-skin-bootstrap_0.1.0-paid-alpha.7_macos_arm64"
+        launcher = plugin / "scripts" / ".bootstrap" / "codex-skin-bootstrap_0.1.0-paid-alpha.8_macos_arm64"
         launcher.parent.mkdir(mode=0o700)
         executable(launcher, "#!/bin/sh\nexit 0\n")
         launcher_sha = hashlib.sha256(launcher.read_bytes()).hexdigest()
         (plugin / "scripts" / "bootstrap-pins.sh").write_text(
             "# Generated fixture pins.\n"
-            "bootstrap_release_tag='helper-v0.1.0-paid-alpha.8'\n"
-            "bootstrap_version='0.1.0-paid-alpha.7'\n"
+            "bootstrap_release_tag='helper-v0.1.0-paid-alpha.9'\n"
+            "bootstrap_version='0.1.0-paid-alpha.8'\n"
             f"bootstrap_build_commit='{BOOTSTRAP_COMMIT}'\n"
             "bootstrap_built_at='2026-08-03T00:00:00Z'\n"
             "case \"$(uname -m)\" in\n"
             "  arm64)\n"
-            "    bootstrap_filename='codex-skin-bootstrap_0.1.0-paid-alpha.7_macos_arm64'\n"
+            "    bootstrap_filename='codex-skin-bootstrap_0.1.0-paid-alpha.8_macos_arm64'\n"
             f"    bootstrap_sha256='{launcher_sha}'\n"
             "    ;;\n"
             "  x86_64)\n"
-            "    bootstrap_filename='codex-skin-bootstrap_0.1.0-paid-alpha.7_macos_x64'\n"
+            "    bootstrap_filename='codex-skin-bootstrap_0.1.0-paid-alpha.8_macos_x64'\n"
             f"    bootstrap_sha256='{'d' * 64}'\n"
             "    ;;\n"
             "esac\n",
             encoding="utf-8",
         )
         application = temporary_root / "application"
-        helper_name = "codex-skin-helper_0.1.0-paid-alpha.8_macos_arm64"
-        helper = application / "bin" / "0.1.0-paid-alpha.8" / helper_name
+        helper_name = "codex-skin-helper_0.1.0-paid-alpha.9_macos_arm64"
+        helper = application / "bin" / "0.1.0-paid-alpha.9" / helper_name
         helper.parent.mkdir(parents=True)
         executable(
             helper,
@@ -69,9 +69,9 @@ def main() -> int:
                     "status": "completed",
                     "data": {
                         "command": "version",
-                        "helperVersion": "0.1.0-paid-alpha.8",
+                        "helperVersion": "0.1.0-paid-alpha.9",
                         "pluginVersion": "0.1.0-paid-alpha",
-                        "helperReleaseTag": "helper-v0.1.0-paid-alpha.8",
+                        "helperReleaseTag": "helper-v0.1.0-paid-alpha.9",
                         "apiOrigin": API_ORIGIN,
                         "buildCommit": HELPER_COMMIT,
                         "builtAt": "2026-08-03T00:00:00Z",
@@ -87,7 +87,7 @@ def main() -> int:
             json.dumps(
                 {
                     "schemaVersion": 1,
-                    "helperVersion": "0.1.0-paid-alpha.8",
+                    "helperVersion": "0.1.0-paid-alpha.9",
                     "platform": "macos-arm64",
                     "filename": helper_name,
                     "sha256": helper_sha,

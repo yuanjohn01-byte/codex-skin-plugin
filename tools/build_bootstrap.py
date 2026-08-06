@@ -23,8 +23,8 @@ from build_helper import (
 )
 
 
-BOOTSTRAP_VERSION = "0.1.0-paid-alpha.7"
-HELPER_RELEASE_TAG = "helper-v0.1.0-paid-alpha.8"
+BOOTSTRAP_VERSION = "0.1.0-paid-alpha.8"
+HELPER_RELEASE_TAG = "helper-v0.1.0-paid-alpha.9"
 DEFAULT_OUTPUT = ROOT / "dist" / "bootstrap"
 TARGETS = (
     Target(
