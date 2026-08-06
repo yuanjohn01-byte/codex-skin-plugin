@@ -52,6 +52,7 @@ jobs:
             --commit "${{ steps.inputs.outputs.bootstrap_commit }}" \
             --built-at "${{ steps.inputs.outputs.bootstrap_built_at }}"
           python3 tools/render_bootstrap_pins.py --summary dist/bootstrap/build-summary.json --check
+          python3 tools/create_sbom.py --summary dist/helper/build-summary.json
           python3 tools/create_release_descriptor.py --key-id helper-alpha-2026-08
       - name: Sign and verify canonical Helper release descriptor
         env:
@@ -87,10 +88,14 @@ jobs:
         run: python3 tools/test_bootstrap_builds.py
       - name: Test canonical release descriptor generation
         run: python3 tools/test_release_descriptor.py
+      - name: Test deterministic Helper release SBOM
+        run: python3 tools/test_create_sbom.py
       - name: Build review artifacts
         run: python3 tools/build_helper.py
       - name: Build Bootstrap review artifacts
         run: python3 tools/build_bootstrap.py
+      - name: Generate Helper release SBOM
+        run: python3 tools/create_sbom.py --summary dist/helper/build-summary.json
       - name: Generate unsigned review descriptor
         run: >-
           python3 tools/create_release_descriptor.py
