@@ -428,6 +428,7 @@ func TestThemeApplyMapsStableFailureActions(t *testing.T) {
 	}{
 		{name: "authorization", err: userflow.ErrAuthorization, exit: exitAuthorize, code: "CS-FLOW-AUTH-001"},
 		{name: "access", err: userflow.ErrAccess, exit: exitAccess, code: "CS-FLOW-ACCESS-001"},
+		{name: "restart busy", err: userflow.ErrRestartBusy, exit: exitRestart, code: "CS-FLOW-RESTART-002"},
 		{name: "theme", err: userflow.ErrTheme, exit: exitTheme, code: "CS-FLOW-THEME-001"},
 		{name: "restart", err: userflow.ErrRestart, exit: exitRestart, code: "CS-FLOW-RESTART-001"},
 		{name: "apply", err: userflow.ErrApply, exit: exitApply, code: "CS-FLOW-APPLY-001"},

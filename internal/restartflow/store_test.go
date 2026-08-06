@@ -64,6 +64,82 @@ func TestApplyContinuationIsSingleUseAndReverified(t *testing.T) {
 	}
 }
 
+func TestPrepareNewApplySupersedesOnlyUnapprovedRequest(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	if _, err := engine.OpenStore(root, ""); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, err := store.StageApply(verifyFixture(t, copyFixture(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload := store.payloadDirectory(first.RequestID)
+	if superseded, err := store.PrepareNewApply(); err != nil || !superseded {
+		t.Fatalf("PrepareNewApply() = %t, %v", superseded, err)
+	}
+	if _, found, err := store.Current(); err != nil || found {
+		t.Fatalf("current after supersede = found:%t err:%v", found, err)
+	}
+	if _, err := os.Lstat(payload); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("superseded payload remains: %v", err)
+	}
+	second, err := store.StageApply(verifyFixture(t, copyFixture(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Approve(second.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.PrepareNewApply(); !errors.Is(err, ErrBusy) {
+		t.Fatalf("approved request was replaced: %v", err)
+	}
+	current, found, err := store.Current()
+	if err != nil || !found || current.RequestID != second.RequestID || current.Status != StatusApproved {
+		t.Fatalf("approved current = %#v, found=%t err=%v", current, found, err)
+	}
+}
+
+func TestPrepareNewApplyRetiresTerminalRestartRecord(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	if _, err := engine.OpenStore(root, ""); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := store.StageApply(verifyFixture(t, copyFixture(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err = store.Approve(request.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err = store.Begin(request.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Complete(
+		request.RequestID,
+		"op_0123456789abcdef0123456789abcdef",
+		request.ThemePublicID,
+		request.ThemeVersion,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if superseded, err := store.PrepareNewApply(); err != nil || superseded {
+		t.Fatalf("PrepareNewApply() after completed = %t, %v", superseded, err)
+	}
+	if _, found, err := store.Current(); err != nil || found {
+		t.Fatalf("terminal current was retained: found:%t err:%v", found, err)
+	}
+}
+
 func TestContinuationTamperAndSymlinkFailClosed(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "CodexSkin")
 	if _, err := engine.OpenStore(root, ""); err != nil {

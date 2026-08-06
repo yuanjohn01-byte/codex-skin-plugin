@@ -326,6 +326,8 @@ func runThemeApply(themePublicID string, stdout, stderr io.Writer, jsonMode bool
 			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-AUTH-001", "reauthorize", exitAuthorize)
 		case errors.Is(err, userflow.ErrAccess):
 			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-ACCESS-001", "finish_purchase", exitAccess)
+		case errors.Is(err, userflow.ErrRestartBusy):
+			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-RESTART-002", "wait_for_current_operation", exitRestart)
 		case errors.Is(err, userflow.ErrRestart):
 			return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-RESTART-001", "confirm_restart", exitRestart)
 		case errors.Is(err, userflow.ErrApply):

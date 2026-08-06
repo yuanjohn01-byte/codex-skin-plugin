@@ -158,6 +158,32 @@ func TestSessionActivationRestoresNativeAppearanceBytesBeforeSuccess(t *testing.
 	}
 }
 
+func TestReusableControlledThemeSnapshotRequiresAnExistingMatchingMode(t *testing.T) {
+	base := engine.Snapshot{
+		StylePresent:    true,
+		ThemePublicID:   "100005",
+		ThemeVersion:    "1.0.1",
+		TemplateVersion: engine.TemplateVersion,
+		StyleText:       "verified-template",
+		AppearanceMode:  "dark",
+	}
+	if !reusableControlledThemeSnapshot(base, "dark") {
+		t.Fatal("verified dark renderer was not reusable for dark replacement")
+	}
+	if reusableControlledThemeSnapshot(base, "light") {
+		t.Fatal("dark renderer was reusable for light replacement")
+	}
+	base.StylePresent = false
+	if reusableControlledThemeSnapshot(base, "dark") {
+		t.Fatal("missing style marker was reusable")
+	}
+	base.StylePresent = true
+	base.ThemePublicID = "not-a-theme"
+	if reusableControlledThemeSnapshot(base, "dark") {
+		t.Fatal("invalid theme marker was reusable")
+	}
+}
+
 func TestSelectPrimedThemeOnlyAcceptsCurrentOrExactMigrationTemplates(t *testing.T) {
 	compiled := engine.CompiledTheme{
 		ThemePublicID: "100002", ThemeVersion: "1.0.0",

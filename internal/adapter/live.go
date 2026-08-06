@@ -235,6 +235,18 @@ func (adapter *Live) openVerifiedSession(
 
 	if adapter.currentProfile {
 		current, currentErr := codex.DiscoverCurrentInstance(ctx, installation)
+		if currentErr == nil && current.ControlledPort > 0 && appearanceRestart &&
+			targetAppearance != "" && adapter.currentThemeMatchesAppearance(
+			ctx, installation, current, targetAppearance,
+		) {
+			// The on-demand transaction has already restored the user's on-disk
+			// Appearance preference. That does not change the renderer that is
+			// still open and visibly carrying its previous verified skin. Reuse
+			// only this exact trusted loopback renderer for a same-mode replacement;
+			// Prime later proves the existing marker matches the cached previous
+			// theme before the new renderer style is installed.
+			appearanceRestart = false
+		}
 		switch {
 		case currentErr == nil && current.ControlledPort > 0 && !appearanceRestart:
 			profile = current.Profile
@@ -388,6 +400,57 @@ func (adapter *Live) openVerifiedSession(
 			ProcessStartID: process.ProcessStartID,
 		},
 	}, nil
+}
+
+// currentThemeMatchesAppearance is a read-only preflight for a same-mode
+// replacement. It never changes renderer state or the native Appearance
+// setting. A failed probe deliberately returns false so the caller takes the
+// existing fail-closed restart path instead of assuming a stale renderer can
+// be reused.
+func (adapter *Live) currentThemeMatchesAppearance(
+	ctx context.Context,
+	installation codex.Installation,
+	current codex.CurrentInstance,
+	targetAppearance string,
+) bool {
+	if current.ControlledPort <= 0 || (targetAppearance != "dark" && targetAppearance != "light") {
+		return false
+	}
+	if _, err := codex.VerifyListener(
+		ctx, installation, current.Process.ProcessID, current.ControlledPort, current.Profile,
+	); err != nil {
+		return false
+	}
+	targets, err := cdp.Discover(ctx, current.ControlledPort)
+	if err != nil {
+		return false
+	}
+	target, err := cdp.SelectPage(targets)
+	if err != nil {
+		return false
+	}
+	client, err := cdp.Dial(ctx, target, current.ControlledPort)
+	if err != nil {
+		return false
+	}
+	defer client.Close()
+	if err := client.Call(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
+		return false
+	}
+	var snapshot engine.Snapshot
+	if err := callFunction(ctx, client, captureFunction, nil, &snapshot); err != nil {
+		return false
+	}
+	return reusableControlledThemeSnapshot(snapshot, targetAppearance)
+}
+
+func reusableControlledThemeSnapshot(snapshot engine.Snapshot, targetAppearance string) bool {
+	return snapshot.StylePresent &&
+		sixDigitID.MatchString(snapshot.ThemePublicID) &&
+		snapshot.ThemeVersion != "" &&
+		snapshot.TemplateVersion >= engine.MinimumTemplateVersion &&
+		snapshot.StyleText != "" &&
+		snapshot.AppearanceMode == targetAppearance
 }
 
 func (adapter *Live) recoverOpenFailure(

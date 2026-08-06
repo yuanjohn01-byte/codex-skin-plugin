@@ -2,6 +2,8 @@
 
 ## 0.1.0-paid-alpha - Code-stage candidate
 
+- Permit a same-light or same-dark theme replacement only when the existing official loopback-controlled renderer still carries a valid verified theme marker; cross-mode, reloaded, or untrusted windows continue through one confirmed restart.
+- Let a newly verified user selection replace an unconfirmed restart request, while an approved or running single-use restart remains non-preemptible and reports a stable wait action.
 - Replace the restart-worker-to-keeper handoff and all session controller state with one bounded on-demand Helper transaction for apply, direct switch, and Restore.
 - Add `theme launch` as the primary restart-confirmation command while retaining `theme continue` only as a compatibility alias.
 - Report success only after the exact theme is visibly verified, the original native appearance bytes are restored, and the current renderer is re-verified; the Helper then exits and status never reports `runtimeStatus` or `sessionStatus`.

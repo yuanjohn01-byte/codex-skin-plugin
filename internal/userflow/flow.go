@@ -32,6 +32,7 @@ var (
 	ErrAccess        = errors.New("theme access did not become ready")
 	ErrTheme         = errors.New("theme could not be downloaded or verified")
 	ErrRestart       = errors.New("Codex restart confirmation is required")
+	ErrRestartBusy   = errors.New("a confirmed Codex restart is still running")
 	ErrApply         = errors.New("theme could not be applied")
 )
 
@@ -322,6 +323,14 @@ func (applier EngineApplier) Apply(ctx context.Context, release themeapi.Release
 		!theme.EngineCompatible(engine.CurrentEngineVersion, release.MinEngineVersion) ||
 		strings.TrimSpace(release.MinEngineVersion) != release.MinEngineVersion {
 		return engine.ApplyResult{}, theme.ErrEngineIncompatible
+	}
+	if applier.Restart != nil {
+		if _, err := applier.Restart.PrepareNewApply(); err != nil {
+			if errors.Is(err, restartflow.ErrBusy) {
+				return engine.ApplyResult{}, ErrRestartBusy
+			}
+			return engine.ApplyResult{}, errors.Join(ErrApply, err)
+		}
 	}
 	if applier.BeforeApply != nil {
 		if err := applier.BeforeApply(ctx); err != nil {

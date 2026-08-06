@@ -214,6 +214,36 @@ func (store *Store) Current() (Request, bool, error) {
 	return store.readCurrent()
 }
 
+// PrepareNewApply retires the previous restart record before a freshly
+// verified user-selected apply begins. A user can change their mind while a
+// restart is awaiting confirmation because no Codex process or renderer has
+// been mutated yet. Once approval or execution has started, however, the
+// request remains owned by its one-time worker and must not be replaced.
+//
+// The returned bool reports whether an unapproved request was superseded.
+func (store *Store) PrepareNewApply() (bool, error) {
+	if store == nil {
+		return false, ErrUnsafe
+	}
+	unlock, err := store.lock()
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
+	current, found, err := store.readCurrent()
+	if err != nil || !found {
+		return false, err
+	}
+	if current.Status == StatusApproved || current.Status == StatusRunning {
+		return false, ErrBusy
+	}
+	if err := store.removeCurrent(); err != nil {
+		return false, err
+	}
+	store.removePayload(current)
+	return current.Status == StatusPending, nil
+}
+
 func (store *Store) Approve(requestID string) (Request, error) {
 	return store.transition(requestID, []Status{StatusPending}, func(request *Request) error {
 		expiry, err := time.Parse(time.RFC3339, request.ExpiresAt)
@@ -448,6 +478,20 @@ func (store *Store) writeCurrent(request Request) error {
 		return ErrUnsafe
 	}
 	cleanup = false
+	return syncDirectory(store.directory)
+}
+
+func (store *Store) removeCurrent() error {
+	info, err := os.Lstat(store.currentPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		return ErrUnsafe
+	}
+	if err := os.Remove(store.currentPath); err != nil {
+		return ErrUnsafe
+	}
 	return syncDirectory(store.directory)
 }
 
