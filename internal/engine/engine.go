@@ -123,7 +123,13 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 		// continuation launch a throwaway Codex solely to "restore" an interface
 		// that was never mutated, followed by the real apply restart.
 		if errors.Is(err, ErrRestartConsent) {
-			return ApplyResult{}, engine.failJournal(journal, "CS-CODEX-IDENTITY-001", err)
+			// Restart consent is an expected, pre-mutation pause. It is neither an
+			// identity failure nor a recoverable renderer mutation; restartflow
+			// owns the continuation request that follows.
+			journal.Stage = "restart_confirmation"
+			journal.Status = "pending_confirmation"
+			journal.ErrorCode = ""
+			return ApplyResult{}, errors.Join(err, engine.store.WriteJournal(journal))
 		}
 		return ApplyResult{}, engine.failRecoverableJournal(journal, "CS-CODEX-IDENTITY-001", err)
 	}
@@ -634,7 +640,12 @@ func CapabilitiesAllowApply(report RegionReport) bool {
 		optional = append(optional, "home", "mainBoundary", "composer", "topFade", "bottomFade")
 	}
 	for _, name := range optional {
-		if report.Regions[name] != RegionPass && report.Regions[name] != RegionNotPresent {
+		// L2 refinements are diagnostic-only. A present L2 node can change
+		// between Codex renderer releases, but a verified shell, scoped main,
+		// marker, artwork, and contrast still prove a safe theme transaction.
+		// Keep malformed statuses fail-closed rather than treating them as a
+		// future compatibility success.
+		if status := report.Regions[name]; status != RegionPass && status != RegionNotPresent && status != RegionFail {
 			return false
 		}
 	}

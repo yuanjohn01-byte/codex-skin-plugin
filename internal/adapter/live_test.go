@@ -1,12 +1,14 @@
 package adapter
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/codex"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/renderer"
 )
@@ -47,10 +49,49 @@ func TestRuntimeFunctionsSupportStableAndModuleMainSurfaces(t *testing.T) {
 		`[class*="_Header_"]`,
 		`[data-app-shell-main-content-top-fade]`,
 		`visible(header) && shellEdgeContractSafe`,
+		`--cs-scope-contract: 8`,
+		`data-codex-skin-scope`,
+		`expectedTemplateVersion < 8`,
 	} {
 		if !strings.Contains(verifyFunction, fragment) {
 			t.Fatalf("verify function is missing top-fade contract %q", fragment)
 		}
+	}
+}
+
+func TestEnsureOrdinaryInstanceAcceptsOnlyAStableNonCDPProcess(t *testing.T) {
+	installation := codex.Installation{Platform: "macos", AppIdentifier: "com.openai.codex"}
+	ordinary := codex.CurrentInstance{Process: codex.ProcessIdentity{ProcessID: 42}}
+	launched := false
+	instance, err := ensureOrdinaryInstanceWith(context.Background(), codexRecoveryOperations{
+		discoverStableInstallation: func(context.Context) (codex.Installation, error) { return installation, nil },
+		discoverCurrentInstance: func(context.Context, codex.Installation) (codex.CurrentInstance, error) {
+			if !launched {
+				return codex.CurrentInstance{}, codex.ErrCurrentMissing
+			}
+			return ordinary, nil
+		},
+		launchOrdinary: func(context.Context, codex.Installation) error { launched = true; return nil },
+		waitForCurrentInstance: func(context.Context, codex.Installation) (codex.CurrentInstance, error) {
+			return ordinary, nil
+		},
+	})
+	if err != nil || !launched || instance.Process.ProcessID != ordinary.Process.ProcessID {
+		t.Fatalf("ordinary recovery = %#v, launched=%t, err=%v", instance, launched, err)
+	}
+
+	_, err = ensureOrdinaryInstanceWith(context.Background(), codexRecoveryOperations{
+		discoverStableInstallation: func(context.Context) (codex.Installation, error) { return installation, nil },
+		discoverCurrentInstance: func(context.Context, codex.Installation) (codex.CurrentInstance, error) {
+			return codex.CurrentInstance{ControlledPort: 9222}, nil
+		},
+		launchOrdinary: func(context.Context, codex.Installation) error { return nil },
+		waitForCurrentInstance: func(context.Context, codex.Installation) (codex.CurrentInstance, error) {
+			return codex.CurrentInstance{}, nil
+		},
+	})
+	if !errors.Is(err, codex.ErrCurrentUnsafe) {
+		t.Fatalf("controlled recovery instance error = %v", err)
 	}
 }
 

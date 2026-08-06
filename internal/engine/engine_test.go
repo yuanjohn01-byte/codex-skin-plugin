@@ -612,7 +612,7 @@ func TestOpenFailureKeepsPrepareJournalRecoverable(t *testing.T) {
 	}
 }
 
-func TestCapabilitiesAllowTaskPageWithoutHomeUtilityBar(t *testing.T) {
+func TestCapabilitiesRecordHomeUtilityBarDiagnosticsWithoutRollingBackThemedShell(t *testing.T) {
 	report := passingReport()
 	report.Regions["composerUtilityBar"] = RegionNotPresent
 	if !CapabilitiesAllowApply(report) {
@@ -620,12 +620,12 @@ func TestCapabilitiesAllowTaskPageWithoutHomeUtilityBar(t *testing.T) {
 	}
 
 	report.Regions["composerUtilityBar"] = RegionFail
-	if CapabilitiesAllowApply(report) {
-		t.Fatal("present but invalid utility bar was accepted")
+	if !CapabilitiesAllowApply(report) {
+		t.Fatal("a diagnostic-only utility bar failure rolled back the verified shell")
 	}
 }
 
-func TestCapabilitiesAllowTaskPageWithoutConversationActivity(t *testing.T) {
+func TestCapabilitiesRecordConversationActivityDiagnosticsWithoutRollingBackThemedShell(t *testing.T) {
 	report := passingReport()
 	report.Regions["conversationActivity"] = RegionNotPresent
 	if !CapabilitiesAllowApply(report) {
@@ -633,12 +633,12 @@ func TestCapabilitiesAllowTaskPageWithoutConversationActivity(t *testing.T) {
 	}
 
 	report.Regions["conversationActivity"] = RegionFail
-	if CapabilitiesAllowApply(report) {
-		t.Fatal("present but unreadable activity disclosure was accepted")
+	if !CapabilitiesAllowApply(report) {
+		t.Fatal("a diagnostic-only activity failure rolled back the verified shell")
 	}
 }
 
-func TestCapabilitiesAllowTaskPageWithoutConversationDiffResource(t *testing.T) {
+func TestCapabilitiesRecordDiffResourceDiagnosticsWithoutRollingBackThemedShell(t *testing.T) {
 	report := passingReport()
 	report.Regions["conversationDiffResource"] = RegionNotPresent
 	if !CapabilitiesAllowApply(report) {
@@ -646,8 +646,36 @@ func TestCapabilitiesAllowTaskPageWithoutConversationDiffResource(t *testing.T) 
 	}
 
 	report.Regions["conversationDiffResource"] = RegionFail
-	if CapabilitiesAllowApply(report) {
-		t.Fatal("present but unreadable diff resource card was accepted")
+	if !CapabilitiesAllowApply(report) {
+		t.Fatal("a diagnostic-only resource card failure rolled back the verified shell")
+	}
+}
+
+func TestCapabilitiesAllowCurrentHomeWithoutLegacyComposerOrTopFade(t *testing.T) {
+	report := passingReport()
+	report.StyleMarkerCount = 1
+	report.TemplateVersion = TemplateVersion
+	report.ThemePublicID = "100012"
+	report.BackgroundLoaded = true
+	report.Regions = map[string]RegionStatus{
+		"shellMain":                RegionPass,
+		"sidebar":                  RegionPass,
+		"headerTint":               RegionPass,
+		"templateScope":            RegionPass,
+		"themeContrast":            RegionPass,
+		"home":                     RegionPass,
+		"mainBoundary":             RegionFail,
+		"composer":                 RegionNotPresent,
+		"topFade":                  RegionFail,
+		"bottomFade":               RegionNotPresent,
+		"composerUtilityBar":       RegionNotPresent,
+		"conversationActivity":     RegionNotPresent,
+		"conversationDiffResource": RegionNotPresent,
+		"suggestionCards":          RegionPass,
+		"projectPicker":            RegionNotPresent,
+	}
+	if !CapabilitiesAllowApply(report) {
+		t.Fatalf("current Home fixture was rejected: %#v", report)
 	}
 }
 
@@ -867,6 +895,17 @@ func TestRestartConsentLeavesNoRecoverableApplyJournal(t *testing.T) {
 	}
 	if len(running) != 0 {
 		t.Fatalf("restart consent left a recoverable journal: %#v", running)
+	}
+	entries, readErr := os.ReadDir(filepath.Join(store.Root(), "state", "operations"))
+	if readErr != nil || len(entries) != 1 {
+		t.Fatalf("restart consent journal entries = %#v, error = %v", entries, readErr)
+	}
+	var journal Journal
+	if _, readErr := readJSON(filepath.Join(store.Root(), "state", "operations", entries[0].Name()), &journal); readErr != nil {
+		t.Fatal(readErr)
+	}
+	if journal.Status != "pending_confirmation" || journal.Stage != "restart_confirmation" || journal.ErrorCode != "" {
+		t.Fatalf("restart consent journal was reported as a failure: %#v", journal)
 	}
 	if strings.Join(adapter.events, ",") != "open_theme_consent" {
 		t.Fatalf("restart consent touched the renderer: %v", adapter.events)

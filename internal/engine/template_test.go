@@ -283,3 +283,31 @@ func TestCurrentTemplateUsesStableAndModuleShellEdges(t *testing.T) {
 		}
 	}
 }
+
+func TestCurrentTemplateScopesHomeWithoutRequiringLegacyComposerOrThread(t *testing.T) {
+	tokens := theme.Tokens{
+		TextPrimary: "#FFF5EC", TextSecondary: "#D9C0AE", Accent: "#E78A4E",
+	}
+	previous, err := compileTemplateV7("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := compileTemplateV8("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous == current || strings.Contains(previous, `--cs-scope-contract: 8`) {
+		t.Fatal("Template v7 migration style was not preserved")
+	}
+	for _, fragment := range []string{
+		`--cs-scope-contract: 8`,
+		`data-codex-skin-scope="home"`,
+		`data-codex-skin-scope="thread"`,
+		`border-inline-start: 0 !important`,
+		`[data-app-shell-main-content-top-fade]`,
+	} {
+		if !strings.Contains(current, fragment) {
+			t.Fatalf("Template v8 is missing %q", fragment)
+		}
+	}
+}

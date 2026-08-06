@@ -459,34 +459,53 @@ func reopenOrdinaryIfMissingWith(
 	cause error,
 	operations codexRecoveryOperations,
 ) error {
+	_, err := ensureOrdinaryInstanceWith(ctx, operations)
+	return errors.Join(cause, err)
+}
+
+// ensureOrdinaryInstanceWith proves the postcondition used by a recovery:
+// an ordinary, non-CDP Codex process exists and stays stable. It deliberately
+// returns the observed instance so final rollback can distinguish a harmless
+// controlled-process shutdown race from a failed return to the official app.
+func ensureOrdinaryInstanceWith(
+	ctx context.Context,
+	operations codexRecoveryOperations,
+) (codex.CurrentInstance, error) {
 	if ctx == nil ||
 		operations.discoverStableInstallation == nil ||
 		operations.discoverCurrentInstance == nil ||
 		operations.launchOrdinary == nil ||
 		operations.waitForCurrentInstance == nil {
-		return errors.Join(cause, codex.ErrIdentityUntrusted)
+		return codex.CurrentInstance{}, codex.ErrIdentityUntrusted
 	}
 	// Always reacquire the official installation here. The caller's identity
 	// may be the exact reason the controlled launch failed (for example, an
 	// in-place Codex update between user consent and relaunch).
 	fresh, err := operations.discoverStableInstallation(ctx)
 	if err != nil {
-		return errors.Join(cause, err)
+		return codex.CurrentInstance{}, err
 	}
-	_, currentErr := operations.discoverCurrentInstance(ctx, fresh)
+	current, currentErr := operations.discoverCurrentInstance(ctx, fresh)
 	switch {
 	case currentErr == nil:
-		return cause
+		if current.ControlledPort != 0 {
+			return codex.CurrentInstance{}, codex.ErrCurrentUnsafe
+		}
+		return current, nil
 	case !errors.Is(currentErr, codex.ErrCurrentMissing):
-		return errors.Join(cause, currentErr)
+		return codex.CurrentInstance{}, currentErr
 	}
 	if err := operations.launchOrdinary(ctx, fresh); err != nil {
-		return errors.Join(cause, err)
+		return codex.CurrentInstance{}, err
 	}
-	if _, err := operations.waitForCurrentInstance(ctx, fresh); err != nil {
-		return errors.Join(cause, err)
+	current, err = operations.waitForCurrentInstance(ctx, fresh)
+	if err != nil {
+		return codex.CurrentInstance{}, err
 	}
-	return cause
+	if current.ControlledPort != 0 {
+		return codex.CurrentInstance{}, codex.ErrCurrentUnsafe
+	}
+	return current, nil
 }
 
 func (adapter *Live) Probe(ctx context.Context, session engine.Session) (engine.RegionReport, error) {
@@ -1050,8 +1069,21 @@ func (adapter *Live) FinalizeOfficialRollback(ctx context.Context, session engin
 	if adapter.appearance != nil {
 		_, appearanceErr = adapter.appearance.Restore()
 	}
-	cause := errors.Join(closeErr, stopErr, appearanceErr)
-	return reopenOrdinaryIfMissing(cleanupCtx, live.installation, cause)
+	// A controlled renderer can legitimately disappear while the restore code
+	// is closing its CDP client. Do not call that a rollback failure when the
+	// native appearance restore succeeded and a stable ordinary Codex process
+	// is positively observed afterwards. Other recovery paths still retain and
+	// report their original causes through reopenOrdinaryIfMissing.
+	_, ordinaryErr := ensureOrdinaryInstanceWith(cleanupCtx, codexRecoveryOperations{
+		discoverStableInstallation: codex.DiscoverStableInstallation,
+		discoverCurrentInstance:    codex.DiscoverCurrentInstance,
+		launchOrdinary:             codex.LaunchOrdinary,
+		waitForCurrentInstance:     codex.WaitForCurrentInstance,
+	})
+	if appearanceErr != nil || ordinaryErr != nil {
+		return errors.Join(closeErr, stopErr, appearanceErr, ordinaryErr)
+	}
+	return nil
 }
 
 // StopOwned closes and terminates only the exact controlled process created for
@@ -1362,7 +1394,8 @@ const verifyFunction = `function (expectedTemplateVersion, selectors) {
 	  const home = query("home-icon") || query("home-route");
 	  const thread = query("thread-surface");
 	  const settings = query("settings-panel") || query("appearance-radio");
-	  const scope = settings ? "settings" : home ? "home" : thread ? "thread" : "shell";
+	  const injectedScope = main?.getAttribute("data-codex-skin-scope") || "";
+	  const scope = settings ? "settings" : injectedScope || (home ? "home" : thread ? "thread" : "shell");
 	const activityHeaders = [...document.querySelectorAll(
 		'.thread-scroll-container :is(button.group\\/activity-header, ' +
 		'button[class~="group/activity-header"])'
@@ -1386,14 +1419,22 @@ const verifyFunction = `function (expectedTemplateVersion, selectors) {
     document.querySelector('[data-testid*="project" i]');
   const background = getComputedStyle(document.body).backgroundImage || "";
   const rootBackground = getComputedStyle(root).getPropertyValue("--cs-background-image") || "";
-  const topFadeContractSafe = expectedTemplateVersion < 6 || Boolean(style &&
-    style.textContent.includes("--cs-top-fade-contract: 6") &&
-    style.textContent.includes('[class*="_MainContentTopFade_"]'));
-  const shellEdgeContractSafe = expectedTemplateVersion < 7 || Boolean(style &&
-    style.textContent.includes("--cs-shell-edge-contract: 7") &&
-    style.textContent.includes('[data-app-shell-header-edge-scroll]') &&
-    style.textContent.includes('[class*="_Header_"]') &&
-    style.textContent.includes('[data-app-shell-main-content-top-fade]'));
+  const routeScope = main?.getAttribute("data-codex-skin-scope") || "";
+  const scopedMain = routeScope === "home" || routeScope === "thread";
+  const scopeContractSafe = Boolean(style &&
+    style.textContent.includes("--cs-scope-contract: 8") &&
+    style.textContent.includes('data-codex-skin-scope="home"') &&
+    style.textContent.includes('data-codex-skin-scope="thread"'));
+  const topFadeContractSafe = expectedTemplateVersion < 6 || (expectedTemplateVersion < 8
+    ? Boolean(style && style.textContent.includes("--cs-top-fade-contract: 6") &&
+        style.textContent.includes('[class*="_MainContentTopFade_"]'))
+    : scopeContractSafe);
+  const shellEdgeContractSafe = expectedTemplateVersion < 7 || (expectedTemplateVersion < 8
+    ? Boolean(style && style.textContent.includes("--cs-shell-edge-contract: 7") &&
+        style.textContent.includes('[data-app-shell-header-edge-scroll]') &&
+        style.textContent.includes('[class*="_Header_"]') &&
+        style.textContent.includes('[data-app-shell-main-content-top-fade]'))
+    : scopeContractSafe);
   const topFadeNeutralized = expectedTemplateVersion < 6
     ? (!legacyTopFade || Boolean(getComputedStyle(legacyTopFade) &&
         getComputedStyle(legacyTopFade).backgroundImage === "none" &&
@@ -1408,39 +1449,21 @@ const verifyFunction = `function (expectedTemplateVersion, selectors) {
       }));
   const mainRect = main?.getBoundingClientRect() || null;
   const sidebarRect = sidebar?.getBoundingClientRect() || null;
-  const resizeHandle = sidebar?.querySelector('[class~="cursor-col-resize"]') || null;
-  const resizeHandleRect = resizeHandle?.getBoundingClientRect() || null;
-  const resizeHandleStyle = resizeHandle ? getComputedStyle(resizeHandle) : null;
   const sidebarAfterStyle = sidebar ? getComputedStyle(sidebar, "::after") : null;
-  const resizeHandleIntact = Boolean(resizeHandleRect && resizeHandleStyle &&
-    resizeHandleRect.width >= 8 &&
-    resizeHandleRect.height >= sidebarRect.height * 0.8 &&
-    Math.abs(resizeHandleRect.left + resizeHandleRect.width / 2 - sidebarRect.right) <= 4 &&
-    resizeHandleStyle.cursor.includes("col-resize"));
   const mainBoundaryNeutralized = Boolean(main && mainRect && sidebarRect && sidebarAfterStyle &&
     getComputedStyle(main).boxShadow === "none" &&
+    getComputedStyle(main).borderInlineStartWidth === "0px" &&
     Math.abs(sidebarRect.right - mainRect.left) <= 1 &&
-    (sidebarAfterStyle.content === "none" || sidebarAfterStyle.display === "none") &&
-    resizeHandleIntact);
+    (sidebarAfterStyle.content === "none" || sidebarAfterStyle.display === "none"));
   const composerUtilityStyle = composerUtilityBar ? getComputedStyle(composerUtilityBar) : null;
   const composerUtilityNeutralized = Boolean(composerUtilityStyle &&
     composerUtilityStyle.backgroundColor !== "rgb(246, 246, 246)" &&
     composerUtilityStyle.borderTopWidth !== "0px");
-  const immersive = Boolean(main?.querySelector(
-    ":is(.composer-surface-chrome, .thread-scroll-container)"
-  ));
   const mainStyle = main ? getComputedStyle(main) : null;
-  const unsafeGlobalTextSelector =
-    ':root[data-codex-skin="active"] main[data-codex-skin-main="true"] ' +
-    '[class~="text-token-text-primary"],\n' +
-    ':root[data-codex-skin="active"] main[data-codex-skin-main="true"] ' +
-    '[class~="text-token-foreground"]';
-  const templateScopeSafe = Boolean(
-    style &&
-    immersive &&
-    mainStyle?.backgroundImage.includes("linear-gradient") &&
-    !style.textContent.includes(unsafeGlobalTextSelector)
-  );
+  const templateScopeSafe = expectedTemplateVersion < 8
+    ? Boolean(style && mainStyle?.backgroundImage.includes("linear-gradient"))
+    : Boolean(style && scopedMain && scopeContractSafe &&
+        mainStyle?.backgroundImage.includes("linear-gradient"));
   const bottomFade = main?.querySelector(
     ".thread-scroll-container .bg-gradient-to-t.from-token-main-surface-primary"
   ) || null;
@@ -1524,8 +1547,11 @@ const restoreFunction = `function () {
 	if (typeof state?.cleanup === "function") state.cleanup();
 	delete globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V2__"];
   for (const style of document.querySelectorAll("#codex-skin-theme-v1")) style.remove();
-  for (const main of document.querySelectorAll('main[data-codex-skin-main="true"]')) {
+  for (const main of document.querySelectorAll(
+    'main[data-codex-skin-main="true"], main[data-codex-skin-scope]'
+  )) {
     main.removeAttribute("data-codex-skin-main");
+    main.removeAttribute("data-codex-skin-scope");
   }
   const root = document.documentElement;
   const backgroundURL = root.getAttribute("data-codex-skin-background-url");
@@ -1546,6 +1572,7 @@ const officialFunction = `function () {
 	return !globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V2__"] &&
 		document.querySelectorAll("#codex-skin-theme-v1").length === 0 &&
     document.querySelectorAll('main[data-codex-skin-main="true"]').length === 0 &&
+    document.querySelectorAll('main[data-codex-skin-scope]').length === 0 &&
     !root.hasAttribute("data-codex-skin") &&
     !root.hasAttribute("data-codex-skin-theme") &&
     !root.hasAttribute("data-codex-skin-theme-version") &&

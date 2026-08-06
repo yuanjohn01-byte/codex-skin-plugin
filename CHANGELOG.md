@@ -7,6 +7,9 @@
 - Report success only after the exact theme is visibly verified, the original native appearance bytes are restored, and the current renderer is re-verified; the Helper then exits and status never reports `runtimeStatus` or `sessionStatus`.
 - Add a versioned renderer selector contract pinned to the MIT-licensed Codex Dream Skin v1.5.11 mechanisms, with L1/L2 compatibility tiers and stable data/CSS-module fallbacks.
 - Add Template v7 for current Codex header and top-fade data/module selectors, preserving Template v6 as the exact migration/rollback style.
+- Add Template v8 route-scoped Home/thread activation: current Home no longer depends on the legacy Composer or thread element before artwork, header, main-boundary, and top-fade rules can apply.
+- Treat L2 renderer refinements as reported compatibility diagnostics rather than rolling back a visibly verified L1 shell/theme transaction; retain fail-closed checks for identity, shell anchors, exact style marker, route scope, artwork and contrast.
+- Record restart confirmation as a normal pre-mutation pause instead of an `CS-CODEX-IDENTITY-001` failure, and accept a controlled-window shutdown race during rollback only after a stable ordinary Codex process is positively confirmed.
 - Replace the persistent Page bootstrap, MutationObserver, route repair, periodic health checks, and controller heartbeat with a current-document-only injector to remove typing-path work and session-lifetime failures.
 - Permit direct theme replacement after any historical session/runtime failure; only the current operation's unconfirmed rollback can require Offline Restore.
 - Recover from macOS LaunchServices dropping Chromium arguments by stopping only the exact verified ordinary process it created, rediscovering the stable signed app, and retrying with the verified executable.

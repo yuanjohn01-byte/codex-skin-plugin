@@ -166,8 +166,18 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
   );
   const removeMainMarkers = (keep = null) => {
     for (const node of document.querySelectorAll('main[data-codex-skin-main="true"]')) {
-      if (node !== keep) node.removeAttribute("data-codex-skin-main");
+      if (node !== keep) {
+        node.removeAttribute("data-codex-skin-main");
+        node.removeAttribute("data-codex-skin-scope");
+      }
     }
+  };
+  const routeScope = () => {
+    if (document.querySelector(selector("home-route")) ||
+        document.querySelector(selector("home-icon")) ||
+        document.querySelector(selector("home-suggestions"))) return "home";
+    if (document.querySelector(selector("thread-surface"))) return "thread";
+    return "shell";
   };
   const setAttribute = (node, name, value) => {
     if (node.getAttribute(name) !== value) node.setAttribute(name, value);
@@ -252,7 +262,9 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
     const styleInstalled = styleMode === "adopted"
       ? Boolean(styleSheet && document.adoptedStyleSheets.includes(styleSheet))
       : Boolean(styleNode && styleNode.isConnected && !styleNode.disabled);
+    const scope = routeScope();
     if (currentMain === main && main.getAttribute("data-codex-skin-main") === "true" &&
+        main.getAttribute("data-codex-skin-scope") === scope &&
         root.getAttribute("data-codex-skin") === "active" &&
         root.getAttribute("data-codex-skin-theme") === themeId &&
         root.getAttribute("data-codex-skin-theme-version") === themeVersion &&
@@ -260,11 +272,10 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
         styleInstalled &&
         document.querySelectorAll("#codex-skin-theme-v1").length === 1) return true;
     activateRoot();
-    if (currentMain !== main) {
-      removeMainMarkers(main);
-      currentMain = main;
-      setAttribute(main, "data-codex-skin-main", "true");
-    }
+    removeMainMarkers(main);
+    currentMain = main;
+    setAttribute(main, "data-codex-skin-main", "true");
+    setAttribute(main, "data-codex-skin-scope", scope);
     return true;
   };
   const cleanup = () => {

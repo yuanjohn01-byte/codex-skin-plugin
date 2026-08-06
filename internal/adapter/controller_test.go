@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 
@@ -81,6 +82,20 @@ func TestInstallControllerUsesCurrentDocumentOnly(t *testing.T) {
 	for _, method := range methods {
 		if method == "Page.addScriptToEvaluateOnNewDocument" || method == "Page.removeScriptToEvaluateOnNewDocument" {
 			t.Fatalf("on-demand injector registered persistent Page bootstrap: %v", methods)
+		}
+	}
+}
+
+func TestApplyFunctionMarksAnExplicitHomeOrThreadScope(t *testing.T) {
+	for _, fragment := range []string{
+		`const routeScope = () =>`,
+		`selector("home-suggestions")`,
+		`selector("thread-surface")`,
+		`setAttribute(main, "data-codex-skin-scope", scope)`,
+		`node.removeAttribute("data-codex-skin-scope")`,
+	} {
+		if !strings.Contains(applyFunction, fragment) {
+			t.Fatalf("apply function is missing %q", fragment)
 		}
 	}
 }

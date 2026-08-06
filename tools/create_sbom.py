@@ -17,7 +17,7 @@ from typing import Any
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SUMMARY = ROOT / "dist" / "helper" / "build-summary.json"
 REPOSITORY = "yuanjohn01-byte/codex-skin-plugin"
-VERSION = "0.1.0-paid-alpha.7"
+VERSION = "0.1.0-paid-alpha.8"
 RELEASE_TAG = f"helper-v{VERSION}"
 DIGEST = re.compile(r"^[0-9a-f]{64}$")
 PLATFORMS = ("macos-arm64", "macos-x64", "windows-x64")

@@ -9,7 +9,7 @@ const (
 	StateSchemaVersion     = 1
 	CurrentEngineVersion   = "0.2.0"
 	MinimumTemplateVersion = 1
-	TemplateVersion        = 7
+	TemplateVersion        = 8
 	MarkerID               = "codex-skin-theme-v1"
 	RootMarkerAttribute    = "data-codex-skin"
 	ThemeMarkerAttribute   = "data-codex-skin-theme"
