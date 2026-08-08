@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 )
@@ -17,6 +18,7 @@ type fakeAdapter struct {
 	events              []string
 	cancelOnApply       context.CancelFunc
 	failOpen            bool
+	failCapture         bool
 	failApply           bool
 	mutateBeforeFailure bool
 	failVerify          bool
@@ -28,21 +30,71 @@ type fakeAdapter struct {
 
 type primingAdapter struct {
 	*fakeAdapter
+	failPrime bool
+}
+
+type finalizingAdapter struct {
+	*fakeAdapter
+}
+
+type restartConsentThemeAdapter struct {
+	*fakeAdapter
+}
+
+type boundedVerificationAdapter struct {
+	*fakeAdapter
+	verification ThemeVerificationResult
+	waitErr      error
+}
+
+func (adapter *boundedVerificationAdapter) WaitForThemeVerification(
+	context.Context,
+	Session,
+	CompiledTheme,
+) (ThemeVerificationResult, error) {
+	adapter.events = append(adapter.events, "wait_verify")
+	return adapter.verification, adapter.waitErr
+}
+
+func (adapter *restartConsentThemeAdapter) OpenVerifiedThemeSession(
+	context.Context,
+	CompiledTheme,
+) (Session, error) {
+	adapter.events = append(adapter.events, "open_theme_consent")
+	return Session{}, ErrRestartConsent
+}
+
+func (adapter *finalizingAdapter) FinalizeOfficialRollback(context.Context, Session) error {
+	adapter.events = append(adapter.events, "finalize_official")
+	return nil
 }
 
 func (adapter *primingAdapter) Prime(_ context.Context, _ Session, compiled CompiledTheme) error {
 	adapter.events = append(adapter.events, "prime")
+	if adapter.failPrime {
+		return errors.New("prime rejected")
+	}
 	if !adapter.state.StylePresent {
 		return nil
 	}
 	if adapter.state.ThemePublicID != compiled.ThemePublicID ||
 		adapter.state.ThemeVersion != compiled.ThemeVersion ||
-		adapter.state.TemplateVersion != compiled.TemplateVersion ||
-		adapter.state.StyleText != compiled.StyleText ||
 		adapter.state.BackgroundDataURL != compiled.BackgroundDataURL {
 		return ErrCapabilityBlocked
 	}
-	return nil
+	if adapter.state.TemplateVersion == compiled.TemplateVersion &&
+		adapter.state.StyleText == compiled.StyleText {
+		return nil
+	}
+	if adapter.state.TemplateVersion == TemplateVersion-1 &&
+		adapter.state.StyleText == compiled.PreviousStyleText {
+		return nil
+	}
+	if adapter.state.TemplateVersion == MinimumTemplateVersion &&
+		adapter.state.StyleText == compiled.LegacyStyleText {
+		return nil
+	}
+	return ErrCapabilityBlocked
 }
 
 func (adapter *fakeAdapter) OpenVerifiedSession(context.Context) (Session, error) {
@@ -76,6 +128,9 @@ func (adapter *fakeAdapter) Probe(context.Context, Session) (RegionReport, error
 
 func (adapter *fakeAdapter) Capture(context.Context, Session) (Snapshot, error) {
 	adapter.events = append(adapter.events, "capture")
+	if adapter.failCapture {
+		return Snapshot{}, errors.New("capture rejected")
+	}
 	return adapter.state, nil
 }
 
@@ -84,7 +139,7 @@ func (adapter *fakeAdapter) Apply(_ context.Context, _ Session, compiled Compile
 	next := Snapshot{
 		StylePresent: true, StyleText: compiled.StyleText, ThemePublicID: compiled.ThemePublicID,
 		ThemeVersion: compiled.ThemeVersion, TemplateVersion: compiled.TemplateVersion,
-		BackgroundDataURL: compiled.BackgroundDataURL,
+		BackgroundDataURL: compiled.BackgroundDataURL, AppearanceMode: compiled.AppearanceMode,
 	}
 	if adapter.cancelOnApply != nil {
 		adapter.state = next
@@ -163,7 +218,7 @@ func TestApplyVerifiedCommitsOnlyAfterVerification(t *testing.T) {
 	if result.ThemePublicID != "100001" || result.ThemeVersion != "1.0.0" {
 		t.Fatalf("result = %#v", result)
 	}
-	wantEvents := []string{"open", "probe", "capture", "apply", "verify", "close"}
+	wantEvents := []string{"open", "capture", "probe", "apply", "verify", "close"}
 	if strings.Join(adapter.events, ",") != strings.Join(wantEvents, ",") {
 		t.Fatalf("events = %v, want %v", adapter.events, wantEvents)
 	}
@@ -196,16 +251,20 @@ func TestApplyVerifiedCommitsOnlyAfterVerification(t *testing.T) {
 		strings.Contains(adapter.state.StyleText, "rgb(data-codex-skin") {
 		t.Fatalf("compiled template token substitution is invalid")
 	}
-	if !strings.Contains(adapter.state.StyleText, "main.main-surface") ||
+	if !strings.Contains(adapter.state.StyleText, `main[data-codex-skin-main="true"]`) ||
 		!strings.Contains(adapter.state.StyleText, "aside.app-shell-left-panel") ||
 		!strings.Contains(adapter.state.StyleText, ".composer-surface-chrome") ||
 		!strings.Contains(adapter.state.StyleText, ".group\\/home-suggestions") ||
 		!strings.Contains(adapter.state.StyleText, ".app-shell-main-content-top-fade") ||
-		!strings.Contains(adapter.state.StyleText, "main.main-surface {\n  box-shadow: none !important") ||
+		!strings.Contains(adapter.state.StyleText, ":has(") ||
+		!strings.Contains(adapter.state.StyleText, ".thread-scroll-container") ||
+		!strings.Contains(adapter.state.StyleText, ".bg-gradient-to-t.from-token-main-surface-primary") ||
 		!strings.Contains(adapter.state.StyleText, "aside.app-shell-left-panel::after") ||
 		!strings.Contains(adapter.state.StyleText, "content: none !important") ||
 		!strings.Contains(adapter.state.StyleText, "background-image: none !important") ||
-		!strings.Contains(adapter.state.StyleText, "transition: none !important") {
+		!strings.Contains(adapter.state.StyleText, "transition: none !important") ||
+		strings.Contains(adapter.state.StyleText, `main[data-codex-skin-main="true"] [class~="text-token-text-primary"],
+:root[data-codex-skin="active"] main[data-codex-skin-main="true"] [class~="text-token-foreground"]`) {
 		t.Fatalf("compiled template is missing fixed region selectors")
 	}
 	if !strings.HasPrefix(adapter.state.BackgroundDataURL, "data:image/png;base64,") ||
@@ -220,7 +279,7 @@ func TestApplyFailureRollsBackAndDoesNotCommitDesired(t *testing.T) {
 	before := Snapshot{
 		StylePresent: true, StyleText: "trusted prior style", ThemePublicID: "199999",
 		ThemeVersion: "2.0.0", TemplateVersion: 1,
-		BackgroundDataURL: "data:image/png;base64,AA==",
+		BackgroundDataURL: "data:image/png;base64,AA==", AppearanceMode: "dark",
 	}
 	adapter := &fakeAdapter{state: before, probe: passingReport(), failVerify: true}
 	instance, _ := New(store, adapter)
@@ -236,6 +295,102 @@ func TestApplyFailureRollsBackAndDoesNotCommitDesired(t *testing.T) {
 	}
 	if !strings.Contains(strings.Join(adapter.events, ","), "verify,rollback") {
 		t.Fatalf("events = %v", adapter.events)
+	}
+}
+
+func TestApplyVerifiedPersistsBoundedVerificationSummaryBeforeRollback(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	store := testStore(t)
+	report := passingReport()
+	report.StyleMarkerCount = 1
+	report.TemplateVersion = TemplateVersion
+	report.ThemePublicID = verified.Manifest.ThemePublicID
+	report.BackgroundLoaded = false
+	report.Regions["sidebar"] = RegionFail
+	adapter := &boundedVerificationAdapter{
+		fakeAdapter: &fakeAdapter{probe: passingReport()},
+		verification: ThemeVerificationResult{
+			Report: report, Attempts: 4, ReapplyAttempted: true, ProbeCompleted: true,
+		},
+		waitErr: ErrVerifyFailed,
+	}
+	instance, err := New(store, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instance.ApplyVerified(context.Background(), verified); !errors.Is(err, ErrVerifyFailed) {
+		t.Fatalf("ApplyVerified() error = %v", err)
+	}
+	entries, err := os.ReadDir(filepath.Join(store.Root(), "state", "operations"))
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("operation journals = %#v, error = %v", entries, err)
+	}
+	var journal Journal
+	found, err := readJSON(filepath.Join(store.Root(), "state", "operations", entries[0].Name()), &journal)
+	if err != nil || !found || journal.Verification == nil {
+		t.Fatalf("journal = %#v, found=%t, error=%v", journal, found, err)
+	}
+	if journal.ErrorCode != "CS-VERIFY-001" || journal.Verification.Attempts != 4 ||
+		!journal.Verification.ReapplyAttempted || !journal.Verification.ProbeCompleted ||
+		journal.Verification.BackgroundLoaded ||
+		journal.Verification.Regions["sidebar"] != RegionFail {
+		t.Fatalf("verification journal = %#v", journal)
+	}
+	if got := strings.Join(adapter.events, ","); got != "open,capture,probe,apply,wait_verify,rollback,verify_official,close" {
+		t.Fatalf("events = %s", got)
+	}
+}
+
+func TestJournalRejectsUnallowlistedVerificationFields(t *testing.T) {
+	store := testStore(t)
+	operationID, err := store.NewOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = store.WriteJournal(Journal{
+		OperationID: operationID, Kind: "apply", Stage: "verify", Status: "running",
+		Verification: &VerificationSummary{
+			Attempts: 1,
+			Regions:  map[string]RegionStatus{"untrusted-dom-text": RegionPass},
+		},
+	})
+	if !errors.Is(err, ErrStateUnsafe) {
+		t.Fatalf("WriteJournal() error = %v, want state safety rejection", err)
+	}
+}
+
+func TestRestorePreservesInterruptedJournalStageInRedactedTrace(t *testing.T) {
+	store := testStore(t)
+	operationID, err := store.NewOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := Journal{
+		OperationID: operationID, Kind: "apply", Stage: "verify", Status: "running",
+		ThemePublicID: "100001", ThemeVersion: "1.0.0",
+	}
+	if err := store.WriteJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	instance, err := New(store, &fakeAdapter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.resolveInterruptedJournals("op_ffffffffffffffff"); err != nil {
+		t.Fatal(err)
+	}
+	var restored Journal
+	found, err := readJSON(filepath.Join(store.Root(), "state", "operations", operationID+".json"), &restored)
+	if err != nil || !found {
+		t.Fatalf("restored journal found=%t err=%v", found, err)
+	}
+	if restored.Stage != "official_restored" || restored.InterruptedStage != "verify" ||
+		restored.ErrorCode != "CS-INTERRUPTED-RESTORED-001" {
+		t.Fatalf("restored journal = %#v", restored)
+	}
+	if len(restored.Trace) < 2 || restored.Trace[0].Stage != "verify" ||
+		restored.Trace[len(restored.Trace)-1].Stage != "official_restored" {
+		t.Fatalf("redacted trace = %#v", restored.Trace)
 	}
 }
 
@@ -354,11 +509,13 @@ func TestRollbackRestoresPreviousDesiredState(t *testing.T) {
 		StylePresent: true, StyleText: "trusted previous style",
 		BackgroundDataURL: "data:image/png;base64,AA==",
 		ThemePublicID:     "199999", ThemeVersion: "2.0.0", TemplateVersion: TemplateVersion,
+		AppearanceMode: "dark",
 	}
 	adapter := &fakeAdapter{state: Snapshot{
 		StylePresent: true, StyleText: "partially committed style",
 		BackgroundDataURL: "data:image/png;base64,AQ==",
 		ThemePublicID:     "100001", ThemeVersion: "1.0.0", TemplateVersion: TemplateVersion,
+		AppearanceMode: "dark",
 	}}
 	instance, _ := New(store, adapter)
 	operationID, _ := store.NewOperationID()
@@ -409,19 +566,151 @@ func TestCompileRejectsUnsupportedMinimumEngineBeforeRenderer(t *testing.T) {
 	}
 }
 
-func TestCapabilityFailureStopsBeforeBackupOrApply(t *testing.T) {
+func TestCapabilityFailureRollsBackBeforeApply(t *testing.T) {
 	verified := verifiedThemeForEngine(t)
 	store := testStore(t)
 	report := passingReport()
 	report.Regions["sidebar"] = RegionFail
-	adapter := &fakeAdapter{probe: report}
+	adapter := &finalizingAdapter{fakeAdapter: &fakeAdapter{probe: report}}
 	instance, _ := New(store, adapter)
 	_, err := instance.ApplyVerified(context.Background(), verified)
 	if !errors.Is(err, ErrCapabilityBlocked) {
 		t.Fatalf("ApplyVerified() error = %v", err)
 	}
-	if got := strings.Join(adapter.events, ","); got != "open,probe,close" {
+	if got := strings.Join(adapter.events, ","); got != "open,capture,probe,rollback,verify_official,finalize_official,close" {
 		t.Fatalf("events = %s", got)
+	}
+}
+
+func TestPrimeFailureRestoresTrustedPreviousTheme(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	store := testStore(t)
+	base := &fakeAdapter{probe: passingReport()}
+	adapter := &primingAdapter{fakeAdapter: base}
+	instance, _ := New(store, adapter)
+	if _, err := instance.ApplyVerified(context.Background(), verified); err != nil {
+		t.Fatalf("first ApplyVerified() error = %v", err)
+	}
+	previous := adapter.state
+	adapter.events = nil
+	adapter.failPrime = true
+	if _, err := instance.ApplyVerified(context.Background(), verified); err == nil {
+		t.Fatal("prime failure was accepted")
+	}
+	if adapter.state != previous {
+		t.Fatalf("state after prime rollback = %#v, want %#v", adapter.state, previous)
+	}
+	if got := strings.Join(adapter.events, ","); got != "open,prime,rollback,capture,close" {
+		t.Fatalf("events = %s", got)
+	}
+}
+
+func TestCaptureFailureRestoresOfficialPreflightState(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	store := testStore(t)
+	adapter := &finalizingAdapter{fakeAdapter: &fakeAdapter{probe: passingReport(), failCapture: true}}
+	instance, _ := New(store, adapter)
+	if _, err := instance.ApplyVerified(context.Background(), verified); err == nil {
+		t.Fatal("capture failure was accepted")
+	}
+	if adapter.state.StylePresent {
+		t.Fatalf("state after capture rollback = %#v", adapter.state)
+	}
+	if got := strings.Join(adapter.events, ","); got != "open,capture,rollback,verify_official,finalize_official,close" {
+		t.Fatalf("events = %s", got)
+	}
+}
+
+func TestOpenFailureKeepsPrepareJournalRecoverable(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	store := testStore(t)
+	base := &fakeAdapter{probe: passingReport(), failOpen: true}
+	adapter := &finalizingAdapter{fakeAdapter: base}
+	instance, _ := New(store, adapter)
+	if _, err := instance.ApplyVerified(context.Background(), verified); err == nil {
+		t.Fatal("open failure was accepted")
+	}
+	running, err := store.RunningJournals()
+	if err != nil || len(running) != 1 || running[0].Stage != "prepare" || running[0].RecoveryID == "" {
+		t.Fatalf("recoverable prepare journal = %#v, error = %v", running, err)
+	}
+	base.failOpen = false
+	if err := instance.RecoverInterrupted(context.Background()); err != nil {
+		t.Fatalf("RecoverInterrupted() error = %v", err)
+	}
+	running, err = store.RunningJournals()
+	if err != nil || len(running) != 0 {
+		t.Fatalf("running journals after recovery = %#v, error = %v", running, err)
+	}
+	if got := strings.Join(adapter.events, ","); got != "open,open,restore_official,verify_official,finalize_official,close" {
+		t.Fatalf("events = %s", got)
+	}
+}
+
+func TestCapabilitiesRecordHomeUtilityBarDiagnosticsWithoutRollingBackThemedShell(t *testing.T) {
+	report := passingReport()
+	report.Regions["composerUtilityBar"] = RegionNotPresent
+	if !CapabilitiesAllowApply(report) {
+		t.Fatal("task page without the home-only utility bar was rejected")
+	}
+
+	report.Regions["composerUtilityBar"] = RegionFail
+	if !CapabilitiesAllowApply(report) {
+		t.Fatal("a diagnostic-only utility bar failure rolled back the verified shell")
+	}
+}
+
+func TestCapabilitiesRecordConversationActivityDiagnosticsWithoutRollingBackThemedShell(t *testing.T) {
+	report := passingReport()
+	report.Regions["conversationActivity"] = RegionNotPresent
+	if !CapabilitiesAllowApply(report) {
+		t.Fatal("task page without a rendered activity disclosure was rejected")
+	}
+
+	report.Regions["conversationActivity"] = RegionFail
+	if !CapabilitiesAllowApply(report) {
+		t.Fatal("a diagnostic-only activity failure rolled back the verified shell")
+	}
+}
+
+func TestCapabilitiesRecordDiffResourceDiagnosticsWithoutRollingBackThemedShell(t *testing.T) {
+	report := passingReport()
+	report.Regions["conversationDiffResource"] = RegionNotPresent
+	if !CapabilitiesAllowApply(report) {
+		t.Fatal("task page without a rendered diff resource card was rejected")
+	}
+
+	report.Regions["conversationDiffResource"] = RegionFail
+	if !CapabilitiesAllowApply(report) {
+		t.Fatal("a diagnostic-only resource card failure rolled back the verified shell")
+	}
+}
+
+func TestCapabilitiesAllowCurrentHomeWithoutLegacyComposerOrTopFade(t *testing.T) {
+	report := passingReport()
+	report.StyleMarkerCount = 1
+	report.TemplateVersion = TemplateVersion
+	report.ThemePublicID = "100012"
+	report.BackgroundLoaded = true
+	report.Regions = map[string]RegionStatus{
+		"shellMain":                RegionPass,
+		"sidebar":                  RegionPass,
+		"headerTint":               RegionPass,
+		"templateScope":            RegionPass,
+		"themeContrast":            RegionPass,
+		"home":                     RegionPass,
+		"mainBoundary":             RegionFail,
+		"composer":                 RegionNotPresent,
+		"topFade":                  RegionFail,
+		"bottomFade":               RegionNotPresent,
+		"composerUtilityBar":       RegionNotPresent,
+		"conversationActivity":     RegionNotPresent,
+		"conversationDiffResource": RegionNotPresent,
+		"suggestionCards":          RegionPass,
+		"projectPicker":            RegionNotPresent,
+	}
+	if !CapabilitiesAllowApply(report) {
+		t.Fatalf("current Home fixture was rejected: %#v", report)
 	}
 }
 
@@ -437,7 +726,7 @@ func TestRestoreOfficialIsOfflineIdempotentAndClearsDesired(t *testing.T) {
 		state: Snapshot{
 			StylePresent: true, StyleText: "style", ThemePublicID: "100001",
 			ThemeVersion: "1.0.0", TemplateVersion: 1,
-			BackgroundDataURL: "data:image/png;base64,AA==",
+			BackgroundDataURL: "data:image/png;base64,AA==", AppearanceMode: "dark",
 		},
 		probe: passingReport(),
 	}
@@ -494,8 +783,54 @@ func TestCachedPackageIsRevalidatedBeforeASecondApply(t *testing.T) {
 	}
 }
 
+func TestApplyMigratesVerifiedPreviousTemplateStateToCurrentTemplate(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	store := testStore(t)
+	base := &fakeAdapter{probe: passingReport()}
+	adapter := &primingAdapter{fakeAdapter: base}
+	instance, _ := New(store, adapter)
+	if _, err := instance.ApplyVerified(context.Background(), verified); err != nil {
+		t.Fatalf("first ApplyVerified() error = %v", err)
+	}
+	desired, found, err := store.ReadDesired()
+	if err != nil || !found {
+		t.Fatalf("ReadDesired() = %#v, %v, %v", desired, found, err)
+	}
+	cache, err := store.ThemeCachePath(desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := CompileTheme(verified, cache)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desired.TemplateVersion = TemplateVersion - 1
+	if err := store.WriteDesired(desired); err != nil {
+		t.Fatal(err)
+	}
+	adapter.state = Snapshot{
+		StylePresent: true, StyleText: compiled.PreviousStyleText,
+		BackgroundDataURL: compiled.BackgroundDataURL,
+		ThemePublicID:     compiled.ThemePublicID,
+		ThemeVersion:      compiled.ThemeVersion,
+		TemplateVersion:   TemplateVersion - 1,
+		AppearanceMode:    compiled.AppearanceMode,
+	}
+	if _, err := instance.ApplyVerified(context.Background(), verified); err != nil {
+		t.Fatalf("migration ApplyVerified() error = %v", err)
+	}
+	migrated, found, err := store.ReadDesired()
+	if err != nil || !found || migrated.TemplateVersion != TemplateVersion {
+		t.Fatalf("migrated desired = %#v, found=%v, err=%v", migrated, found, err)
+	}
+	if adapter.state.TemplateVersion != TemplateVersion ||
+		adapter.state.StyleText != compiled.StyleText {
+		t.Fatalf("migrated renderer state = %#v", adapter.state)
+	}
+}
+
 func TestInterruptedApplyStagesRestoreDurableLastKnownGood(t *testing.T) {
-	for _, stage := range []string{"apply", "verify", "commit"} {
+	for _, stage := range []string{"prepare", "backup", "apply", "verify", "commit"} {
 		t.Run(stage, func(t *testing.T) {
 			store := testStore(t)
 			previous := DesiredTheme{
@@ -514,6 +849,7 @@ func TestInterruptedApplyStagesRestoreDurableLastKnownGood(t *testing.T) {
 				StylePresent: true, StyleText: "trusted previous fixed template",
 				BackgroundDataURL: "data:image/png;base64,AA==",
 				ThemePublicID:     "199999", ThemeVersion: "2.0.0", TemplateVersion: 1,
+				AppearanceMode: "dark",
 			}
 			if err := store.WriteRecoveryPoint(RecoveryPoint{
 				RecoveryID: recoveryID, OperationID: operationID, CapturedAt: "2026-07-26T05:59:00Z",
@@ -533,6 +869,7 @@ func TestInterruptedApplyStagesRestoreDurableLastKnownGood(t *testing.T) {
 					StylePresent: true, StyleText: "partially applied new template",
 					BackgroundDataURL: "data:image/png;base64,AQ==",
 					ThemePublicID:     "100001", ThemeVersion: "1.0.0", TemplateVersion: 1,
+					AppearanceMode: "dark",
 				},
 				probe: passingReport(),
 			}
@@ -574,6 +911,42 @@ func TestInterruptedPreMutationStageDoesNotTouchRenderer(t *testing.T) {
 	}
 }
 
+func TestRestartConsentLeavesNoRecoverableApplyJournal(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	store := testStore(t)
+	adapter := &restartConsentThemeAdapter{fakeAdapter: &fakeAdapter{probe: passingReport()}}
+	instance, err := New(store, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = instance.ApplyVerified(context.Background(), verified)
+	if !errors.Is(err, ErrRestartConsent) {
+		t.Fatalf("ApplyVerified() error = %v, want ErrRestartConsent", err)
+	}
+	running, readErr := store.RunningJournals()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(running) != 0 {
+		t.Fatalf("restart consent left a recoverable journal: %#v", running)
+	}
+	entries, readErr := os.ReadDir(filepath.Join(store.Root(), "state", "operations"))
+	if readErr != nil || len(entries) != 1 {
+		t.Fatalf("restart consent journal entries = %#v, error = %v", entries, readErr)
+	}
+	var journal Journal
+	if _, readErr := readJSON(filepath.Join(store.Root(), "state", "operations", entries[0].Name()), &journal); readErr != nil {
+		t.Fatal(readErr)
+	}
+	if journal.Status != "pending_confirmation" || journal.Stage != "restart_confirmation" || journal.ErrorCode != "" {
+		t.Fatalf("restart consent journal was reported as a failure: %#v", journal)
+	}
+	if strings.Join(adapter.events, ",") != "open_theme_consent" {
+		t.Fatalf("restart consent touched the renderer: %v", adapter.events)
+	}
+}
+
 func TestStoreRejectsPluginOverlapSymlinkAndConcurrentWriter(t *testing.T) {
 	parent := t.TempDir()
 	cache := filepath.Join(parent, "plugin")
@@ -607,14 +980,58 @@ func TestStoreRejectsPluginOverlapSymlinkAndConcurrentWriter(t *testing.T) {
 	}
 }
 
+func TestForegroundOperationWaitsForShortRuntimeHealthLock(t *testing.T) {
+	store := testStore(t)
+	releaseHealth, err := store.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	released := make(chan struct{})
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		_ = releaseHealth()
+		close(released)
+	}()
+	unlock, err := acquireOperationLock(context.Background(), store)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := unlock(); err != nil {
+		t.Fatal(err)
+	}
+	<-released
+}
+
+func TestForegroundOperationLockWaitHonorsCancellation(t *testing.T) {
+	store := testStore(t)
+	releaseHealth, err := store.Lock()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseHealth()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := acquireOperationLock(ctx, store); !errors.Is(err, context.Canceled) ||
+		!errors.Is(err, ErrBusy) {
+		t.Fatalf("lock wait error = %v", err)
+	}
+}
+
 func passingReport() RegionReport {
 	return RegionReport{
 		StyleMarkerCount: 0,
 		Regions: map[string]RegionStatus{
 			"home": RegionPass, "mainBoundary": RegionPass, "sidebar": RegionPass,
-			"composerUtilityBar": RegionPass,
-			"suggestionCards":    RegionNotPresent,
-			"projectPicker":      RegionNotPresent, "composer": RegionPass, "topFade": RegionPass,
+			"composerUtilityBar":       RegionPass,
+			"conversationActivity":     RegionPass,
+			"conversationDiffResource": RegionPass,
+			"suggestionCards":          RegionNotPresent,
+			"projectPicker":            RegionNotPresent,
+			"composer":                 RegionPass,
+			"topFade":                  RegionPass,
+			"bottomFade":               RegionPass,
+			"templateScope":            RegionPass,
+			"themeContrast":            RegionPass,
 		},
 	}
 }

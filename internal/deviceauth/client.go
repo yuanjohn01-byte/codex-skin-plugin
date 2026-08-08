@@ -3,8 +3,12 @@ package deviceauth
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -17,6 +21,7 @@ import (
 )
 
 const (
+	startPath   = "/api/v1/plugin/device-authorizations"
 	pollPath    = "/api/v1/plugin/device-authorizations/token"
 	cancelPath  = "/api/v1/plugin/device-authorizations/cancel"
 	refreshPath = "/api/v1/plugin/token/refresh"
@@ -29,6 +34,12 @@ const (
 	codeDenied         = "CS-AUTH-POLL-006"
 	codeConsumed       = "CS-AUTH-POLL-007"
 	codeDeviceLimit    = "CS-AUTH-POLL-010"
+
+	codeStartInvalidRequest = "CS-AUTH-START-001"
+	codeStartUnavailable    = "CS-AUTH-START-002"
+	codeStartConflict       = "CS-AUTH-START-003"
+	codeStartLimited        = "CS-AUTH-START-004"
+	codeStartFailed         = "CS-AUTH-START-005"
 
 	codeTokenInvalidRequest = "CS-AUTH-TOKEN-001"
 	codeTokenInvalidGrant   = "CS-AUTH-TOKEN-002"
@@ -56,6 +67,7 @@ var (
 type Outcome string
 
 const (
+	OutcomeStarted     Outcome = "started"
 	OutcomeAuthorized  Outcome = "authorized"
 	OutcomeCancelled   Outcome = "cancelled"
 	OutcomeExpired     Outcome = "expired"
@@ -71,6 +83,24 @@ type Credentials struct {
 	DeviceCode   string
 	CodeVerifier string
 	DeviceKey    string
+}
+
+type StartInput struct {
+	DeviceDisplayName string
+	Platform          string
+	PluginVersion     string
+	EngineVersion     string
+}
+
+type StartResult struct {
+	Outcome         Outcome
+	RequestID       string
+	Credentials     Credentials
+	VerificationURL string
+	ExpiresIn       time.Duration
+	Interval        time.Duration
+	ErrorCode       string
+	RetryAfter      time.Duration
 }
 
 func (Credentials) String() string {
@@ -89,6 +119,13 @@ type Device struct {
 type AccessToken struct {
 	value     string
 	expiresIn time.Duration
+}
+
+func NewAccessToken(value string, expiresIn time.Duration) (*AccessToken, error) {
+	if !validAccessToken(value) || expiresIn <= 0 || expiresIn > accessTokenLifetime {
+		return nil, ErrInvalidCredentials
+	}
+	return &AccessToken{value: value, expiresIn: expiresIn}, nil
 }
 
 func (token *AccessToken) Value() string {
@@ -182,6 +219,36 @@ type responseEnvelope struct {
 			State         string `json:"state"`
 			RetryAfter    int    `json:"retryAfter"`
 			ManagementURL string `json:"managementUrl"`
+		} `json:"details"`
+	} `json:"error"`
+}
+
+type startRequest struct {
+	DeviceKey             string `json:"deviceKey"`
+	DeviceDisplayName     string `json:"deviceDisplayName"`
+	Platform              string `json:"platform"`
+	CodeChallenge         string `json:"codeChallenge"`
+	PluginVersion         string `json:"pluginVersion"`
+	EngineVersion         string `json:"engineVersion"`
+	PluginProtocolVersion int    `json:"pluginProtocolVersion"`
+}
+
+type startResponseEnvelope struct {
+	Data *struct {
+		DeviceCode              string `json:"deviceCode"`
+		VerificationURIComplete string `json:"verificationUriComplete"`
+		ExpiresIn               int    `json:"expiresIn"`
+		Interval                int    `json:"interval"`
+	} `json:"data"`
+	RequestID string `json:"requestId"`
+	Error     *struct {
+		Code       string `json:"code"`
+		Message    string `json:"message"`
+		Action     string `json:"action"`
+		Retryable  bool   `json:"retryable"`
+		IncidentID any    `json:"incidentId"`
+		Details    struct {
+			RetryAfter int `json:"retryAfter"`
 		} `json:"details"`
 	} `json:"error"`
 }
@@ -306,6 +373,175 @@ func waitForContext(ctx context.Context, duration time.Duration) error {
 	case <-timer.C:
 		return nil
 	}
+}
+
+func (client *Client) Start(ctx context.Context, input StartInput) (StartResult, error) {
+	if !validStartInput(input) {
+		return StartResult{}, ErrInvalidConfiguration
+	}
+	deviceKey, err := randomSecret()
+	if err != nil {
+		return StartResult{}, ErrInvalidConfiguration
+	}
+	codeVerifier, err := randomSecret()
+	if err != nil {
+		return StartResult{}, ErrInvalidConfiguration
+	}
+	challengeDigest := sha256.Sum256([]byte(codeVerifier))
+	idempotencyKey, err := randomUUIDv4()
+	if err != nil {
+		return StartResult{}, ErrInvalidConfiguration
+	}
+	payload := startRequest{
+		DeviceKey:             deviceKey,
+		DeviceDisplayName:     input.DeviceDisplayName,
+		Platform:              input.Platform,
+		CodeChallenge:         base64.RawURLEncoding.EncodeToString(challengeDigest[:]),
+		PluginVersion:         input.PluginVersion,
+		EngineVersion:         input.EngineVersion,
+		PluginProtocolVersion: 1,
+	}
+	status, envelope, retryAfter, replayed, err := client.postStart(ctx, idempotencyKey, payload)
+	if err != nil {
+		return StartResult{}, err
+	}
+	if status == http.StatusCreated || status == http.StatusOK {
+		if envelope.Error != nil ||
+			envelope.Data == nil ||
+			(status == http.StatusOK && !replayed) ||
+			(status == http.StatusCreated && replayed) ||
+			!validOpaqueSecret(envelope.Data.DeviceCode) ||
+			envelope.Data.ExpiresIn < 1 ||
+			envelope.Data.ExpiresIn > 300 ||
+			envelope.Data.Interval != int(minimumPollInterval/time.Second) ||
+			!client.validVerificationURL(envelope.Data.VerificationURIComplete) {
+			return StartResult{}, ErrProtocol
+		}
+		return StartResult{
+			Outcome:         OutcomeStarted,
+			RequestID:       envelope.RequestID,
+			Credentials:     Credentials{DeviceCode: envelope.Data.DeviceCode, CodeVerifier: codeVerifier, DeviceKey: deviceKey},
+			VerificationURL: envelope.Data.VerificationURIComplete,
+			ExpiresIn:       time.Duration(envelope.Data.ExpiresIn) * time.Second,
+			Interval:        time.Duration(envelope.Data.Interval) * time.Second,
+		}, nil
+	}
+	if envelope.Error == nil || envelope.Data != nil {
+		return StartResult{}, ErrProtocol
+	}
+	result := StartResult{
+		RequestID:  envelope.RequestID,
+		ErrorCode:  envelope.Error.Code,
+		RetryAfter: retryAfter,
+	}
+	switch envelope.Error.Code {
+	case codeStartUnavailable, codeStartLimited:
+		if (status != http.StatusServiceUnavailable && status != http.StatusTooManyRequests) ||
+			!envelope.Error.Retryable ||
+			envelope.Error.Action != "retry_later" {
+			return StartResult{}, ErrProtocol
+		}
+		result.Outcome = OutcomeRetry
+		return result, nil
+	case codeStartConflict:
+		if (status != http.StatusConflict && status != http.StatusGone) ||
+			envelope.Error.Action != "use_new_idempotency_key" {
+			return StartResult{}, ErrProtocol
+		}
+		result.Outcome = OutcomeInvalid
+		return result, nil
+	case codeStartInvalidRequest, codeStartFailed:
+		return StartResult{}, ErrProtocol
+	default:
+		return StartResult{}, ErrProtocol
+	}
+}
+
+func validStartInput(input StartInput) bool {
+	nameLength := utf8.RuneCountInString(input.DeviceDisplayName)
+	if !utf8.ValidString(input.DeviceDisplayName) ||
+		strings.TrimSpace(input.DeviceDisplayName) != input.DeviceDisplayName ||
+		nameLength < 1 ||
+		nameLength > 80 ||
+		(input.Platform != "macos" && input.Platform != "windows") ||
+		!validSemver(input.PluginVersion) ||
+		!validSemver(input.EngineVersion) {
+		return false
+	}
+	for _, character := range input.DeviceDisplayName {
+		if character < 0x20 || character == 0x7f {
+			return false
+		}
+	}
+	return true
+}
+
+func validSemver(value string) bool {
+	if len(value) < 5 || len(value) > 64 || strings.Contains(value, "+") {
+		return false
+	}
+	parts := strings.SplitN(value, "-", 2)
+	core := strings.Split(parts[0], ".")
+	if len(core) != 3 {
+		return false
+	}
+	for _, part := range core {
+		if part == "" || (len(part) > 1 && part[0] == '0') {
+			return false
+		}
+		for _, character := range part {
+			if character < '0' || character > '9' {
+				return false
+			}
+		}
+	}
+	if len(parts) == 2 && (parts[1] == "" || strings.ContainsAny(parts[1], "_+")) {
+		return false
+	}
+	return true
+}
+
+func randomSecret() (string, error) {
+	value := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, value); err != nil {
+		return "", err
+	}
+	return base64.RawURLEncoding.EncodeToString(value), nil
+}
+
+func randomUUIDv4() (string, error) {
+	value := make([]byte, 16)
+	if _, err := io.ReadFull(rand.Reader, value); err != nil {
+		return "", err
+	}
+	value[6] = (value[6] & 0x0f) | 0x40
+	value[8] = (value[8] & 0x3f) | 0x80
+	return fmt.Sprintf(
+		"%08x-%04x-%04x-%04x-%012x",
+		value[0:4],
+		value[4:6],
+		value[6:8],
+		value[8:10],
+		value[10:16],
+	), nil
+}
+
+func (client *Client) validVerificationURL(value string) bool {
+	parsed, err := url.Parse(value)
+	if err != nil ||
+		!parsed.IsAbs() ||
+		parsed.User != nil ||
+		parsed.Path != "/device/approve" ||
+		parsed.RawPath != "" ||
+		parsed.Fragment != "" ||
+		parsed.Query().Get("token") == "" ||
+		len(parsed.Query()) != 1 ||
+		!validOpaqueSecret(parsed.Query().Get("token")) {
+		return false
+	}
+	return strings.EqualFold(parsed.Scheme, client.baseURL.Scheme) &&
+		strings.EqualFold(parsed.Hostname(), client.baseURL.Hostname()) &&
+		parsed.Port() == client.baseURL.Port()
 }
 
 func (client *Client) Poll(ctx context.Context, credentials Credentials, initialInterval time.Duration) (Result, error) {
@@ -596,6 +832,60 @@ func (client *Client) deleteCredential(ctx context.Context, deviceID string) err
 		return ErrCredentialStore
 	}
 	return nil
+}
+
+func (client *Client) postStart(ctx context.Context, idempotencyKey string, payload startRequest) (int, startResponseEnvelope, time.Duration, bool, error) {
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return 0, startResponseEnvelope{}, 0, false, ErrProtocol
+	}
+	defer zeroBytes(body)
+	endpoint := client.baseURL.ResolveReference(&url.URL{Path: startPath})
+	request, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
+	if err != nil {
+		return 0, startResponseEnvelope{}, 0, false, ErrProtocol
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set("Idempotency-Key", idempotencyKey)
+	response, err := client.httpClient.Do(request)
+	if err != nil {
+		return 0, startResponseEnvelope{}, 0, false, ErrNetwork
+	}
+	defer response.Body.Close()
+	if response.StatusCode >= 300 && response.StatusCode < 400 {
+		return 0, startResponseEnvelope{}, 0, false, ErrProtocol
+	}
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, maxResponseBytes+1))
+	if err != nil || len(responseBody) > maxResponseBytes {
+		zeroBytes(responseBody)
+		return 0, startResponseEnvelope{}, 0, false, ErrProtocol
+	}
+	defer zeroBytes(responseBody)
+	var envelope startResponseEnvelope
+	decoder := json.NewDecoder(bytes.NewReader(responseBody))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&envelope); err != nil || !validRequestID(envelope.RequestID) {
+		return 0, startResponseEnvelope{}, 0, false, ErrProtocol
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		return 0, startResponseEnvelope{}, 0, false, ErrProtocol
+	}
+	replayed := response.Header.Get("Idempotency-Replayed") == "true"
+	retryAfter := time.Duration(0)
+	if envelope.Error != nil {
+		seconds, parseErr := strconv.Atoi(response.Header.Get("Retry-After"))
+		if parseErr == nil && seconds >= 1 && seconds <= 600 {
+			retryAfter = time.Duration(seconds) * time.Second
+		}
+		if envelope.Error.Details.RetryAfter > 0 &&
+			envelope.Error.Details.RetryAfter <= 600 &&
+			time.Duration(envelope.Error.Details.RetryAfter)*time.Second > retryAfter {
+			retryAfter = time.Duration(envelope.Error.Details.RetryAfter) * time.Second
+		}
+	}
+	return response.StatusCode, envelope, retryAfter, replayed, nil
 }
 
 func (client *Client) post(ctx context.Context, path string, payload any) (int, responseEnvelope, time.Duration, error) {

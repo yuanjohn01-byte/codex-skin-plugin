@@ -66,21 +66,222 @@ func LaunchControlled(ctx context.Context, installation Installation, profile st
 	if err != nil {
 		return 0, err
 	}
-	command := exec.Command(
-		installation.Executable,
-		"--remote-debugging-address=127.0.0.1",
-		"--remote-debugging-port="+strconv.Itoa(port),
-		"--user-data-dir="+profile,
-		"--no-first-run",
-	)
-	if err := command.Start(); err != nil {
-		return 0, fmt.Errorf("%w: start", ErrLaunchFailed)
+	arguments := controlledDarwinExecutableArguments(profile, port)
+	defaultProfile, err := DefaultUserProfile(installation)
+	if err != nil {
+		return 0, err
 	}
-	pid := command.Process.Pid
-	go func() {
-		_ = command.Wait()
-	}()
-	return pid, nil
+	if profile != defaultProfile {
+		// An isolated calibration/test profile must never go through
+		// LaunchServices fallback: that fallback is allowed to inspect the
+		// ordinary current profile after a user-approved production restart.
+		// Start only the already-verified executable with the explicit isolated
+		// user-data directory, then accept only its exact loopback listener.
+		return launchControlledDarwinDirect(ctx, installation, profile, port, arguments)
+	}
+	command := exec.CommandContext(
+		ctx,
+		"/usr/bin/open",
+		controlledDarwinOpenArguments(installation.Root, profile, port)...,
+	)
+	launchServicesErr := command.Run()
+	if launchServicesErr == nil {
+		if pid, found, err := waitForControlledDarwinPID(
+			ctx, installation.Executable, port, profile, 10*time.Second,
+		); err != nil || found {
+			return pid, err
+		}
+	}
+
+	// LaunchServices can acknowledge the bundle launch while discarding the
+	// Chromium arguments. If it produced one exact official ordinary process,
+	// stop that verified process and retry with the freshly verified executable.
+	// This is still the user-approved restart transaction; ambiguous or partially
+	// controlled processes fail closed and are never stopped by name alone.
+	installation, err = prepareDirectDarwinFallback(ctx, installation, darwinFallbackOperations{
+		discoverCurrent: DiscoverCurrentInstance,
+		stopCurrent:     StopCurrentInstance,
+		discoverStable:  DiscoverStableInstallation,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return launchControlledDarwinDirect(ctx, installation, profile, port, arguments)
+}
+
+func launchControlledDarwinDirect(
+	ctx context.Context,
+	installation Installation,
+	profile string,
+	port int,
+	arguments []string,
+) (int, error) {
+	direct := exec.Command(installation.Executable, arguments...)
+	if err := direct.Start(); err != nil {
+		return 0, fmt.Errorf("%w: verified executable start", ErrLaunchFailed)
+	}
+	if err := direct.Process.Release(); err != nil {
+		return 0, fmt.Errorf("%w: verified executable release", ErrLaunchFailed)
+	}
+	if pid, found, err := waitForControlledDarwinPID(
+		ctx, installation.Executable, port, profile, 10*time.Second,
+	); err != nil || found {
+		return pid, err
+	}
+	return 0, fmt.Errorf("%w: controlled process was not found", ErrLaunchFailed)
+}
+
+type darwinFallbackOperations struct {
+	discoverCurrent func(context.Context, Installation) (CurrentInstance, error)
+	stopCurrent     func(context.Context, Installation, CurrentInstance) error
+	discoverStable  func(context.Context) (Installation, error)
+}
+
+func prepareDirectDarwinFallback(
+	ctx context.Context,
+	installation Installation,
+	operations darwinFallbackOperations,
+) (Installation, error) {
+	if ctx == nil || operations.discoverCurrent == nil || operations.stopCurrent == nil ||
+		operations.discoverStable == nil {
+		return Installation{}, ErrLaunchFailed
+	}
+	current, err := operations.discoverCurrent(ctx, installation)
+	switch {
+	case errors.Is(err, ErrCurrentMissing):
+		// LaunchServices did not leave a process behind. Revalidate the bundle
+		// anyway because an in-place app update can complete during this window.
+	case err != nil:
+		return Installation{}, errors.Join(ErrLaunchFailed, err)
+	case current.ControlledPort != 0:
+		return Installation{}, fmt.Errorf("%w: unexpected controlled process after LaunchServices", ErrLaunchFailed)
+	default:
+		if err := operations.stopCurrent(ctx, installation, current); err != nil {
+			return Installation{}, errors.Join(ErrLaunchFailed, err)
+		}
+	}
+	fresh, err := operations.discoverStable(ctx)
+	if err != nil {
+		return Installation{}, errors.Join(ErrLaunchFailed, err)
+	}
+	return fresh, nil
+}
+
+func controlledDarwinOpenArguments(bundle, profile string, port int) []string {
+	// The prior instance is gone before this call. `-n -a <verified bundle>`
+	// avoids the stale-primary LaunchServices race while preserving app launch
+	// semantics. The exact process, flags, signature, executable hash, listener
+	// and profile are still verified before CDP is accepted.
+	return append([]string{"-n", "-a", bundle, "--args"}, controlledDarwinExecutableArguments(profile, port)...)
+}
+
+func controlledDarwinExecutableArguments(profile string, port int) []string {
+	return []string{
+		"--remote-debugging-address=127.0.0.1",
+		"--remote-debugging-port=" + strconv.Itoa(port),
+		"--user-data-dir=" + profile,
+		"--no-first-run",
+	}
+}
+
+func LaunchOrdinary(ctx context.Context, installation Installation) error {
+	if err := verifyInstallationFresh(ctx, installation); err != nil {
+		return err
+	}
+	command := exec.CommandContext(
+		ctx,
+		"/usr/bin/open",
+		"-b",
+		installation.AppIdentifier,
+	)
+	if err := command.Run(); err != nil {
+		return fmt.Errorf("%w: reopen ordinary Codex", ErrLaunchFailed)
+	}
+	return nil
+}
+
+func controlledDarwinPIDs(
+	output []byte,
+	executable string,
+	port int,
+	profile string,
+) []int {
+	pids := []int{}
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		separator := strings.IndexAny(line, " \t")
+		if separator < 1 {
+			continue
+		}
+		pid, err := strconv.Atoi(line[:separator])
+		if err != nil || pid < 1 {
+			continue
+		}
+		commandLine := strings.TrimSpace(line[separator:])
+		if commandLine != executable &&
+			!strings.HasPrefix(commandLine, executable+" ") {
+			continue
+		}
+		if requireControlledFlags(commandLine, port, profile) == nil {
+			pids = append(pids, pid)
+		}
+	}
+	sort.Ints(pids)
+	return pids
+}
+
+func waitForControlledDarwinPID(
+	ctx context.Context,
+	executable string,
+	port int,
+	profile string,
+	timeout time.Duration,
+) (int, bool, error) {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		output, err := exec.CommandContext(ctx, "/bin/ps", "-ww", "-axo", "pid=,command=").Output()
+		if err == nil {
+			pids := controlledDarwinPIDs(output, executable, port, profile)
+			switch len(pids) {
+			case 1:
+				return pids[0], true, nil
+			case 0:
+			default:
+				return 0, false, fmt.Errorf("%w: controlled process is ambiguous", ErrLaunchFailed)
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return 0, false, ctx.Err()
+		case <-time.After(200 * time.Millisecond):
+		}
+	}
+	return 0, false, nil
+}
+
+func darwinExecutablePIDs(ctx context.Context, executable string) ([]int, error) {
+	output, err := exec.CommandContext(ctx, "/bin/ps", "-ww", "-axo", "pid=,comm=").Output()
+	if err != nil {
+		return nil, fmt.Errorf("%w: process inventory", ErrLaunchFailed)
+	}
+	pids := []int{}
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 2 {
+			continue
+		}
+		pid, parseErr := strconv.Atoi(fields[0])
+		if parseErr == nil && pid > 0 && samePath(strings.Join(fields[1:], " "), executable) {
+			pids = append(pids, pid)
+		}
+	}
+	if scanner.Err() != nil {
+		return nil, fmt.Errorf("%w: process inventory", ErrLaunchFailed)
+	}
+	sort.Ints(pids)
+	return pids, nil
 }
 
 func VerifyListener(ctx context.Context, installation Installation, launchedPID, port int, profile string) (ProcessIdentity, error) {
@@ -196,6 +397,168 @@ func StopOwnedProcess(
 		}
 	}
 	return fmt.Errorf("%w: controlled process did not exit", ErrLaunchFailed)
+}
+
+func DefaultUserProfile(installation Installation) (string, error) {
+	if installation.Platform != "macos" {
+		return "", ErrCurrentUnsafe
+	}
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return "", ErrCurrentUnsafe
+	}
+	expected := filepath.Join(home, "Library", "Application Support", "Codex")
+	return validateCurrentProfile(expected, expected)
+}
+
+func DiscoverCurrentInstance(ctx context.Context, installation Installation) (CurrentInstance, error) {
+	if err := verifyInstallationFresh(ctx, installation); err != nil {
+		return CurrentInstance{}, err
+	}
+	expectedProfile, err := DefaultUserProfile(installation)
+	if err != nil {
+		return CurrentInstance{}, err
+	}
+	output, err := exec.CommandContext(ctx, "/bin/ps", "-ww", "-axo", "pid=,comm=").Output()
+	if err != nil {
+		return CurrentInstance{}, ErrCurrentUnsafe
+	}
+	pids := []int{}
+	scanner := bufio.NewScanner(bytes.NewReader(output))
+	for scanner.Scan() {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) < 2 {
+			continue
+		}
+		pid, parseErr := strconv.Atoi(fields[0])
+		executable := strings.Join(fields[1:], " ")
+		if parseErr == nil && pid > 0 && samePath(executable, installation.Executable) {
+			pids = append(pids, pid)
+		}
+	}
+	if scanner.Err() != nil {
+		return CurrentInstance{}, ErrCurrentUnsafe
+	}
+	if len(pids) == 0 {
+		return CurrentInstance{}, ErrCurrentMissing
+	}
+	if len(pids) != 1 {
+		return CurrentInstance{}, ErrCurrentAmbiguous
+	}
+	process, commandLine, err := inspectDarwinCurrentProcess(ctx, installation, pids[0])
+	if err != nil {
+		return CurrentInstance{}, err
+	}
+	profile := expectedProfile
+	if candidate, found := darwinFlagValue(commandLine, "--user-data-dir="); found {
+		profile, err = validateCurrentProfile(candidate, expectedProfile)
+		if err != nil {
+			return CurrentInstance{}, err
+		}
+	}
+	port, controlled, err := controlledFlags(commandLine, profile)
+	if err != nil {
+		return CurrentInstance{}, ErrCurrentUnsafe
+	}
+	if controlled {
+		verified, verifyErr := VerifyListener(ctx, installation, process.ProcessID, port, profile)
+		if verifyErr != nil ||
+			verified.ProcessStartID != process.ProcessStartID ||
+			verified.ExecutableSHA256 != process.ExecutableSHA256 {
+			return CurrentInstance{}, ErrCurrentUnsafe
+		}
+		process = verified
+	}
+	return CurrentInstance{
+		Process: process, Profile: profile, ControlledPort: port,
+	}, nil
+}
+
+func StopCurrentInstance(
+	ctx context.Context,
+	installation Installation,
+	expected CurrentInstance,
+) error {
+	current, err := DiscoverCurrentInstance(ctx, installation)
+	if err != nil ||
+		current.Process.ProcessID != expected.Process.ProcessID ||
+		current.Process.ProcessStartID != expected.Process.ProcessStartID ||
+		current.Process.ExecutableSHA256 != expected.Process.ExecutableSHA256 ||
+		!samePath(current.Profile, expected.Profile) ||
+		current.ControlledPort != expected.ControlledPort {
+		return ErrCurrentUnsafe
+	}
+	process, err := os.FindProcess(expected.Process.ProcessID)
+	if err != nil {
+		return ErrCurrentUnsafe
+	}
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		return fmt.Errorf("%w: request current Codex exit", ErrLaunchFailed)
+	}
+	for attempts := 0; attempts < 60; attempts++ {
+		if err := syscall.Kill(expected.Process.ProcessID, 0); errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+	return fmt.Errorf("%w: current Codex did not exit normally", ErrLaunchFailed)
+}
+
+func inspectDarwinCurrentProcess(
+	ctx context.Context,
+	installation Installation,
+	pid int,
+) (ProcessIdentity, string, error) {
+	commandOutput, err := exec.CommandContext(
+		ctx, "/bin/ps", "-ww", "-p", strconv.Itoa(pid), "-o", "command=",
+	).Output()
+	if err != nil {
+		return ProcessIdentity{}, "", ErrCurrentUnsafe
+	}
+	commandLine := strings.TrimSpace(string(commandOutput))
+	if commandLine != installation.Executable &&
+		!strings.HasPrefix(commandLine, installation.Executable+" ") {
+		return ProcessIdentity{}, "", ErrCurrentUnsafe
+	}
+	startOutput, err := exec.CommandContext(
+		ctx, "/bin/ps", "-p", strconv.Itoa(pid), "-o", "lstart=",
+	).Output()
+	if err != nil || strings.TrimSpace(string(startOutput)) == "" {
+		return ProcessIdentity{}, "", ErrCurrentUnsafe
+	}
+	digest, err := hashOrdinaryFile(installation.Executable)
+	if err != nil || digest != installation.ExecutableSHA256 {
+		return ProcessIdentity{}, "", ErrCurrentUnsafe
+	}
+	return ProcessIdentity{
+		ProcessID: pid, ProcessStartID: strings.Join(strings.Fields(string(startOutput)), " "),
+		Executable: installation.Executable, ExecutableSHA256: digest,
+		CommandLine: commandLine,
+	}, commandLine, nil
+}
+
+func darwinFlagValue(commandLine, marker string) (string, bool) {
+	index := strings.Index(commandLine, marker)
+	if index < 0 {
+		return "", false
+	}
+	value := commandLine[index+len(marker):]
+	if strings.HasPrefix(value, `"`) {
+		value = strings.TrimPrefix(value, `"`)
+		end := strings.Index(value, `"`)
+		if end < 0 {
+			return "", true
+		}
+		return value[:end], true
+	}
+	if end := strings.Index(value, " --"); end >= 0 {
+		value = value[:end]
+	}
+	return strings.TrimSpace(value), true
 }
 
 func verifyDarwinBundle(ctx context.Context, bundle string) (Installation, error) {

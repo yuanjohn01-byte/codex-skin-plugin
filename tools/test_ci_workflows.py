@@ -99,6 +99,9 @@ def main() -> int:
         "run_complete_full",
         "lightweight_main",
         "if: steps.scope.outputs.run_go == 'true'",
+        "./internal/restartflow",
+        "./internal/themeapi",
+        "./internal/userflow",
     ):
         if marker not in baseline:
             raise AssertionError(f"Public baseline lost routing marker: {marker}")
@@ -170,6 +173,9 @@ def main() -> int:
         "macos-no-node-smoke:",
         "Test native Keychain storage and token rotation client",
         "Execute without Node or Go on PATH",
+        "./internal/restartflow",
+        "./internal/themeapi",
+        "./internal/userflow",
     ):
         if marker not in helper_workflow:
             raise AssertionError(f"Helper workflow lost Paid Alpha platform check: {marker}")

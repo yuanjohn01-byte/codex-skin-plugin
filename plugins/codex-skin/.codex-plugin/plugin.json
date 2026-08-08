@@ -1,7 +1,7 @@
 {
   "name": "codex-skin",
-  "version": "0.0.2",
-  "description": "Verify the Codex Skin pre-release Plugin installation and version.",
+  "version": "0.1.0-paid-alpha",
+  "description": "Apply verified Codex Desktop themes through one external session runtime with offline restore.",
   "author": {
     "name": "Codex Skin",
     "url": "https://github.com/yuanjohn01-byte/codex-skin-plugin"
@@ -13,14 +13,20 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "Codex Skin",
-    "shortDescription": "Verify the pre-release Plugin installation",
-    "longDescription": "Codex Skin v0.0.2 provides a read-only installation and upgrade check before theme features ship.",
+    "shortDescription": "Apply verified themes to Codex Desktop",
+    "longDescription": "Codex Skin keeps the Plugin as the user entry while one external session runtime owns verified launch, apply, switch, keep-alive, and offline restore.",
     "developerName": "Codex Skin",
     "category": "Developer Tools",
-    "capabilities": ["Read-only installation check"],
+    "capabilities": [
+      "Verified theme apply",
+      "Single session Runtime Supervisor",
+      "Offline official-interface restore"
+    ],
     "websiteURL": "https://github.com/yuanjohn01-byte/codex-skin-plugin",
     "defaultPrompt": [
-      "Check the installed Codex Skin test version."
+      "Apply Codex Skin theme 100001.",
+      "Show Codex Skin status.",
+      "Restore the official Codex appearance."
     ]
   }
 }

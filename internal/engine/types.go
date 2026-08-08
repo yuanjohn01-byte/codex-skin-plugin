@@ -8,7 +8,8 @@ import (
 const (
 	StateSchemaVersion     = 1
 	CurrentEngineVersion   = "0.2.0"
-	TemplateVersion        = 1
+	MinimumTemplateVersion = 1
+	TemplateVersion        = 8
 	MarkerID               = "codex-skin-theme-v1"
 	RootMarkerAttribute    = "data-codex-skin"
 	ThemeMarkerAttribute   = "data-codex-skin-theme"
@@ -21,6 +22,7 @@ var (
 	ErrBusy              = errors.New("another theme operation is active")
 	ErrStateUnsafe       = errors.New("theme engine state path is unsafe")
 	ErrCapabilityBlocked = errors.New("Codex capability probes blocked theme apply")
+	ErrRestartConsent    = errors.New("current Codex requires an explicit restart confirmation")
 	ErrApplyFailed       = errors.New("theme apply failed")
 	ErrVerifyFailed      = errors.New("theme verification failed")
 	ErrRollbackFailed    = errors.New("theme rollback failed")
@@ -51,6 +53,8 @@ const (
 )
 
 type RegionReport struct {
+	Scope              string                  `json:"scope,omitempty"`
+	RuntimeVersion     int                     `json:"runtimeVersion,omitempty"`
 	StyleMarkerCount   int                     `json:"styleMarkerCount"`
 	TemplateVersion    int                     `json:"templateVersion"`
 	ThemePublicID      string                  `json:"themePublicId"`
@@ -60,6 +64,16 @@ type RegionReport struct {
 	Regions            map[string]RegionStatus `json:"regions"`
 }
 
+// ThemeVerificationResult is the bounded, post-injection verification result.
+// It deliberately contains only renderer contract fields, never DOM text,
+// conversation data, screenshots, or raw CDP errors.
+type ThemeVerificationResult struct {
+	Report           RegionReport
+	Attempts         int
+	ReapplyAttempted bool
+	ProbeCompleted   bool
+}
+
 type Snapshot struct {
 	StylePresent      bool   `json:"stylePresent"`
 	StyleText         string `json:"styleText"`
@@ -67,13 +81,17 @@ type Snapshot struct {
 	ThemePublicID     string `json:"themePublicId"`
 	ThemeVersion      string `json:"themeVersion"`
 	TemplateVersion   int    `json:"templateVersion"`
+	AppearanceMode    string `json:"appearanceMode"`
 }
 
 type CompiledTheme struct {
 	ThemePublicID     string
 	ThemeVersion      string
 	TemplateVersion   int
+	AppearanceMode    string
 	StyleText         string
+	PreviousStyleText string
+	LegacyStyleText   string
 	BackgroundDataURL string
 }
 
@@ -89,10 +107,47 @@ type Adapter interface {
 	Close(context.Context, Session) error
 }
 
+// CapabilityWaiter lets a live adapter wait for the official UI to finish
+// loading before the engine evaluates fail-closed capability probes.
+type CapabilityWaiter interface {
+	WaitForCapabilities(context.Context, Session) (RegionReport, error)
+}
+
+// ThemeVerificationWaiter lets a live adapter wait for the one-time renderer
+// injection and Codex shell to settle. The engine still commits only when
+// the same strict report predicate passes; waiting never converts an unknown
+// or failed renderer into success.
+type ThemeVerificationWaiter interface {
+	WaitForThemeVerification(context.Context, Session, CompiledTheme) (ThemeVerificationResult, error)
+}
+
 // SessionPrimer lets an adapter re-establish trusted in-memory context from a
 // package that the engine revalidated from its offline cache.
 type SessionPrimer interface {
 	Prime(context.Context, Session, CompiledTheme) error
+}
+
+// ThemeSessionOpener lets the live adapter open the verified renderer used
+// for a theme apply. The theme's scoped CSS carries its own light/dark
+// contract; opening a theme session must not require rewriting Codex's native
+// appearance preference. Test/fake adapters keep using Adapter.OpenVerifiedSession.
+type ThemeSessionOpener interface {
+	OpenVerifiedThemeSession(context.Context, CompiledTheme) (Session, error)
+}
+
+// OfficialSessionOpener lets the live adapter open the verified renderer used
+// to restore the official appearance, including a one-time migration of a
+// legacy native-appearance backup when one exists.
+type OfficialSessionOpener interface {
+	OpenVerifiedOfficialSession(context.Context) (Session, error)
+}
+
+// OfficialRollbackFinalizer completes a failed first-theme transaction after
+// the verified renderer has been restored to the official interface. The live
+// adapter uses it to stop only the exact controlled process and reopen an
+// ordinary Codex instance.
+type OfficialRollbackFinalizer interface {
+	FinalizeOfficialRollback(context.Context, Session) error
 }
 
 type ApplyResult struct {
