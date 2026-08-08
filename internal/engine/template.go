@@ -435,10 +435,9 @@ func compileTemplateV5(
 	}
 	const nativeTokenBridge = `
 
-/* Fixed native-token bridge v5. Codex dropdown/popover primitives follow the
-   official appearanceTheme. The Helper pins that setting to the manifest mode;
-   these scoped variables keep the remaining native overlay tokens on the same
-   readable palette without recolouring Settings or arbitrary utility content. */
+/* Fixed native-token bridge v5. Codex dropdown/popover primitives may begin
+   in the user's native appearance. The scoped theme contract carries its own
+   colour scheme, so switching a skin never rewrites that user preference. */
 :root[__MARKER__="active"] {
   --cs-native-token-contract: 5;
   color-scheme: __COLOR_SCHEME__;

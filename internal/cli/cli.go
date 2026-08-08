@@ -289,6 +289,9 @@ func runThemeRestore(stdout, stderr io.Writer, jsonMode bool, environment Runtim
 		}
 		return writeRestoreFailure(stdout, stderr, jsonMode, "CS-RESTORE-001", err)
 	}
+	if err := clearPendingTheme(store.Root()); err != nil {
+		return writeRestoreFailure(stdout, stderr, jsonMode, "CS-RESTORE-STATE-001", err)
+	}
 	data := restoreData{
 		Command: "theme restore", OperationID: result.OperationID,
 		Platform: result.Identity.Platform, CodexVersion: result.Identity.Version,
@@ -444,7 +447,7 @@ func runThemeContinue(command string, stdout, stderr io.Writer, jsonMode bool, e
 	}
 	executable, err := recoveryExecutable(store.Root(), goos, environment.Executable)
 	if err != nil {
-		_, _ = restartStore.Fail(request.RequestID, "CS-FLOW-RESTART-003")
+		failRestart(restartStore, request.RequestID, store.Root(), "CS-FLOW-RESTART-003")
 		return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-RESTART-003", "run_theme_again", exitRestart)
 	}
 	startWorker := environment.StartWorker
@@ -452,7 +455,7 @@ func runThemeContinue(command string, stdout, stderr io.Writer, jsonMode bool, e
 		startWorker = restartflow.StartWorker
 	}
 	if err := startWorker(executable, request.RequestID); err != nil {
-		_, _ = restartStore.Fail(request.RequestID, "CS-FLOW-RESTART-003")
+		failRestart(restartStore, request.RequestID, store.Root(), "CS-FLOW-RESTART-003")
 		return writeFlowFailure(stdout, stderr, jsonMode, "CS-FLOW-RESTART-003", "run_theme_again", exitRestart)
 	}
 	data := restartData{
@@ -506,13 +509,13 @@ func runRestartWorker(requestID string, environment Runtime) int {
 			Root: store.Root(), CurrentProfile: true, RestartApproved: true,
 		})
 		if err != nil {
-			_, _ = restartStore.Fail(requestID, "CS-FLOW-RESTART-004")
+			failRestart(restartStore, requestID, store.Root(), "CS-FLOW-RESTART-004")
 			return exitInternal
 		}
 	}
 	instance, err := engine.New(store, runtimeAdapter)
 	if err != nil {
-		_, _ = restartStore.Fail(requestID, "CS-FLOW-RESTART-004")
+		failRestart(restartStore, requestID, store.Root(), "CS-FLOW-RESTART-004")
 		return exitInternal
 	}
 	operationID := ""
@@ -525,13 +528,13 @@ func runRestartWorker(requestID string, environment Runtime) int {
 		verified, verifyErr := restartStore.LoadVerified(request)
 		if verifyErr != nil ||
 			!themeEngineCompatible(verified.Manifest.Compatibility.MinEngineVersion) {
-			_, _ = restartStore.Fail(requestID, "CS-FLOW-RESTART-005")
+			failRestart(restartStore, requestID, store.Root(), "CS-FLOW-RESTART-005")
 			return exitTheme
 		}
 		applyStartedAt = time.Now()
 		result, applyErr := instance.ApplyVerified(ctx, verified)
 		if applyErr != nil {
-			_, _ = restartStore.Fail(requestID, restartApplyFailureCode(applyErr))
+			failRestart(restartStore, requestID, store.Root(), restartApplyFailureCode(applyErr))
 			return exitApply
 		}
 		operationID = result.OperationID
@@ -545,22 +548,23 @@ func runRestartWorker(requestID string, environment Runtime) int {
 			SignatureBytes:   verified.Signature,
 			MinEngineVersion: verified.Manifest.Compatibility.MinEngineVersion,
 		}
-		if flowStore, flowErr := flowstate.New(store.Root()); flowErr == nil {
-			if state, readErr := flowStore.Read(); readErr == nil &&
-				state.PendingThemePublicID == resultThemeID {
-				state.PendingThemePublicID = ""
-				_ = flowStore.Write(state)
-			}
+		if err := clearPendingTheme(store.Root()); err != nil {
+			failRestart(restartStore, requestID, store.Root(), "CS-FLOW-STATE-001")
+			return exitInternal
 		}
 	case "restore":
 		result, restoreErr := instance.RestoreOfficial(ctx)
 		if restoreErr != nil {
-			_, _ = restartStore.Fail(requestID, "CS-FLOW-RESTART-007")
+			failRestart(restartStore, requestID, store.Root(), "CS-FLOW-RESTART-007")
 			return exitRestore
+		}
+		if err := clearPendingTheme(store.Root()); err != nil {
+			failRestart(restartStore, requestID, store.Root(), "CS-FLOW-STATE-001")
+			return exitInternal
 		}
 		operationID = result.OperationID
 	default:
-		_, _ = restartStore.Fail(requestID, "CS-FLOW-RESTART-004")
+		failRestart(restartStore, requestID, store.Root(), "CS-FLOW-RESTART-004")
 		return exitInternal
 	}
 	if _, err := restartStore.Complete(
@@ -581,6 +585,24 @@ func runRestartWorker(requestID string, environment Runtime) int {
 		)
 	}
 	return exitSuccess
+}
+
+func clearPendingTheme(root string) error {
+	flowStore, err := flowstate.New(root)
+	if err != nil {
+		return err
+	}
+	state, err := flowStore.Read()
+	if err != nil || state.PendingThemePublicID == "" {
+		return err
+	}
+	state.PendingThemePublicID = ""
+	return flowStore.Write(state)
+}
+
+func failRestart(store *restartflow.Store, requestID, root, errorCode string) {
+	_, _ = store.Fail(requestID, errorCode)
+	_ = clearPendingTheme(root)
 }
 
 func restartApplyFailureCode(err error) string {
@@ -670,11 +692,7 @@ func runStatus(stdout, stderr io.Writer, jsonMode bool, environment Runtime) int
 	if err != nil {
 		return writeFlowFailure(stdout, stderr, jsonMode, "CS-STATUS-001", "run_doctor", exitLocalUnsafe)
 	}
-	data := statusData{
-		Command:              "status",
-		DeviceLinked:         state.DeviceID != "",
-		PendingThemePublicID: state.PendingThemePublicID,
-	}
+	data := statusData{Command: "status", DeviceLinked: state.DeviceID != ""}
 	if found {
 		data.AppliedThemePublicID = desired.ThemePublicID
 		data.AppliedThemeVersion = desired.ThemeVersion
@@ -692,12 +710,19 @@ func runStatus(stdout, stderr io.Writer, jsonMode bool, environment Runtime) int
 	if restartErr != nil {
 		return writeFlowFailure(stdout, stderr, jsonMode, "CS-STATUS-001", "run_doctor", exitLocalUnsafe)
 	}
-	if restartFound && !failedRestartSupersededByAppliedTheme(
-		restartRequest,
-		desired,
-		found,
-		state.PendingThemePublicID,
-	) {
+	if restartFound && (restartRequest.Status == restartflow.StatusPending ||
+		restartRequest.Status == restartflow.StatusApproved ||
+		restartRequest.Status == restartflow.StatusRunning) &&
+		restartRequest.Kind == "apply" {
+		data.PendingThemePublicID = restartRequest.ThemePublicID
+	} else if !restartFound || restartRequest.Status == restartflow.StatusPending ||
+		restartRequest.Status == restartflow.StatusApproved || restartRequest.Status == restartflow.StatusRunning {
+		// Authorization can be in progress before an apply reaches the restart
+		// boundary. Once a restart has a terminal record, its pending selection
+		// is deliberately not surfaced as if it were a new user action.
+		data.PendingThemePublicID = state.PendingThemePublicID
+	}
+	if restartFound {
 		data.RestartKind = restartRequest.Kind
 		data.RestartStatus = string(restartRequest.Status)
 		data.RestartThemePublicID = restartRequest.ThemePublicID
@@ -720,20 +745,6 @@ func runStatus(stdout, stderr io.Writer, jsonMode bool, environment Runtime) int
 		)
 	}
 	return exitSuccess
-}
-
-func failedRestartSupersededByAppliedTheme(
-	request restartflow.Request,
-	desired engine.DesiredTheme,
-	desiredFound bool,
-	pendingThemePublicID string,
-) bool {
-	return request.Status == restartflow.StatusFailed &&
-		request.Kind == "apply" &&
-		desiredFound &&
-		pendingThemePublicID == "" &&
-		request.ThemePublicID == desired.ThemePublicID &&
-		request.ThemeVersion == desired.ThemeVersion
 }
 
 func recoveryExecutable(root, goos, supplied string) (string, error) {

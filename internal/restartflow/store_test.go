@@ -140,6 +140,46 @@ func TestPrepareNewApplyRetiresTerminalRestartRecord(t *testing.T) {
 	}
 }
 
+func TestTerminalRequestIsArchivedBeforeRestoreReplacesCurrent(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	if _, err := engine.OpenStore(root, ""); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	apply, err := store.StageApply(verifyFixture(t, copyFixture(t)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Approve(apply.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Begin(apply.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.Fail(apply.RequestID, "CS-FLOW-ROLLBACK-001"); err != nil {
+		t.Fatal(err)
+	}
+	restore, err := store.StageRestore()
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, found, err := store.Current()
+	if err != nil || !found || current.RequestID != restore.RequestID || current.Kind != operationRestore {
+		t.Fatalf("current restore = %#v, found=%t, err=%v", current, found, err)
+	}
+	history, err := store.History()
+	if err != nil || len(history) != 1 {
+		t.Fatalf("history = %#v, err=%v", history, err)
+	}
+	if history[0].RequestID != apply.RequestID || history[0].Status != StatusFailed ||
+		history[0].ErrorCode != "CS-FLOW-ROLLBACK-001" {
+		t.Fatalf("archived apply = %#v", history[0])
+	}
+}
+
 func TestContinuationTamperAndSymlinkFailClosed(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "CodexSkin")
 	if _, err := engine.OpenStore(root, ""); err != nil {

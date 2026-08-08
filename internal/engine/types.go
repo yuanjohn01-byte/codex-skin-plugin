@@ -127,31 +127,25 @@ type SessionPrimer interface {
 	Prime(context.Context, Session, CompiledTheme) error
 }
 
-// ThemeSessionOpener lets the live adapter synchronize Codex's native
-// appearance before opening the verified renderer used for a theme apply.
-// Test/fake adapters keep using Adapter.OpenVerifiedSession.
+// ThemeSessionOpener lets the live adapter open the verified renderer used
+// for a theme apply. The theme's scoped CSS carries its own light/dark
+// contract; opening a theme session must not require rewriting Codex's native
+// appearance preference. Test/fake adapters keep using Adapter.OpenVerifiedSession.
 type ThemeSessionOpener interface {
 	OpenVerifiedThemeSession(context.Context, CompiledTheme) (Session, error)
 }
 
-// OfficialSessionOpener lets the live adapter restore the exact native
-// appearance backup before the official renderer is verified.
+// OfficialSessionOpener lets the live adapter open the verified renderer used
+// to restore the official appearance, including a one-time migration of a
+// legacy native-appearance backup when one exists.
 type OfficialSessionOpener interface {
 	OpenVerifiedOfficialSession(context.Context) (Session, error)
 }
 
-// NativeAppearanceRestorer returns the user's saved native Codex appearance
-// setting after a verified renderer apply. The temporary native light/dark
-// pin is only a launch aid; a completed on-demand apply must not leave that
-// setting changed after its Helper exits.
-type NativeAppearanceRestorer interface {
-	RestoreNativeAppearanceBackup() error
-}
-
 // OfficialRollbackFinalizer completes a failed first-theme transaction after
 // the verified renderer has been restored to the official interface. The live
-// adapter uses it to stop only the exact controlled process, restore Codex's
-// native appearance preference, and reopen an ordinary Codex instance.
+// adapter uses it to stop only the exact controlled process and reopen an
+// ordinary Codex instance.
 type OfficialRollbackFinalizer interface {
 	FinalizeOfficialRollback(context.Context, Session) error
 }

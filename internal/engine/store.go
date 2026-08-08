@@ -28,25 +28,43 @@ var (
 	storedThemePublicID = regexp.MustCompile(`^[0-9]{6}$`)
 	storedThemeVersion  = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$`)
 	storedDigest        = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	journalStage        = regexp.MustCompile(`^[a-z][a-z0-9_]{2,63}$`)
+	journalStatus       = regexp.MustCompile(`^[a-z][a-z0-9_]{2,63}$`)
+	journalErrorCode    = regexp.MustCompile(`^CS-[A-Z0-9-]{3,72}$`)
 )
+
+const maxJournalTraceEntries = 16
 
 type Store struct {
 	root string
 }
 
 type Journal struct {
-	SchemaVersion int                  `json:"schemaVersion"`
-	OperationID   string               `json:"operationId"`
-	Kind          string               `json:"kind"`
-	Stage         string               `json:"stage"`
-	Status        string               `json:"status"`
-	ThemePublicID string               `json:"themePublicId,omitempty"`
-	ThemeVersion  string               `json:"themeVersion,omitempty"`
-	StartedAt     string               `json:"startedAt"`
-	UpdatedAt     string               `json:"updatedAt"`
-	ErrorCode     string               `json:"errorCode,omitempty"`
-	RecoveryID    string               `json:"recoveryId,omitempty"`
-	Verification  *VerificationSummary `json:"verification,omitempty"`
+	SchemaVersion    int                  `json:"schemaVersion"`
+	OperationID      string               `json:"operationId"`
+	Kind             string               `json:"kind"`
+	Stage            string               `json:"stage"`
+	Status           string               `json:"status"`
+	ThemePublicID    string               `json:"themePublicId,omitempty"`
+	ThemeVersion     string               `json:"themeVersion,omitempty"`
+	StartedAt        string               `json:"startedAt"`
+	UpdatedAt        string               `json:"updatedAt"`
+	ErrorCode        string               `json:"errorCode,omitempty"`
+	InterruptedStage string               `json:"interruptedStage,omitempty"`
+	RecoveryID       string               `json:"recoveryId,omitempty"`
+	Verification     *VerificationSummary `json:"verification,omitempty"`
+	Trace            []JournalTraceEntry  `json:"trace,omitempty"`
+}
+
+// JournalTraceEntry contains only the finite operation state machine values.
+// It deliberately excludes commands, paths, process IDs, renderer data, and
+// user content. This lets a local repair preserve the meaningful failure stage
+// even when a later Restore creates its own restart transaction.
+type JournalTraceEntry struct {
+	At        string `json:"at"`
+	Stage     string `json:"stage"`
+	Status    string `json:"status"`
+	ErrorCode string `json:"errorCode,omitempty"`
 }
 
 // VerificationSummary is the durable, redacted explanation for an apply
@@ -174,10 +192,25 @@ func (store *Store) WriteJournal(journal Journal) error {
 	if !safeIdentifier(journal.OperationID, "op_") {
 		return fmt.Errorf("%w: invalid operation id", ErrStateUnsafe)
 	}
-	if journal.Verification != nil && !validVerificationSummary(*journal.Verification) {
-		return fmt.Errorf("%w: invalid verification summary", ErrStateUnsafe)
+	path := filepath.Join(store.root, "state", "operations", journal.OperationID+".json")
+	var previous Journal
+	found, err := readJSON(path, &previous)
+	if err != nil {
+		return err
 	}
-	return writeJSONAtomic(filepath.Join(store.root, "state", "operations", journal.OperationID+".json"), journal)
+	if found && !validJournal(previous) {
+		return fmt.Errorf("%w: invalid prior operation journal", ErrStateUnsafe)
+	}
+	if found && len(journal.Trace) == 0 {
+		journal.Trace = append([]JournalTraceEntry(nil), previous.Trace...)
+	}
+	journal.Trace = appendJournalTrace(journal.Trace, JournalTraceEntry{
+		At: journal.UpdatedAt, Stage: journal.Stage, Status: journal.Status, ErrorCode: journal.ErrorCode,
+	})
+	if !validJournal(journal) {
+		return fmt.Errorf("%w: invalid operation journal", ErrStateUnsafe)
+	}
+	return writeJSONAtomic(path, journal)
 }
 
 func (store *Store) RunningJournals() ([]Journal, error) {
@@ -197,10 +230,7 @@ func (store *Store) RunningJournals() ([]Journal, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !found || journal.SchemaVersion != StateSchemaVersion ||
-			!safeIdentifier(journal.OperationID, "op_") ||
-			entry.Name() != journal.OperationID+".json" ||
-			(journal.Verification != nil && !validVerificationSummary(*journal.Verification)) {
+		if !found || !validJournal(journal) || entry.Name() != journal.OperationID+".json" {
 			return nil, fmt.Errorf("%w: operation journal identity", ErrStateUnsafe)
 		}
 		if journal.Status == "running" {
@@ -214,6 +244,42 @@ func (store *Store) RunningJournals() ([]Journal, error) {
 		return journals[left].StartedAt < journals[right].StartedAt
 	})
 	return journals, nil
+}
+
+func appendJournalTrace(trace []JournalTraceEntry, entry JournalTraceEntry) []JournalTraceEntry {
+	if len(trace) > 0 {
+		last := trace[len(trace)-1]
+		if last.Stage == entry.Stage && last.Status == entry.Status && last.ErrorCode == entry.ErrorCode {
+			return trace
+		}
+	}
+	trace = append(trace, entry)
+	if len(trace) > maxJournalTraceEntries {
+		trace = append([]JournalTraceEntry(nil), trace[len(trace)-maxJournalTraceEntries:]...)
+	}
+	return trace
+}
+
+func validJournal(journal Journal) bool {
+	if journal.SchemaVersion != StateSchemaVersion ||
+		!safeIdentifier(journal.OperationID, "op_") ||
+		!journalStage.MatchString(journal.Stage) ||
+		!journalStatus.MatchString(journal.Status) ||
+		(journal.ErrorCode != "" && !journalErrorCode.MatchString(journal.ErrorCode)) ||
+		(journal.InterruptedStage != "" && !journalStage.MatchString(journal.InterruptedStage)) ||
+		(journal.Verification != nil && !validVerificationSummary(*journal.Verification)) ||
+		len(journal.Trace) > maxJournalTraceEntries {
+		return false
+	}
+	for _, entry := range journal.Trace {
+		if _, err := time.Parse(time.RFC3339, entry.At); err != nil ||
+			!journalStage.MatchString(entry.Stage) ||
+			!journalStatus.MatchString(entry.Status) ||
+			(entry.ErrorCode != "" && !journalErrorCode.MatchString(entry.ErrorCode)) {
+			return false
+		}
+	}
+	return true
 }
 
 func (store *Store) WriteRecoveryPoint(point RecoveryPoint, snapshot Snapshot) error {

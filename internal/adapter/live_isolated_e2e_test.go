@@ -30,30 +30,37 @@ func TestIsolatedCodexRendererSessionLifecycle(t *testing.T) {
 	stage := "created"
 	var verification engine.ThemeVerificationResult
 	var switchVerification engine.ThemeVerificationResult
+	var switchBackVerification engine.ThemeVerificationResult
 	var verificationErr string
-	if reportPath := os.Getenv("CODEX_SKIN_ISOLATED_E2E_REPORT"); reportPath != "" {
-		defer func() {
-			// The launcher may own the Codex window it is testing, which can make
-			// a terminal transport disappear before Go prints its final PASS/FAIL
-			// line. This opt-in, local-only breadcrumb makes the last completed
-			// stage inspectable without collecting user data or altering the test
-			// profile. The test result itself remains authoritative.
-			payload, err := json.Marshal(struct {
-				Stage              string                         `json:"stage"`
-				Verification       engine.ThemeVerificationResult `json:"verification"`
-				SwitchVerification engine.ThemeVerificationResult `json:"switchVerification"`
-				VerificationErr    string                         `json:"verificationError,omitempty"`
-			}{
-				Stage:              stage,
-				Verification:       verification,
-				SwitchVerification: switchVerification,
-				VerificationErr:    verificationErr,
-			})
-			if err == nil {
-				_ = os.WriteFile(reportPath, append(payload, '\n'), 0o600)
-			}
-		}()
+	reportPath := os.Getenv("CODEX_SKIN_ISOLATED_E2E_REPORT")
+	writeReport := func() {
+		if reportPath == "" {
+			return
+		}
+		// The launcher may own the Codex window it is testing, which can make
+		// a terminal transport disappear before Go prints its final PASS/FAIL
+		// line. Persist every completed stage, rather than only a deferred final
+		// record, so the opt-in local smoke can distinguish that transport event
+		// from an earlier renderer failure without collecting user data.
+		payload, err := json.Marshal(struct {
+			Stage                  string                         `json:"stage"`
+			Verification           engine.ThemeVerificationResult `json:"verification"`
+			SwitchVerification     engine.ThemeVerificationResult `json:"switchVerification"`
+			SwitchBackVerification engine.ThemeVerificationResult `json:"switchBackVerification"`
+			VerificationErr        string                         `json:"verificationError,omitempty"`
+		}{
+			Stage:                  stage,
+			Verification:           verification,
+			SwitchVerification:     switchVerification,
+			SwitchBackVerification: switchBackVerification,
+			VerificationErr:        verificationErr,
+		})
+		if err == nil {
+			_ = os.WriteFile(reportPath, append(payload, '\n'), 0o600)
+		}
 	}
+	defer writeReport()
+	writeReport()
 
 	root := filepath.Join(t.TempDir(), "CodexSkin")
 	if err := os.MkdirAll(root, 0o700); err != nil {
@@ -97,6 +104,7 @@ func TestIsolatedCodexRendererSessionLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage = "session_opened"
+	writeReport()
 	stopped := false
 	t.Cleanup(func() {
 		if stopped {
@@ -112,10 +120,12 @@ func TestIsolatedCodexRendererSessionLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	stage = "capabilities_ready"
+	writeReport()
 	if err := live.Apply(ctx, session, compiled); err != nil {
 		t.Fatal(err)
 	}
 	stage = "style_applied"
+	writeReport()
 
 	verification, err = live.WaitForThemeVerification(ctx, session, compiled)
 	if err != nil || !engine.ReportAllowsTheme(verification.Report, compiled) {
@@ -125,6 +135,7 @@ func TestIsolatedCodexRendererSessionLifecycle(t *testing.T) {
 		t.Fatalf("isolated renderer did not reach a verified themed state: %#v err=%v", verification, err)
 	}
 	stage = "theme_verified"
+	writeReport()
 
 	// The live process remains open only to prove the one-shot style is still
 	// present shortly after the Helper would have exited. It deliberately does
@@ -135,19 +146,24 @@ func TestIsolatedCodexRendererSessionLifecycle(t *testing.T) {
 		t.Fatalf("isolated renderer lost its verified style: %#v err=%v", report, err)
 	}
 	stage = "theme_stable"
+	writeReport()
 
-	// Switch in the same owned renderer and verify that the root marker is
-	// replaced, rather than relying on a Restore between ordinary switches.
-	// The source package remains the verified fixture; this variant only gives
-	// the renderer a distinct public ID and a harmless marker token.
+	// Switch directly from the fixture's dark skin to a light skin in the same
+	// owned renderer. The source package remains the verified fixture; this
+	// variant gives the renderer a distinct public ID, a light scoped colour
+	// scheme, and a harmless marker token. It proves the Runtime v2.4 contract:
+	// an already controlled Codex session does not need a native preference
+	// rewrite, Restart, or Restore merely because the skin mode changes.
 	switched := compiled
 	switched.ThemePublicID = "100002"
 	switched.ThemeVersion = "1.0.1"
-	switched.StyleText += "\n:root[data-codex-skin=\"active\"] { --cs-isolated-switch: 1; }\n"
+	switched.AppearanceMode = "light"
+	switched.StyleText += "\n:root[data-codex-skin=\"active\"] { color-scheme: light; --cs-isolated-switch: 1; }\n"
 	if err := live.Apply(ctx, session, switched); err != nil {
 		t.Fatal(err)
 	}
 	stage = "switch_style_applied"
+	writeReport()
 	switchVerification, err = live.WaitForThemeVerification(ctx, session, switched)
 	if err != nil || !engine.ReportAllowsTheme(switchVerification.Report, switched) {
 		if err != nil {
@@ -155,7 +171,30 @@ func TestIsolatedCodexRendererSessionLifecycle(t *testing.T) {
 		}
 		t.Fatalf("isolated renderer did not verify a direct theme switch: %#v err=%v", switchVerification, err)
 	}
-	stage = "theme_switched"
+	stage = "cross_appearance_theme_switched"
+	writeReport()
+
+	// Complete the reverse light-to-dark replacement before Restore. This is
+	// intentionally another direct controller change in the same renderer: no
+	// process restart, native preference change, or offline recovery is allowed.
+	switchedBack := compiled
+	switchedBack.ThemePublicID = "100003"
+	switchedBack.ThemeVersion = "1.0.2"
+	switchedBack.StyleText += "\n:root[data-codex-skin=\"active\"] { color-scheme: dark; --cs-isolated-switch-back: 1; }\n"
+	if err := live.Apply(ctx, session, switchedBack); err != nil {
+		t.Fatal(err)
+	}
+	stage = "switch_back_style_applied"
+	writeReport()
+	switchBackVerification, err = live.WaitForThemeVerification(ctx, session, switchedBack)
+	if err != nil || !engine.ReportAllowsTheme(switchBackVerification.Report, switchedBack) {
+		if err != nil {
+			verificationErr = err.Error()
+		}
+		t.Fatalf("isolated renderer did not verify a reverse theme switch: %#v err=%v", switchBackVerification, err)
+	}
+	stage = "cross_appearance_theme_returned"
+	writeReport()
 
 	if err := live.RestoreOfficial(ctx, session); err != nil {
 		t.Fatal(err)
@@ -163,10 +202,10 @@ func TestIsolatedCodexRendererSessionLifecycle(t *testing.T) {
 	if err := live.VerifyOfficial(ctx, session); err != nil {
 		t.Fatal(err)
 	}
-	stage = "official_restored"
-	if err := live.StopOwned(ctx, session); err != nil {
-		t.Fatal(err)
-	}
-	stopped = true
+	// Reaching an official renderer is the product assertion. The test cleanup
+	// below then terminates only the isolated process. Keeping that transport
+	// teardown out of the assertion avoids treating a host-terminal disconnect
+	// as a failed theme transaction.
 	stage = "pass"
+	writeReport()
 }

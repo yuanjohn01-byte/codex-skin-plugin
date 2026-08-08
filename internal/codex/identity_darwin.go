@@ -67,6 +67,18 @@ func LaunchControlled(ctx context.Context, installation Installation, profile st
 		return 0, err
 	}
 	arguments := controlledDarwinExecutableArguments(profile, port)
+	defaultProfile, err := DefaultUserProfile(installation)
+	if err != nil {
+		return 0, err
+	}
+	if profile != defaultProfile {
+		// An isolated calibration/test profile must never go through
+		// LaunchServices fallback: that fallback is allowed to inspect the
+		// ordinary current profile after a user-approved production restart.
+		// Start only the already-verified executable with the explicit isolated
+		// user-data directory, then accept only its exact loopback listener.
+		return launchControlledDarwinDirect(ctx, installation, profile, port, arguments)
+	}
 	command := exec.CommandContext(
 		ctx,
 		"/usr/bin/open",
@@ -94,11 +106,16 @@ func LaunchControlled(ctx context.Context, installation Installation, profile st
 	if err != nil {
 		return 0, err
 	}
-	profile, err = DefaultUserProfile(installation)
-	if err != nil {
-		return 0, err
-	}
-	arguments = controlledDarwinExecutableArguments(profile, port)
+	return launchControlledDarwinDirect(ctx, installation, profile, port, arguments)
+}
+
+func launchControlledDarwinDirect(
+	ctx context.Context,
+	installation Installation,
+	profile string,
+	port int,
+	arguments []string,
+) (int, error) {
 	direct := exec.Command(installation.Executable, arguments...)
 	if err := direct.Start(); err != nil {
 		return 0, fmt.Errorf("%w: verified executable start", ErrLaunchFailed)

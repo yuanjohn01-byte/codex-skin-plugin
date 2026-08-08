@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/flowstate"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/restartflow"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/userflow"
@@ -609,6 +610,18 @@ func TestRestartWorkerCompletesRestoreAndStatusReportsTerminalFact(t *testing.T)
 	if _, err := restartStore.Approve(request.RequestID); err != nil {
 		t.Fatal(err)
 	}
+	flowStore, err := flowstate.New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	flowState, err := flowStore.Read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	flowState.PendingThemePublicID = "100001"
+	if err := flowStore.Write(flowState); err != nil {
+		t.Fatal(err)
+	}
 	fake := &restoreAdapter{themed: true}
 	code, stdout, stderr := run(t, []string{"__restart-worker", request.RequestID}, Runtime{
 		GOOS: "darwin", GOARCH: "arm64", Root: root, Adapter: fake,
@@ -641,8 +654,13 @@ func TestRestartWorkerCompletesRestoreAndStatusReportsTerminalFact(t *testing.T)
 		t.Fatal(err)
 	}
 	if data.RestartKind != "restore" ||
-		data.RestartStatus != string(restartflow.StatusCompleted) {
+		data.RestartStatus != string(restartflow.StatusCompleted) ||
+		data.PendingThemePublicID != "" {
 		t.Fatalf("status data = %#v", data)
+	}
+	state, err := flowStore.Read()
+	if err != nil || state.PendingThemePublicID != "" {
+		t.Fatalf("flow state after restore = %#v, err=%v", state, err)
 	}
 }
 
@@ -737,23 +755,53 @@ func TestStatusReportsOnlyDurableLocalState(t *testing.T) {
 	}
 }
 
-func TestFailedRestartIsHiddenAfterSameThemeAppliesDirectly(t *testing.T) {
-	request := restartflow.Request{
-		Kind: "apply", Status: restartflow.StatusFailed,
-		ThemePublicID: "100002", ThemeVersion: "1.0.0",
+func TestStatusReportsFailedRestartEvenWhenLastVerifiedThemeMatches(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	store, err := engine.OpenStore(root, "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	desired := engine.DesiredTheme{
-		ThemePublicID: "100002", ThemeVersion: "1.0.0",
+	root = store.Root()
+	verified := verifiedRestartTheme(t)
+	if err := store.WriteDesired(engine.DesiredTheme{
+		ThemePublicID:   verified.Manifest.ThemePublicID,
+		ThemeVersion:    verified.Manifest.ThemeVersion,
+		PackageSHA256:   strings.Repeat("a", 64),
+		TemplateVersion: engine.TemplateVersion,
+		AppliedAt:       "2026-08-08T00:00:00Z",
+	}); err != nil {
+		t.Fatal(err)
 	}
-	if !failedRestartSupersededByAppliedTheme(request, desired, true, "") {
-		t.Fatal("same-theme direct apply did not supersede the failed restart")
+	restartStore, err := restartflow.New(root)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if failedRestartSupersededByAppliedTheme(request, desired, true, "100002") {
-		t.Fatal("pending theme incorrectly superseded the failed restart")
+	request, err := restartStore.StageApply(verified)
+	if err != nil {
+		t.Fatal(err)
 	}
-	desired.ThemePublicID = "100003"
-	if failedRestartSupersededByAppliedTheme(request, desired, true, "") {
-		t.Fatal("different applied theme incorrectly superseded the failed restart")
+	if _, err := restartStore.Approve(request.RequestID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restartStore.Fail(request.RequestID, "CS-FLOW-ROLLBACK-001"); err != nil {
+		t.Fatal(err)
+	}
+
+	code, stdout, stderr := run(t, []string{"status", "--json"}, Runtime{
+		GOOS: "darwin", GOARCH: "arm64", Root: root,
+	})
+	if code != exitSuccess || stderr != "" {
+		t.Fatalf("status failed: code=%d stderr=%q", code, stderr)
+	}
+	result := decodeSingleResult(t, stdout)
+	var data statusData
+	if err := json.Unmarshal(result.Data, &data); err != nil {
+		t.Fatal(err)
+	}
+	if data.AppliedThemePublicID != verified.Manifest.ThemePublicID ||
+		data.RestartStatus != string(restartflow.StatusFailed) ||
+		data.RestartErrorCode != "CS-FLOW-ROLLBACK-001" {
+		t.Fatalf("status hid a current restart failure: %#v", data)
 	}
 }
 

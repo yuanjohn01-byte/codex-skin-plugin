@@ -2,9 +2,11 @@ package adapter
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -117,7 +119,7 @@ func TestCurrentProfileModeCannotBeRedirectedToIsolatedProfile(t *testing.T) {
 	}
 }
 
-func TestSessionActivationRestoresNativeAppearanceBytesBeforeSuccess(t *testing.T) {
+func TestLegacyAppearanceMigrationRestoresBeforeOpeningAnySession(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "CodexSkin")
 	store, err := engine.OpenStore(root, "")
 	if err != nil {
@@ -130,18 +132,35 @@ func TestSessionActivationRestoresNativeAppearanceBytesBeforeSuccess(t *testing.
 	}
 	configPath := filepath.Join(configDirectory, "config.toml")
 	original := []byte("[desktop]\nappearanceTheme = \"system\"\nappearanceDarkCodeThemeId = \"night\"\n")
-	if err := os.WriteFile(configPath, original, 0o600); err != nil {
+	legacyCurrent := []byte("[desktop]\nappearanceTheme = \"dark\"\nappearanceDarkCodeThemeId = \"night\"\n")
+	if err := os.WriteFile(configPath, legacyCurrent, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	live, err := NewLive(Config{Root: store.Root(), CurrentProfile: true, UserHome: home})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if changed, err := live.appearance.Pin("dark"); err != nil || !changed {
-		t.Fatalf("Pin() = %t, %v", changed, err)
+	backupPath := filepath.Join(store.Root(), "recovery", "appearance.json")
+	if err := os.MkdirAll(filepath.Dir(backupPath), 0o700); err != nil {
+		t.Fatal(err)
 	}
-	if err := live.RestoreNativeAppearanceBackup(); err != nil {
-		t.Fatalf("RestoreNativeAppearanceBackup() error = %v", err)
+	payload, err := json.Marshal(map[string]any{
+		"schemaVersion": 1,
+		"platform":      runtime.GOOS,
+		"configPath":    configPath,
+		"values": map[string]string{
+			"appearanceTheme":           `appearanceTheme = "system"`,
+			"appearanceDarkCodeThemeId": `appearanceDarkCodeThemeId = "night"`,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(backupPath, append(payload, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := live.restoreLegacyAppearanceIfNeeded(); err != nil {
+		t.Fatalf("restoreLegacyAppearanceIfNeeded() error = %v", err)
 	}
 	restored, err := os.ReadFile(configPath)
 	if err != nil {
@@ -151,36 +170,10 @@ func TestSessionActivationRestoresNativeAppearanceBytesBeforeSuccess(t *testing.
 		t.Fatalf("native config was not restored\nwant: %q\n got: %q", original, restored)
 	}
 	if _, err := os.Lstat(filepath.Join(store.Root(), "recovery", "appearance.json")); !os.IsNotExist(err) {
-		t.Fatalf("appearance backup remains after activation: %v", err)
+		t.Fatalf("appearance backup remains after migration: %v", err)
 	}
-	if err := live.RestoreNativeAppearanceBackup(); err != nil {
-		t.Fatalf("idempotent restore error = %v", err)
-	}
-}
-
-func TestReusableControlledThemeSnapshotRequiresAnExistingMatchingMode(t *testing.T) {
-	base := engine.Snapshot{
-		StylePresent:    true,
-		ThemePublicID:   "100005",
-		ThemeVersion:    "1.0.1",
-		TemplateVersion: engine.TemplateVersion,
-		StyleText:       "verified-template",
-		AppearanceMode:  "dark",
-	}
-	if !reusableControlledThemeSnapshot(base, "dark") {
-		t.Fatal("verified dark renderer was not reusable for dark replacement")
-	}
-	if reusableControlledThemeSnapshot(base, "light") {
-		t.Fatal("dark renderer was reusable for light replacement")
-	}
-	base.StylePresent = false
-	if reusableControlledThemeSnapshot(base, "dark") {
-		t.Fatal("missing style marker was reusable")
-	}
-	base.StylePresent = true
-	base.ThemePublicID = "not-a-theme"
-	if reusableControlledThemeSnapshot(base, "dark") {
-		t.Fatal("invalid theme marker was reusable")
+	if err := live.restoreLegacyAppearanceIfNeeded(); err != nil {
+		t.Fatalf("idempotent migration error = %v", err)
 	}
 }
 

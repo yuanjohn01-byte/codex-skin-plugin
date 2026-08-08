@@ -51,14 +51,13 @@ type Live struct {
 }
 
 type liveSession struct {
-	client         *cdp.Client
-	installation   codex.Installation
-	process        codex.ProcessIdentity
-	port           int
-	profile        string
-	current        *engine.CompiledTheme
-	appearanceMode string
-	targetID       string
+	client       *cdp.Client
+	installation codex.Installation
+	process      codex.ProcessIdentity
+	port         int
+	profile      string
+	current      *engine.CompiledTheme
+	targetID     string
 }
 
 type Config struct {
@@ -189,7 +188,7 @@ func NewLive(config Config) (*Live, error) {
 }
 
 func (adapter *Live) OpenVerifiedSession(ctx context.Context) (engine.Session, error) {
-	return adapter.openVerifiedSession(ctx, "", false)
+	return adapter.openVerifiedSession(ctx)
 }
 
 func (adapter *Live) OpenVerifiedThemeSession(
@@ -199,18 +198,14 @@ func (adapter *Live) OpenVerifiedThemeSession(
 	if compiled.AppearanceMode != "dark" && compiled.AppearanceMode != "light" {
 		return engine.Session{}, engine.ErrConfiguration
 	}
-	return adapter.openVerifiedSession(ctx, compiled.AppearanceMode, false)
+	return adapter.openVerifiedSession(ctx)
 }
 
 func (adapter *Live) OpenVerifiedOfficialSession(ctx context.Context) (engine.Session, error) {
-	return adapter.openVerifiedSession(ctx, "", true)
+	return adapter.openVerifiedSession(ctx)
 }
 
-func (adapter *Live) openVerifiedSession(
-	ctx context.Context,
-	targetAppearance string,
-	restoreAppearance bool,
-) (engine.Session, error) {
+func (adapter *Live) openVerifiedSession(ctx context.Context) (engine.Session, error) {
 	installation, err := codex.DiscoverInstallation(ctx)
 	if err != nil {
 		return engine.Session{}, err
@@ -218,37 +213,16 @@ func (adapter *Live) openVerifiedSession(
 	profile := adapter.profile
 	port := adapter.port
 	launchedPID := 0
-	appearanceChanged := false
-	appearanceRestart := false
 	mutated := false
 	var process codex.ProcessIdentity
-	if adapter.currentProfile && adapter.appearance != nil {
-		if restoreAppearance {
-			appearanceRestart, err = adapter.appearance.NeedsRestore()
-		} else if targetAppearance != "" {
-			appearanceRestart, err = adapter.appearance.NeedsPin(targetAppearance)
-		}
-		if err != nil {
-			return engine.Session{}, errors.Join(engine.ErrStateUnsafe, err)
-		}
+	if err := adapter.restoreLegacyAppearanceIfNeeded(); err != nil {
+		return engine.Session{}, err
 	}
 
 	if adapter.currentProfile {
 		current, currentErr := codex.DiscoverCurrentInstance(ctx, installation)
-		if currentErr == nil && current.ControlledPort > 0 && appearanceRestart &&
-			targetAppearance != "" && adapter.currentThemeMatchesAppearance(
-			ctx, installation, current, targetAppearance,
-		) {
-			// The on-demand transaction has already restored the user's on-disk
-			// Appearance preference. That does not change the renderer that is
-			// still open and visibly carrying its previous verified skin. Reuse
-			// only this exact trusted loopback renderer for a same-mode replacement;
-			// Prime later proves the existing marker matches the cached previous
-			// theme before the new renderer style is installed.
-			appearanceRestart = false
-		}
 		switch {
-		case currentErr == nil && current.ControlledPort > 0 && !appearanceRestart:
+		case currentErr == nil && current.ControlledPort > 0:
 			profile = current.Profile
 			port = current.ControlledPort
 			process = current.Process
@@ -290,20 +264,6 @@ func (adapter *Live) openVerifiedSession(
 					ctx, installation, launchedPID, port, profile, process, mutated, err,
 				)
 			}
-		}
-		if adapter.currentProfile && adapter.appearance != nil && appearanceRestart {
-			if restoreAppearance {
-				appearanceChanged, err = adapter.appearance.Restore()
-			} else {
-				appearanceChanged, err = adapter.appearance.Pin(targetAppearance)
-			}
-			if err != nil {
-				return engine.Session{}, adapter.recoverOpenFailure(
-					ctx, installation, launchedPID, port, profile, process,
-					mutated, errors.Join(engine.ErrStateUnsafe, err),
-				)
-			}
-			mutated = mutated || appearanceChanged
 		}
 		if port == 0 {
 			port, err = reserveLoopbackPort()
@@ -388,7 +348,7 @@ func (adapter *Live) openVerifiedSession(
 	adapter.mu.Lock()
 	adapter.sessions[opaqueID] = &liveSession{
 		client: client, installation: installation, process: process, port: port, profile: profile,
-		appearanceMode: targetAppearance, targetID: target.ID,
+		targetID: target.ID,
 	}
 	adapter.mu.Unlock()
 	return engine.Session{
@@ -402,55 +362,26 @@ func (adapter *Live) openVerifiedSession(
 	}, nil
 }
 
-// currentThemeMatchesAppearance is a read-only preflight for a same-mode
-// replacement. It never changes renderer state or the native Appearance
-// setting. A failed probe deliberately returns false so the caller takes the
-// existing fail-closed restart path instead of assuming a stale renderer can
-// be reused.
-func (adapter *Live) currentThemeMatchesAppearance(
-	ctx context.Context,
-	installation codex.Installation,
-	current codex.CurrentInstance,
-	targetAppearance string,
-) bool {
-	if current.ControlledPort <= 0 || (targetAppearance != "dark" && targetAppearance != "light") {
-		return false
+// restoreLegacyAppearanceIfNeeded consumes an appearance backup created by an
+// earlier Alpha before touching the current Codex process. Those builds wrote
+// appearanceTheme as a launch aid. Runtime v2.4 never does so, but must safely
+// restore that old user preference even when the current renderer is already
+// controlled and will be reused for a direct skin replacement.
+func (adapter *Live) restoreLegacyAppearanceIfNeeded() error {
+	if !adapter.currentProfile || adapter.appearance == nil {
+		return nil
 	}
-	if _, err := codex.VerifyListener(
-		ctx, installation, current.Process.ProcessID, current.ControlledPort, current.Profile,
-	); err != nil {
-		return false
-	}
-	targets, err := cdp.Discover(ctx, current.ControlledPort)
+	needed, err := adapter.appearance.NeedsRestore()
 	if err != nil {
-		return false
+		return errors.Join(engine.ErrStateUnsafe, err)
 	}
-	target, err := cdp.SelectPage(targets)
-	if err != nil {
-		return false
+	if !needed {
+		return nil
 	}
-	client, err := cdp.Dial(ctx, target, current.ControlledPort)
-	if err != nil {
-		return false
+	if _, err := adapter.appearance.Restore(); err != nil {
+		return errors.Join(engine.ErrStateUnsafe, err)
 	}
-	defer client.Close()
-	if err := client.Call(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
-		return false
-	}
-	var snapshot engine.Snapshot
-	if err := callFunction(ctx, client, captureFunction, nil, &snapshot); err != nil {
-		return false
-	}
-	return reusableControlledThemeSnapshot(snapshot, targetAppearance)
-}
-
-func reusableControlledThemeSnapshot(snapshot engine.Snapshot, targetAppearance string) bool {
-	return snapshot.StylePresent &&
-		sixDigitID.MatchString(snapshot.ThemePublicID) &&
-		snapshot.ThemeVersion != "" &&
-		snapshot.TemplateVersion >= engine.MinimumTemplateVersion &&
-		snapshot.StyleText != "" &&
-		snapshot.AppearanceMode == targetAppearance
+	return nil
 }
 
 func (adapter *Live) recoverOpenFailure(
@@ -874,11 +805,6 @@ func (adapter *Live) Restore(ctx context.Context, session engine.Session, snapsh
 	if err != nil {
 		return err
 	}
-	if adapter.currentProfile && adapter.appearance != nil && live.appearanceMode != snapshot.AppearanceMode {
-		if err := adapter.restartSessionAppearance(ctx, live, snapshot.AppearanceMode); err != nil {
-			return errors.Join(engine.ErrRollbackFailed, err)
-		}
-	}
 	restoredTheme := engine.CompiledTheme{
 		ThemePublicID: snapshot.ThemePublicID, ThemeVersion: snapshot.ThemeVersion,
 		TemplateVersion: snapshot.TemplateVersion, StyleText: snapshot.StyleText,
@@ -889,134 +815,6 @@ func (adapter *Live) Restore(ctx context.Context, session engine.Session, snapsh
 	}
 	live.current = &restoredTheme
 	return nil
-}
-
-func (adapter *Live) restartSessionAppearance(
-	ctx context.Context,
-	live *liveSession,
-	mode string,
-) error {
-	if mode != "dark" && mode != "light" {
-		return engine.ErrConfiguration
-	}
-	if !adapter.restartApproved {
-		return engine.ErrRestartConsent
-	}
-	if err := adapter.removeControllerBootstrap(ctx, live); err != nil {
-		return err
-	}
-	var cleaned bool
-	_ = callFunction(ctx, live.client, restoreFunction, nil, &cleaned)
-	if err := codex.StopOwnedProcess(
-		ctx, live.installation, live.process, live.port, live.profile,
-	); err != nil {
-		return err
-	}
-	_ = live.client.Close()
-	live.client = nil
-	live.current = nil
-
-	if _, err := adapter.appearance.Pin(mode); err != nil {
-		return adapter.recoverOrdinaryAppearance(ctx, live.installation, err)
-	}
-	launchedPID, err := codex.LaunchControlled(ctx, live.installation, live.profile, live.port)
-	if err != nil {
-		return adapter.recoverOrdinaryAppearance(ctx, live.installation, err)
-	}
-	process, target, client, err := adapter.connectControlled(
-		ctx, live.installation, launchedPID, live.port, live.profile,
-	)
-	if err != nil {
-		return adapter.recoverFailedControlled(
-			ctx, live.installation, launchedPID, live.port, live.profile, err,
-		)
-	}
-	if err := adapter.clearControllerRecord(); err != nil {
-		_ = client.Close()
-		_ = codex.StopOwnedProcess(ctx, live.installation, process, live.port, live.profile)
-		return adapter.recoverOrdinaryAppearance(ctx, live.installation, err)
-	}
-	live.process = process
-	live.targetID = target.ID
-	live.client = client
-	live.appearanceMode = mode
-	return nil
-}
-
-func (adapter *Live) connectControlled(
-	ctx context.Context,
-	installation codex.Installation,
-	launchedPID int,
-	port int,
-	profile string,
-) (codex.ProcessIdentity, cdp.Target, *cdp.Client, error) {
-	deadline := time.Now().Add(adapter.launchWait)
-	var process codex.ProcessIdentity
-	var targets []cdp.Target
-	var err error
-	for time.Now().Before(deadline) {
-		if ctx.Err() != nil {
-			return codex.ProcessIdentity{}, cdp.Target{}, nil, ctx.Err()
-		}
-		process, err = codex.VerifyListener(ctx, installation, launchedPID, port, profile)
-		if err == nil {
-			targets, err = cdp.Discover(ctx, port)
-			if err == nil {
-				break
-			}
-		}
-		time.Sleep(250 * time.Millisecond)
-	}
-	if err != nil {
-		return codex.ProcessIdentity{}, cdp.Target{}, nil, errors.Join(codex.ErrListenerUntrusted, err)
-	}
-	target, err := cdp.SelectPage(targets)
-	if err != nil {
-		return codex.ProcessIdentity{}, cdp.Target{}, nil, err
-	}
-	client, err := cdp.Dial(ctx, target, port)
-	if err != nil {
-		return codex.ProcessIdentity{}, cdp.Target{}, nil, err
-	}
-	if err := client.Call(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
-		client.Close()
-		return codex.ProcessIdentity{}, cdp.Target{}, nil, err
-	}
-	if err := client.Call(ctx, "Page.enable", map[string]any{}, nil); err != nil {
-		client.Close()
-		return codex.ProcessIdentity{}, cdp.Target{}, nil, err
-	}
-	return process, target, client, nil
-}
-
-func (adapter *Live) recoverOrdinaryAppearance(
-	ctx context.Context,
-	installation codex.Installation,
-	cause error,
-) error {
-	if adapter.appearance != nil {
-		_, restoreErr := adapter.appearance.Restore()
-		cause = errors.Join(cause, restoreErr)
-	}
-	return reopenOrdinaryIfMissing(ctx, installation, cause)
-}
-
-func (adapter *Live) recoverFailedControlled(
-	ctx context.Context,
-	installation codex.Installation,
-	launchedPID int,
-	port int,
-	profile string,
-	cause error,
-) error {
-	if process, err := codex.VerifyListener(ctx, installation, launchedPID, port, profile); err == nil {
-		stopCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 12*time.Second)
-		cause = errors.Join(cause, codex.StopOwnedProcess(
-			stopCtx, installation, process, port, profile,
-		))
-		cancel()
-	}
-	return adapter.recoverOrdinaryAppearance(ctx, installation, cause)
 }
 
 func (adapter *Live) RestoreOfficial(ctx context.Context, session engine.Session) error {
@@ -1098,22 +896,11 @@ func (adapter *Live) Close(ctx context.Context, session engine.Session) error {
 	return live.client.Close()
 }
 
-// RestoreNativeAppearanceBackup restores the exact on-disk appearance settings
-// without launching or attaching to Codex. The session controller calls this
-// after the already-running renderer is verified, so an abrupt computer shutdown
-// cannot leave the next ordinary Codex launch pinned to a theme mode.
-func (adapter *Live) RestoreNativeAppearanceBackup() error {
-	if !adapter.currentProfile || adapter.appearance == nil {
-		return engine.ErrConfiguration
-	}
-	_, err := adapter.appearance.Restore()
-	return err
-}
-
 // FinalizeOfficialRollback completes a failed first-theme transaction. The
 // renderer has already been verified official by the engine; this method then
-// stops only the exact controlled process, restores the native appearance
-// backup, and reopens Codex without the loopback debugging launch flags.
+// stops only the exact controlled process, consumes any legacy native-
+// appearance backup left by an earlier Alpha, and reopens Codex without the
+// loopback debugging launch flags.
 func (adapter *Live) FinalizeOfficialRollback(ctx context.Context, session engine.Session) error {
 	adapter.mu.Lock()
 	live := adapter.sessions[session.OpaqueID]

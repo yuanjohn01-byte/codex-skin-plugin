@@ -1,5 +1,6 @@
-// Package appearance synchronizes Codex's native light/dark preference with a
-// data-only Codex Skin theme and restores the exact pre-install setting.
+// Package appearance consumes a strictly validated native-appearance backup
+// left by earlier Paid Alpha builds. Runtime v2.4 themes never modify Codex's
+// native preference; they carry their light/dark contract in scoped CSS.
 package appearance
 
 import (
@@ -56,31 +57,6 @@ func New(configPath, backupPath, platform string) (*Manager, error) {
 	return &Manager{configPath: configPath, backupPath: backupPath, platform: platform}, nil
 }
 
-func (manager *Manager) NeedsPin(mode string) (bool, error) {
-	if mode != "dark" && mode != "light" {
-		return false, fmt.Errorf("unsupported appearance mode")
-	}
-	_, found, err := manager.readBackup()
-	if err != nil {
-		return false, err
-	}
-	if !found {
-		// Even when Codex already uses the requested appearance, first apply must
-		// record that exact pre-theme state so offline Restore can remove only the
-		// settings Codex Skin owns.
-		return true, nil
-	}
-	content, _, err := manager.readConfig()
-	if err != nil {
-		return false, err
-	}
-	current, err := settingValue(content, "appearanceTheme")
-	if err != nil {
-		return false, err
-	}
-	return current == nil || *current != `"`+mode+`"`, nil
-}
-
 func (manager *Manager) NeedsRestore() (bool, error) {
 	_, found, err := manager.readBackup()
 	if err != nil || !found {
@@ -89,57 +65,6 @@ func (manager *Manager) NeedsRestore() (bool, error) {
 	// A retained backup must be consumed even when the visible values already
 	// match, otherwise a later install could restore stale pre-install state.
 	return true, nil
-}
-
-func (manager *Manager) Pin(mode string) (bool, error) {
-	if mode != "dark" && mode != "light" {
-		return false, fmt.Errorf("unsupported appearance mode")
-	}
-	release, err := manager.lock()
-	if err != nil {
-		return false, err
-	}
-	defer release()
-
-	content, info, err := manager.readConfig()
-	if err != nil {
-		return false, err
-	}
-	backupCreated := false
-	if _, found, err := manager.readBackup(); err != nil {
-		return false, err
-	} else if !found {
-		values := map[string]*string{}
-		for _, key := range managedKeys {
-			line, err := settingLine(content, key)
-			if err != nil {
-				return false, err
-			}
-			values[key] = line
-		}
-		if err := manager.writeBackup(backup{
-			SchemaVersion: backupSchemaVersion,
-			Platform:      manager.platform, ConfigPath: manager.configPath, Values: values,
-		}); err != nil {
-			return false, err
-		}
-		backupCreated = true
-	}
-	current, err := settingValue(content, "appearanceTheme")
-	if err != nil {
-		return false, err
-	}
-	if current != nil && *current == `"`+mode+`"` {
-		return backupCreated, nil
-	}
-	updated, err := replaceSetting(content, "appearanceTheme", pointer(`appearanceTheme = "`+mode+`"`))
-	if err != nil {
-		return false, err
-	}
-	if updated == content {
-		return backupCreated, nil
-	}
-	return true, atomicReplace(manager.configPath, []byte(content), []byte(updated), info)
 }
 
 func (manager *Manager) Restore() (bool, error) {
@@ -224,21 +149,6 @@ func (manager *Manager) readBackup() (backup, bool, error) {
 		}
 	}
 	return stored, true, nil
-}
-
-func (manager *Manager) writeBackup(stored backup) error {
-	if err := rejectSymlink(manager.backupPath); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(manager.backupPath), 0o700); err != nil {
-		return err
-	}
-	content, err := json.MarshalIndent(stored, "", "  ")
-	if err != nil {
-		return err
-	}
-	content = append(content, '\n')
-	return atomicCreate(manager.backupPath, content, 0o600)
 }
 
 func (manager *Manager) lock() (func(), error) {
@@ -465,21 +375,6 @@ func atomicReplace(path string, expected, content []byte, info os.FileInfo) erro
 		return err
 	}
 	if err := replaceFile(temporary, path); err != nil {
-		return err
-	}
-	return syncDirectory(filepath.Dir(path))
-}
-
-func atomicCreate(path string, content []byte, mode os.FileMode) error {
-	temporary, err := temporaryName(filepath.Dir(path), ".appearance-backup-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(temporary)
-	if err := os.WriteFile(temporary, content, mode); err != nil {
-		return err
-	}
-	if err := os.Link(temporary, path); err != nil {
 		return err
 	}
 	return syncDirectory(filepath.Dir(path))

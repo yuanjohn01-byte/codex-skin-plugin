@@ -13,6 +13,8 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
@@ -28,6 +30,8 @@ const (
 	signatureName    = "release-descriptor.sig"
 	currentFilename  = "current.json"
 	requestsDirname  = "requests"
+	historyDirname   = "history"
+	maxHistory       = 8
 	operationApply   = "apply"
 	operationRestore = "restore"
 )
@@ -78,6 +82,7 @@ type Store struct {
 	root        string
 	directory   string
 	requestsDir string
+	historyDir  string
 	currentPath string
 	now         func() time.Time
 }
@@ -92,13 +97,14 @@ func New(root string) (*Store, error) {
 	}
 	directory := filepath.Join(root, "restart")
 	requestsDir := filepath.Join(directory, requestsDirname)
-	for _, path := range []string{directory, requestsDir} {
+	historyDir := filepath.Join(directory, historyDirname)
+	for _, path := range []string{directory, requestsDir, historyDir} {
 		if err := ensureDirectory(path); err != nil {
 			return nil, err
 		}
 	}
 	return &Store{
-		root: root, directory: directory, requestsDir: requestsDir,
+		root: root, directory: directory, requestsDir: requestsDir, historyDir: historyDir,
 		currentPath: filepath.Join(directory, currentFilename), now: time.Now,
 	}, nil
 }
@@ -168,6 +174,11 @@ func (store *Store) StageApply(verified theme.Verified) (Request, error) {
 	if err := syncDirectory(payloadDirectory); err != nil {
 		return Request{}, err
 	}
+	if oldFound {
+		if err := store.archiveTerminal(old); err != nil {
+			return Request{}, err
+		}
+	}
 	if err := store.writeCurrent(request); err != nil {
 		return Request{}, err
 	}
@@ -197,6 +208,11 @@ func (store *Store) StageRestore() (Request, error) {
 	request, err := store.newRequest(operationRestore)
 	if err != nil {
 		return Request{}, err
+	}
+	if oldFound {
+		if err := store.archiveTerminal(old); err != nil {
+			return Request{}, err
+		}
 	}
 	if err := store.writeCurrent(request); err != nil {
 		return Request{}, err
@@ -236,6 +252,9 @@ func (store *Store) PrepareNewApply() (bool, error) {
 	}
 	if current.Status == StatusApproved || current.Status == StatusRunning {
 		return false, ErrBusy
+	}
+	if err := store.archiveTerminal(current); err != nil {
+		return false, err
 	}
 	if err := store.removeCurrent(); err != nil {
 		return false, err
@@ -409,14 +428,60 @@ func (store *Store) transition(
 	if !valid(request) {
 		return Request{}, ErrState
 	}
+	if err := store.archiveTerminal(request); err != nil {
+		return Request{}, err
+	}
 	if err := store.writeCurrent(request); err != nil {
 		return Request{}, err
 	}
 	return request, nil
 }
 
+// History returns the bounded, redacted terminal continuation records. It is
+// intentionally separate from Current: normal apply decisions must use only
+// the active request, never a stale error from an earlier conversation.
+func (store *Store) History() ([]Request, error) {
+	if store == nil {
+		return nil, ErrUnsafe
+	}
+	entries, err := os.ReadDir(store.historyDir)
+	if err != nil {
+		return nil, ErrUnsafe
+	}
+	if len(entries) > maxHistory {
+		return nil, ErrUnsafe
+	}
+	history := make([]Request, 0, len(entries))
+	for _, entry := range entries {
+		if entry.Type()&os.ModeSymlink != 0 || !entry.Type().IsRegular() ||
+			!strings.HasSuffix(entry.Name(), ".json") {
+			return nil, ErrUnsafe
+		}
+		requestID := strings.TrimSuffix(entry.Name(), ".json")
+		if !requestIDPattern.MatchString(requestID) {
+			return nil, ErrUnsafe
+		}
+		request, found, err := store.readRequest(filepath.Join(store.historyDir, entry.Name()))
+		if err != nil || !found || request.RequestID != requestID || !terminal(request) {
+			return nil, ErrUnsafe
+		}
+		history = append(history, request)
+	}
+	sort.Slice(history, func(left, right int) bool {
+		if history[left].UpdatedAt == history[right].UpdatedAt {
+			return history[left].RequestID < history[right].RequestID
+		}
+		return history[left].UpdatedAt < history[right].UpdatedAt
+	})
+	return history, nil
+}
+
 func (store *Store) readCurrent() (Request, bool, error) {
-	info, err := os.Lstat(store.currentPath)
+	return store.readRequest(store.currentPath)
+}
+
+func (store *Store) readRequest(path string) (Request, bool, error) {
+	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return Request{}, false, nil
 	}
@@ -424,7 +489,7 @@ func (store *Store) readCurrent() (Request, bool, error) {
 		info.Size() < 1 || info.Size() > maxRequestBytes {
 		return Request{}, false, ErrUnsafe
 	}
-	raw, err := readBoundedRegular(store.currentPath, maxRequestBytes)
+	raw, err := readBoundedRegular(path, maxRequestBytes)
 	if err != nil {
 		return Request{}, false, err
 	}
@@ -442,6 +507,10 @@ func (store *Store) readCurrent() (Request, bool, error) {
 }
 
 func (store *Store) writeCurrent(request Request) error {
+	return store.writeRequest(store.currentPath, request)
+}
+
+func (store *Store) writeRequest(path string, request Request) error {
 	if !valid(request) {
 		return ErrUnsafe
 	}
@@ -450,7 +519,8 @@ func (store *Store) writeCurrent(request Request) error {
 		return ErrUnsafe
 	}
 	raw = append(raw, '\n')
-	temporary, err := os.CreateTemp(store.directory, ".restart-current-*.tmp")
+	directory := filepath.Dir(path)
+	temporary, err := os.CreateTemp(directory, ".restart-request-*.tmp")
 	if err != nil {
 		return ErrUnsafe
 	}
@@ -474,11 +544,40 @@ func (store *Store) writeCurrent(request Request) error {
 	if err := temporary.Close(); err != nil {
 		return ErrUnsafe
 	}
-	if err := replaceFile(temporaryPath, store.currentPath); err != nil {
+	if err := replaceFile(temporaryPath, path); err != nil {
 		return ErrUnsafe
 	}
 	cleanup = false
-	return syncDirectory(store.directory)
+	return syncDirectory(directory)
+}
+
+func (store *Store) archiveTerminal(request Request) error {
+	if !terminal(request) {
+		return nil
+	}
+	history, err := store.History()
+	if err != nil {
+		return err
+	}
+	for len(history) >= maxHistory {
+		oldest := history[0]
+		path := filepath.Join(store.historyDir, oldest.RequestID+".json")
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+			return ErrUnsafe
+		}
+		if err := os.Remove(path); err != nil {
+			return ErrUnsafe
+		}
+		history = history[1:]
+	}
+	if err := syncDirectory(store.historyDir); err != nil {
+		return err
+	}
+	if err := store.writeRequest(filepath.Join(store.historyDir, request.RequestID+".json"), request); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (store *Store) removeCurrent() error {
@@ -593,6 +692,10 @@ func active(request Request, now time.Time) bool {
 		return now.Before(expiry.Add(2 * time.Minute))
 	}
 	return now.Before(expiry)
+}
+
+func terminal(request Request) bool {
+	return request.Status == StatusCompleted || request.Status == StatusFailed
 }
 
 func ensureDirectory(path string) error {

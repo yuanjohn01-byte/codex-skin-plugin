@@ -359,6 +359,41 @@ func TestJournalRejectsUnallowlistedVerificationFields(t *testing.T) {
 	}
 }
 
+func TestRestorePreservesInterruptedJournalStageInRedactedTrace(t *testing.T) {
+	store := testStore(t)
+	operationID, err := store.NewOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	journal := Journal{
+		OperationID: operationID, Kind: "apply", Stage: "verify", Status: "running",
+		ThemePublicID: "100001", ThemeVersion: "1.0.0",
+	}
+	if err := store.WriteJournal(journal); err != nil {
+		t.Fatal(err)
+	}
+	instance, err := New(store, &fakeAdapter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.resolveInterruptedJournals("op_ffffffffffffffff"); err != nil {
+		t.Fatal(err)
+	}
+	var restored Journal
+	found, err := readJSON(filepath.Join(store.Root(), "state", "operations", operationID+".json"), &restored)
+	if err != nil || !found {
+		t.Fatalf("restored journal found=%t err=%v", found, err)
+	}
+	if restored.Stage != "official_restored" || restored.InterruptedStage != "verify" ||
+		restored.ErrorCode != "CS-INTERRUPTED-RESTORED-001" {
+		t.Fatalf("restored journal = %#v", restored)
+	}
+	if len(restored.Trace) < 2 || restored.Trace[0].Stage != "verify" ||
+		restored.Trace[len(restored.Trace)-1].Stage != "official_restored" {
+		t.Fatalf("redacted trace = %#v", restored.Trace)
+	}
+}
+
 func TestRollbackFailureIsBlocking(t *testing.T) {
 	verified := verifiedThemeForEngine(t)
 	store := testStore(t)
