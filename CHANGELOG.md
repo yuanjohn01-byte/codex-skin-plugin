@@ -2,6 +2,8 @@
 
 ## 0.1.0-paid-alpha - Code-stage candidate
 
+- Bind the Plugin's Bootstrap `.9` installer to the signed Staging Helper `.10`
+  release at the exact `b580e24617077502fe799562fa193bab1162564f` build closure.
 - Prepare immutable Staging Helper `.10` and Bootstrap `.9` artifacts. The
   installed Plugin pins remain on the previous immutable artifacts until the
   signed candidate's three platform hashes are available; a follow-up pin-only
