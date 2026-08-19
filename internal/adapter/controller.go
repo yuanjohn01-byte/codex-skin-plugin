@@ -173,11 +173,16 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
     }
   };
   const routeScope = () => {
+    if (settingsScope()) return "settings";
     if (document.querySelector(selector("home-route")) ||
         document.querySelector(selector("home-icon")) ||
         document.querySelector(selector("home-suggestions"))) return "home";
     if (document.querySelector(selector("thread-surface"))) return "thread";
-    return "shell";
+    // Codex can replace the old thread scroll container on an otherwise
+    // verified shell. The Home and Settings routes above have positive
+    // anchors; every remaining normal shell is a task route for the signed
+    // template's limited surface treatment.
+    return "thread";
   };
   const setAttribute = (node, name, value) => {
     if (node.getAttribute(name) !== value) node.setAttribute(name, value);

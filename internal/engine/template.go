@@ -207,7 +207,7 @@ func CompileTheme(verified theme.Verified, stagedRoot string) (CompiledTheme, er
 		surfaceRGB,
 		RootMarkerAttribute,
 	)
-	previousStyle, err := compileTemplateV7(
+	previousStyle, err := compileTemplateV8(
 		manifest.Design.Mode,
 		tokens,
 		sidebarRGB,
@@ -217,7 +217,7 @@ func CompileTheme(verified theme.Verified, stagedRoot string) (CompiledTheme, er
 	if err != nil {
 		return CompiledTheme{}, err
 	}
-	style, err := compileTemplateV8(
+	style, err := compileTemplateV9(
 		manifest.Design.Mode,
 		tokens,
 		sidebarRGB,
@@ -317,6 +317,31 @@ func compileTemplateV8(
 }
 `
 	return style + strings.ReplaceAll(scopeContract, "__MARKER__", RootMarkerAttribute), nil
+}
+
+func compileTemplateV9(
+	mode string,
+	tokens theme.Tokens,
+	sidebarRGB string,
+	surfaceRGB string,
+	shadowAlpha string,
+) (string, error) {
+	style, err := compileTemplateV8(mode, tokens, sidebarRGB, surfaceRGB, shadowAlpha)
+	if err != nil {
+		return "", err
+	}
+	const taskRouteFallbackContract = `
+
+/* Fixed task-route fallback contract v9. A current Codex task can replace the
+   older thread scroll container while retaining the verified app shell. The
+   renderer therefore treats a non-Home, non-Settings shell as a task route;
+   this signed contract keeps the existing scoped surface, boundary and fade
+   rules active without granting themes control over route selectors. */
+:root[__MARKER__="active"] {
+  --cs-scope-contract: 9;
+}
+`
+	return style + strings.ReplaceAll(taskRouteFallbackContract, "__MARKER__", RootMarkerAttribute), nil
 }
 
 func compileTemplateV7(

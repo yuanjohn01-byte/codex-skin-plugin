@@ -51,12 +51,21 @@ func TestRuntimeFunctionsSupportStableAndModuleMainSurfaces(t *testing.T) {
 		`[class*="_Header_"]`,
 		`[data-app-shell-main-content-top-fade]`,
 		`visible(header) && shellEdgeContractSafe`,
-		`--cs-scope-contract: 8`,
+		`--cs-scope-contract: 9`,
 		`data-codex-skin-scope`,
-		`expectedTemplateVersion < 8`,
+		`expectedTemplateVersion < 9`,
 	} {
 		if !strings.Contains(verifyFunction, fragment) {
 			t.Fatalf("verify function is missing top-fade contract %q", fragment)
+		}
+	}
+	for _, fragment := range []string{
+		`The legacy thread container is an optional L2 probe. A verified normal`,
+		`shell that is neither Home nor Settings is a Codex task/conversation route.`,
+		`const scope = settings ? "settings" : home ? "home" : "thread";`,
+	} {
+		if !strings.Contains(probeFunction, fragment) {
+			t.Fatalf("probe function is missing task-route fallback %q", fragment)
 		}
 	}
 }

@@ -89,13 +89,34 @@ func TestInstallControllerUsesCurrentDocumentOnly(t *testing.T) {
 func TestApplyFunctionMarksAnExplicitHomeOrThreadScope(t *testing.T) {
 	for _, fragment := range []string{
 		`const routeScope = () =>`,
+		`if (settingsScope()) return "settings";`,
 		`selector("home-suggestions")`,
 		`selector("thread-surface")`,
+		`return "thread";`,
 		`setAttribute(main, "data-codex-skin-scope", scope)`,
 		`node.removeAttribute("data-codex-skin-scope")`,
 	} {
 		if !strings.Contains(applyFunction, fragment) {
 			t.Fatalf("apply function is missing %q", fragment)
+		}
+	}
+}
+
+func TestApplyFunctionUsesTaskFallbackWhenLegacyThreadContainerIsAbsent(t *testing.T) {
+	if strings.Contains(applyFunction, `return "shell";`) {
+		t.Fatal("apply function can still classify a verified normal shell as an unstyled shell")
+	}
+	for _, fragment := range []string{
+		`if (settingsScope()) return "settings";`,
+		`selector("home-route")`,
+		`selector("home-icon")`,
+		`selector("home-suggestions")`,
+		`if (document.querySelector(selector("thread-surface"))) return "thread";`,
+		`every remaining normal shell is a task route`,
+		`return "thread";`,
+	} {
+		if !strings.Contains(applyFunction, fragment) {
+			t.Fatalf("task-route fallback contract is missing %q", fragment)
 		}
 	}
 }

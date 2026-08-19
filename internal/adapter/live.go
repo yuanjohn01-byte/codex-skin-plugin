@@ -1083,7 +1083,9 @@ const probeFunction = `function (selectors) {
   const home = query("home-icon") || query("home-route");
   const thread = query("thread-surface");
   const settings = query("settings-panel") || query("appearance-radio");
-  const scope = settings ? "settings" : home ? "home" : thread ? "thread" : "shell";
+  // The legacy thread container is an optional L2 probe. A verified normal
+  // shell that is neither Home nor Settings is a Codex task/conversation route.
+  const scope = settings ? "settings" : home ? "home" : "thread";
   const activityHeader = document.querySelector(
     ".thread-scroll-container button.group\\/activity-header"
   );
@@ -1272,7 +1274,9 @@ const verifyFunction = `function (expectedTemplateVersion, selectors) {
   const routeScope = main?.getAttribute("data-codex-skin-scope") || "";
   const scopedMain = routeScope === "home" || routeScope === "thread";
   const scopeContractSafe = Boolean(style &&
-    style.textContent.includes("--cs-scope-contract: 8") &&
+    style.textContent.includes(expectedTemplateVersion < 9
+      ? "--cs-scope-contract: 8"
+      : "--cs-scope-contract: 9") &&
     style.textContent.includes('data-codex-skin-scope="home"') &&
     style.textContent.includes('data-codex-skin-scope="thread"'));
   const topFadeContractSafe = expectedTemplateVersion < 6 || (expectedTemplateVersion < 8

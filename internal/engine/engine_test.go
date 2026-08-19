@@ -1036,6 +1036,31 @@ func passingReport() RegionReport {
 	}
 }
 
+func TestTaskRouteFallbackAcceptsVerifiedShellWithoutLegacyThreadSurface(t *testing.T) {
+	compiled := CompiledTheme{
+		ThemePublicID:   "100005",
+		ThemeVersion:    "1.0.1",
+		TemplateVersion: TemplateVersion,
+	}
+	report := passingReport()
+	report.Scope = "thread"
+	report.StyleMarkerCount = 1
+	report.ThemePublicID = compiled.ThemePublicID
+	report.TemplateVersion = compiled.TemplateVersion
+	report.BackgroundLoaded = true
+	report.Regions["shellMain"] = RegionPass
+	report.Regions["headerTint"] = RegionPass
+	// The legacy thread surface is intentionally L2/diagnostic-only. Newer
+	// Codex task pages can retain the verified shell while replacing it.
+	report.Regions["conversationActivity"] = RegionNotPresent
+	report.Regions["conversationDiffResource"] = RegionNotPresent
+	report.Regions["topFade"] = RegionNotPresent
+
+	if !ReportAllowsTheme(report, compiled) {
+		t.Fatalf("verified task-route fallback was rejected: %#v", report)
+	}
+}
+
 func testStore(t *testing.T) *Store {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "CodexSkin")
