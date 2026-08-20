@@ -18,6 +18,14 @@ const (
 	rollbackTimeout   = 20 * time.Second
 	operationLockWait = 5 * time.Second
 	operationLockPoll = 25 * time.Millisecond
+
+	// legacyV8VerificationMigrationCode records a narrowly-scoped transition
+	// from the superseded Template v8 verifier. That verifier could leave a
+	// journal in "running/verify" after its bounded checks had already failed.
+	// It is not a live mutation transaction, so a current Helper must not keep
+	// reopening Codex solely to repeat the old rollback path before it can
+	// apply a current template.
+	legacyV8VerificationMigrationCode = "CS-LEGACY-MIGRATED-001"
 )
 
 type Engine struct {
@@ -342,6 +350,9 @@ func (engine *Engine) recoverInterruptedLocked(ctx context.Context) error {
 		return fmt.Errorf("%w: multiple running operation journals", ErrStateUnsafe)
 	}
 	journal := journals[0]
+	if isRetirableLegacyV8Verification(journal) {
+		return engine.retireLegacyV8Verification(journal)
+	}
 	if journal.Kind != "apply" {
 		journal.Status = "failed"
 		journal.ErrorCode = "CS-INTERRUPTED-001"
@@ -403,6 +414,34 @@ func (engine *Engine) recoverInterruptedLocked(ctx context.Context) error {
 	journal.Status = "failed"
 	journal.ErrorCode = "CS-INTERRUPTED-001"
 	journal.Stage = "rolled_back"
+	return engine.store.WriteJournal(journal)
+}
+
+// isRetirableLegacyV8Verification identifies only the historical v8 verifier
+// residue produced by the prior Runtime v2 release. It intentionally does not
+// match a current template, another failure code, or any non-verify stage:
+// those states still use the normal fail-closed recovery path.
+func isRetirableLegacyV8Verification(journal Journal) bool {
+	if journal.Kind != "apply" || journal.Status != "running" ||
+		journal.Stage != "verify" || journal.ErrorCode != "CS-VERIFY-001" ||
+		journal.RecoveryID == "" || journal.Verification == nil {
+		return false
+	}
+	verification := journal.Verification
+	return verification.RuntimeVersion == 2 &&
+		verification.TemplateVersion == TemplateVersion-1 &&
+		verification.ReapplyAttempted && verification.ProbeCompleted
+}
+
+// retireLegacyV8Verification keeps both the journal and its recovery point on
+// disk for offline Restore and diagnostics. It only marks the obsolete
+// verification residue as terminal, allowing the current Apply flow to create
+// and verify a fresh transaction.
+func (engine *Engine) retireLegacyV8Verification(journal Journal) error {
+	journal.InterruptedStage = journal.Stage
+	journal.Stage = "legacy_migrated"
+	journal.Status = "failed"
+	journal.ErrorCode = legacyV8VerificationMigrationCode
 	return engine.store.WriteJournal(journal)
 }
 

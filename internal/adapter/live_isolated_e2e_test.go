@@ -209,3 +209,133 @@ func TestIsolatedCodexRendererSessionLifecycle(t *testing.T) {
 	stage = "pass"
 	writeReport()
 }
+
+// TestIsolatedCodexRendererLifecycleAfterLegacyV8VerificationResidue covers
+// the upgrade path that a clean-profile smoke cannot see: a superseded v8
+// verifier has already left a failed, running verification journal behind.
+// The test first asks the current engine to retire only that exact residue,
+// then uses the same temporary profile for a real Apply -> visible verification
+// -> Restore cycle. It never opens, reads, or changes the Founder's profile.
+func TestIsolatedCodexRendererLifecycleAfterLegacyV8VerificationResidue(t *testing.T) {
+	if os.Getenv("CODEX_SKIN_ISOLATED_E2E") != "1" {
+		t.Skip("set CODEX_SKIN_ISOLATED_E2E=1 to launch an isolated Codex profile")
+	}
+	if runtime.GOOS != "darwin" {
+		t.Skip("the current isolated live-app smoke runs on macOS only")
+	}
+
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	store, err := engine.OpenStore(root, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture := filepath.Join("..", "..", "fixtures", "free-test-theme-v1", "signed-release-v1")
+	descriptor, err := os.ReadFile(filepath.Join(fixture, "release-descriptor.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	signature, err := os.ReadFile(filepath.Join(fixture, "release-descriptor.sig"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	verified, err := theme.Verify(filepath.Join(fixture, "package.cskin"), descriptor, signature)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagedTheme := filepath.Join(root, "staged-theme")
+	if err := theme.Extract(verified, stagedTheme); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := engine.CompileTheme(verified, stagedTheme)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Seed only the exact durable shape emitted by Template v8 after its
+	// bounded verification had already failed. The recovery point remains in
+	// place; migration records a terminal history rather than deleting it.
+	operationID, err := store.NewOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryID, err := store.NewRecoveryID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteRecoveryPoint(engine.RecoveryPoint{
+		RecoveryID: recoveryID, OperationID: operationID, CapturedAt: time.Now().UTC().Format(time.RFC3339),
+	}, engine.Snapshot{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteJournal(engine.Journal{
+		OperationID: operationID, Kind: "apply", Stage: "verify", Status: "running",
+		ThemePublicID: compiled.ThemePublicID, ThemeVersion: compiled.ThemeVersion, RecoveryID: recoveryID,
+		ErrorCode: "CS-VERIFY-001",
+		Verification: &engine.VerificationSummary{
+			Attempts: 66, ReapplyAttempted: true, ProbeCompleted: true,
+			Scope: "shell", RuntimeVersion: 2, StyleMarkerCount: 1,
+			TemplateVersion: engine.TemplateVersion - 1, ThemePublicID: compiled.ThemePublicID,
+			BackgroundLoaded: true,
+			Regions: map[string]engine.RegionStatus{
+				"mainBoundary":  engine.RegionFail,
+				"templateScope": engine.RegionFail,
+				"topFade":       engine.RegionFail,
+			},
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	live, err := NewLive(Config{
+		Root:            root,
+		CurrentProfile:  false,
+		RestartApproved: true,
+		LaunchWait:      40 * time.Second,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := engine.New(store, live)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	defer cancel()
+	if err := instance.RecoverInterrupted(ctx); err != nil {
+		t.Fatalf("legacy migration recovery error = %v", err)
+	}
+	running, err := store.RunningJournals()
+	if err != nil || len(running) != 0 {
+		t.Fatalf("legacy journal remains running: %#v err=%v", running, err)
+	}
+	if _, _, err := store.ReadRecoveryPoint(recoveryID); err != nil {
+		t.Fatalf("legacy recovery point was removed: %v", err)
+	}
+
+	session, err := live.OpenVerifiedThemeSession(ctx, compiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cleanupCancel()
+		_ = live.RestoreOfficial(cleanupCtx, session)
+		_ = live.StopOwned(cleanupCtx, session)
+	})
+	if _, err := live.WaitForCapabilities(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if err := live.Apply(ctx, session, compiled); err != nil {
+		t.Fatal(err)
+	}
+	verification, err := live.WaitForThemeVerification(ctx, session, compiled)
+	if err != nil || !engine.ReportAllowsTheme(verification.Report, compiled) {
+		t.Fatalf("dirty-profile renderer did not reach a verified themed state: %#v err=%v", verification, err)
+	}
+	if err := live.RestoreOfficial(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+	if err := live.VerifyOfficial(ctx, session); err != nil {
+		t.Fatal(err)
+	}
+}

@@ -892,6 +892,98 @@ func TestInterruptedApplyStagesRestoreDurableLastKnownGood(t *testing.T) {
 	}
 }
 
+func TestLegacyV8VerificationJournalIsRetiredBeforeFreshApply(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	store := testStore(t)
+	operationID, err := store.NewOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryID, err := store.NewRecoveryID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteRecoveryPoint(RecoveryPoint{
+		RecoveryID: recoveryID, OperationID: operationID, CapturedAt: canonicalNow(),
+	}, Snapshot{}); err != nil {
+		t.Fatal(err)
+	}
+	legacy := Journal{
+		OperationID: operationID, Kind: "apply", Stage: "verify", Status: "running",
+		ThemePublicID: "100001", ThemeVersion: "1.0.0", RecoveryID: recoveryID,
+		ErrorCode: "CS-VERIFY-001", Verification: legacyV8VerificationSummary(),
+	}
+	if err := store.WriteJournal(legacy); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &fakeAdapter{probe: passingReport()}
+	instance, err := New(store, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instance.ApplyVerified(context.Background(), verified); err != nil {
+		t.Fatalf("ApplyVerified() error = %v", err)
+	}
+	if strings.Contains(strings.Join(adapter.events, ","), "rollback") ||
+		strings.Contains(strings.Join(adapter.events, ","), "restore_official") {
+		t.Fatalf("legacy verification unexpectedly reopened old recovery: %v", adapter.events)
+	}
+
+	var migrated Journal
+	found, err := readJSON(filepath.Join(store.Root(), "state", "operations", operationID+".json"), &migrated)
+	if err != nil || !found {
+		t.Fatalf("migrated journal found=%t err=%v", found, err)
+	}
+	if migrated.Status != "failed" || migrated.Stage != "legacy_migrated" ||
+		migrated.InterruptedStage != "verify" || migrated.ErrorCode != legacyV8VerificationMigrationCode {
+		t.Fatalf("migrated journal = %#v", migrated)
+	}
+	point, _, err := store.ReadRecoveryPoint(recoveryID)
+	if err != nil || point.RecoveryID != recoveryID {
+		t.Fatalf("legacy recovery point was not retained: %#v err=%v", point, err)
+	}
+}
+
+func TestCurrentVerificationJournalStillUsesFailClosedRecovery(t *testing.T) {
+	store := testStore(t)
+	operationID, err := store.NewOperationID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveryID, err := store.NewRecoveryID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.WriteRecoveryPoint(RecoveryPoint{
+		RecoveryID: recoveryID, OperationID: operationID, CapturedAt: canonicalNow(),
+	}, Snapshot{}); err != nil {
+		t.Fatal(err)
+	}
+	current := Journal{
+		OperationID: operationID, Kind: "apply", Stage: "verify", Status: "running",
+		ThemePublicID: "100001", ThemeVersion: "1.0.0", RecoveryID: recoveryID,
+		ErrorCode: "CS-VERIFY-001", Verification: legacyV8VerificationSummary(),
+	}
+	current.Verification.TemplateVersion = TemplateVersion
+	if err := store.WriteJournal(current); err != nil {
+		t.Fatal(err)
+	}
+
+	adapter := &fakeAdapter{probe: passingReport(), failOfficial: true}
+	instance, err := New(store, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := instance.RecoverInterrupted(context.Background()); !errors.Is(err, ErrRollbackFailed) {
+		t.Fatalf("RecoverInterrupted() error = %v, want rollback failure", err)
+	}
+	running, err := store.RunningJournals()
+	if err != nil || len(running) != 1 || running[0].OperationID != operationID {
+		t.Fatalf("current verification journal was not kept recoverable: %#v err=%v", running, err)
+	}
+}
+
 func TestInterruptedPreMutationStageDoesNotTouchRenderer(t *testing.T) {
 	store := testStore(t)
 	operationID, _ := store.NewOperationID()
@@ -1033,6 +1125,26 @@ func passingReport() RegionReport {
 			"templateScope":            RegionPass,
 			"themeContrast":            RegionPass,
 		},
+	}
+}
+
+func legacyV8VerificationSummary() *VerificationSummary {
+	report := passingReport()
+	report.Scope = "shell"
+	report.RuntimeVersion = 2
+	report.StyleMarkerCount = 1
+	report.TemplateVersion = TemplateVersion - 1
+	report.ThemePublicID = "100001"
+	report.BackgroundLoaded = true
+	report.Regions["mainBoundary"] = RegionFail
+	report.Regions["templateScope"] = RegionFail
+	report.Regions["topFade"] = RegionFail
+	return &VerificationSummary{
+		Attempts: 66, ReapplyAttempted: true, ProbeCompleted: true,
+		Scope: report.Scope, RuntimeVersion: report.RuntimeVersion,
+		StyleMarkerCount: report.StyleMarkerCount, TemplateVersion: report.TemplateVersion,
+		ThemePublicID: report.ThemePublicID, BackgroundLoaded: report.BackgroundLoaded,
+		Regions: report.Regions,
 	}
 }
 
