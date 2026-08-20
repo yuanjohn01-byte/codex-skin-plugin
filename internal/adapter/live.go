@@ -122,8 +122,11 @@ type PseudoDiagnostic struct {
 type LayoutDiagnostics struct {
 	Main              *SurfaceDiagnostic  `json:"main"`
 	MainAncestors     []SurfaceDiagnostic `json:"mainAncestors"`
+	MainChildren      []SurfaceDiagnostic `json:"mainChildren"`
+	MainSurfaces      []SurfaceDiagnostic `json:"mainSurfaces"`
 	Sidebar           *SurfaceDiagnostic  `json:"sidebar"`
 	SidebarAncestors  []SurfaceDiagnostic `json:"sidebarAncestors"`
+	SidebarCandidates []SurfaceDiagnostic `json:"sidebarCandidates"`
 	BoundarySurfaces  []SurfaceDiagnostic `json:"boundarySurfaces"`
 	BoundaryPseudos   []PseudoDiagnostic  `json:"boundaryPseudos"`
 	Composer          *SurfaceDiagnostic  `json:"composer"`
@@ -1279,16 +1282,22 @@ const verifyFunction = `function (expectedTemplateVersion, selectors) {
       : "--cs-scope-contract: 9") &&
     style.textContent.includes('data-codex-skin-scope="home"') &&
     style.textContent.includes('data-codex-skin-scope="thread"'));
+  const workspaceContractSafe = expectedTemplateVersion < 10 || Boolean(style &&
+    style.textContent.includes("--cs-workspace-contract: 10") &&
+    style.textContent.includes("--color-background-primary") &&
+    style.textContent.includes("--color-token-main-surface-primary") &&
+    style.textContent.includes("_ComposerLayoutRoot_") &&
+    style.textContent.includes("_MainContentBottomFade_"));
   const topFadeContractSafe = expectedTemplateVersion < 6 || (expectedTemplateVersion < 8
     ? Boolean(style && style.textContent.includes("--cs-top-fade-contract: 6") &&
         style.textContent.includes('[class*="_MainContentTopFade_"]'))
-    : scopeContractSafe);
+    : (scopeContractSafe && workspaceContractSafe));
   const shellEdgeContractSafe = expectedTemplateVersion < 7 || (expectedTemplateVersion < 8
     ? Boolean(style && style.textContent.includes("--cs-shell-edge-contract: 7") &&
         style.textContent.includes('[data-app-shell-header-edge-scroll]') &&
         style.textContent.includes('[class*="_Header_"]') &&
         style.textContent.includes('[data-app-shell-main-content-top-fade]'))
-    : scopeContractSafe);
+    : (scopeContractSafe && workspaceContractSafe));
   const topFadeNeutralized = expectedTemplateVersion < 6
     ? (!legacyTopFade || Boolean(getComputedStyle(legacyTopFade) &&
         getComputedStyle(legacyTopFade).backgroundImage === "none" &&
@@ -1316,7 +1325,7 @@ const verifyFunction = `function (expectedTemplateVersion, selectors) {
   const mainStyle = main ? getComputedStyle(main) : null;
   const templateScopeSafe = expectedTemplateVersion < 8
     ? Boolean(style && mainStyle?.backgroundImage.includes("linear-gradient"))
-    : Boolean(style && scopedMain && scopeContractSafe &&
+    : Boolean(style && scopedMain && scopeContractSafe && workspaceContractSafe &&
         mainStyle?.backgroundImage.includes("linear-gradient"));
   const bottomFade = main?.querySelector(
     ".thread-scroll-container .bg-gradient-to-t.from-token-main-surface-primary"
@@ -1490,7 +1499,20 @@ const fixedLayoutDiagnosticsFunction = `function () {
     'main[data-codex-skin-main="true"], main.main-surface, main[class*="_MainContentSurface_"]'
   );
   const sidebar = document.querySelector("aside.app-shell-left-panel");
+  const sidebarCandidates = [...document.querySelectorAll(
+    ':is(aside, nav, [role="navigation"], [data-testid*="sidebar" i], ' +
+    '[class*="sidebar" i], [class*="left-panel" i], [class*="_Sidebar_"])'
+  )].filter(visible).slice(0, 24).map(describe);
   const composer = document.querySelector(".composer-surface-chrome");
+  const mainChildren = main ? [...main.children].filter(visible).slice(0, 24).map(describe) : [];
+  const mainSurfaces = main ? [...main.querySelectorAll("div,section,form,footer")]
+    .filter((node) => {
+      if (!visible(node)) return false;
+      const rect = node.getBoundingClientRect();
+      const style = getComputedStyle(node);
+      return rect.width > innerWidth * .35 && rect.height > 24 &&
+        style.backgroundColor !== "rgba(0, 0, 0, 0)";
+    }).slice(0, 40).map(describe) : [];
   const composerRect = composer?.getBoundingClientRect() || null;
   const composerSurfaces = main && composerRect ? [...main.querySelectorAll("div,form,section")]
     .filter((node) => {
@@ -1551,8 +1573,11 @@ const fixedLayoutDiagnosticsFunction = `function () {
   return {
     main: describe(main),
     mainAncestors: ancestorChain(main),
+	mainChildren,
+	mainSurfaces,
     sidebar: describe(sidebar),
     sidebarAncestors: ancestorChain(sidebar),
+    sidebarCandidates,
     boundarySurfaces,
     boundaryPseudos,
     composer: describe(composer),

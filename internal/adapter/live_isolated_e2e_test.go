@@ -134,6 +134,9 @@ func TestIsolatedCodexRendererSessionLifecycle(t *testing.T) {
 		}
 		t.Fatalf("isolated renderer did not reach a verified themed state: %#v err=%v", verification, err)
 	}
+	if err := assertCurrentWorkspaceVisualFallback(ctx, live, session); err != nil {
+		t.Fatal(err)
+	}
 	stage = "theme_verified"
 	writeReport()
 
@@ -208,6 +211,64 @@ func TestIsolatedCodexRendererSessionLifecycle(t *testing.T) {
 	// as a failed theme transaction.
 	stage = "pass"
 	writeReport()
+}
+
+// assertCurrentWorkspaceVisualFallback exercises the current signed CSS in a
+// real isolated renderer without reading a conversation. The fixture mimics
+// the safe semantic shapes that replaced the legacy thread-scroll container:
+// token foreground, token surface, a sticky composer, and the lower fade.
+func assertCurrentWorkspaceVisualFallback(ctx context.Context, live *Live, session engine.Session) error {
+	live.mu.Lock()
+	active := live.sessions[session.OpaqueID]
+	live.mu.Unlock()
+	if active == nil {
+		return engine.ErrVerifyFailed
+	}
+	var result struct {
+		MainMarked       bool `json:"mainMarked"`
+		SurfaceReadable  bool `json:"surfaceReadable"`
+		TextReadable     bool `json:"textReadable"`
+		ComposerReadable bool `json:"composerReadable"`
+		BottomCleared    bool `json:"bottomCleared"`
+	}
+	if err := callFunction(ctx, active.client, `function () {
+	  const main = document.querySelector('main[data-codex-skin-main="true"]');
+	  if (!main) return { mainMarked: false };
+	  const fixture = document.createElement("section");
+	  fixture.setAttribute("data-codex-skin-visual-fixture", "true");
+	  fixture.innerHTML = [
+	    '<div class="bg-token-main-surface-primary"><p class="text-token-text-primary">fixture</p></div>',
+	    '<div class="_ComposerLayoutRoot_fixture"><div contenteditable="true"></div></div>',
+	    '<div class="bg-gradient-to-t from-token-main-surface-primary"></div>'
+	  ].join("");
+	  main.appendChild(fixture);
+	  const surface = fixture.firstElementChild;
+	  const label = surface.querySelector("p");
+	  const composer = fixture.children[1];
+	  const fade = fixture.children[2];
+	  const readable = (value) => value && value !== "rgba(0, 0, 0, 0)" && value !== "transparent";
+	  const expected = document.createElement("span");
+	  expected.style.color = "var(--cs-text-primary)";
+	  fixture.appendChild(expected);
+	  const result = {
+	    mainMarked: main.getAttribute("data-codex-skin-scope") === "home" ||
+	      main.getAttribute("data-codex-skin-scope") === "thread",
+	    surfaceReadable: readable(getComputedStyle(surface).backgroundColor),
+	    textReadable: getComputedStyle(label).color === getComputedStyle(expected).color,
+	    composerReadable: readable(getComputedStyle(composer).backgroundColor) &&
+	      getComputedStyle(composer).backgroundImage === "none",
+	    bottomCleared: getComputedStyle(fade).display === "none"
+	  };
+	  fixture.remove();
+	  return result;
+	}`, nil, &result); err != nil {
+		return err
+	}
+	if !result.MainMarked || !result.SurfaceReadable || !result.TextReadable ||
+		!result.ComposerReadable || !result.BottomCleared {
+		return engine.ErrVerifyFailed
+	}
+	return nil
 }
 
 // TestIsolatedCodexRendererLifecycleAfterLegacyV8VerificationResidue covers

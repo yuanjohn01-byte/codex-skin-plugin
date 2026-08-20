@@ -231,6 +231,20 @@ func TestCurrentOfficialCodexCurrentProfileCapabilities(t *testing.T) {
 	defer live.Close(context.Background(), session)
 	report, err := live.WaitForCapabilities(ctx, session)
 	t.Logf("current-profile capability report = %#v", report)
+	if os.Getenv("CODEX_SKIN_LAYOUT_DIAGNOSTICS") == "1" {
+		diagnostics, diagnosticErr := live.FixedLayoutDiagnostics(ctx, session)
+		if diagnosticErr != nil {
+			t.Fatalf("fixed layout diagnostics error = %v", diagnosticErr)
+		}
+		t.Logf(
+			"sanitized fixed-layout main=%#v mainChildren=%#v mainSurfaces=%#v sidebar=%#v sidebarCandidates=%#v",
+			diagnostics.Main,
+			diagnostics.MainChildren,
+			diagnostics.MainSurfaces,
+			diagnostics.Sidebar,
+			diagnostics.SidebarCandidates[:min(3, len(diagnostics.SidebarCandidates))],
+		)
+	}
 	if os.Getenv("CODEX_SKIN_ACTIVITY_DIAGNOSTICS") == "1" {
 		live.mu.Lock()
 		active := live.sessions[session.OpaqueID]

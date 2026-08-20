@@ -52,6 +52,11 @@ func TestRuntimeFunctionsSupportStableAndModuleMainSurfaces(t *testing.T) {
 		`[data-app-shell-main-content-top-fade]`,
 		`visible(header) && shellEdgeContractSafe`,
 		`--cs-scope-contract: 9`,
+		`--cs-workspace-contract: 10`,
+		`--color-background-primary`,
+		`--color-token-main-surface-primary`,
+		`_ComposerLayoutRoot_`,
+		`_MainContentBottomFade_`,
 		`data-codex-skin-scope`,
 		`expectedTemplateVersion < 9`,
 	} {

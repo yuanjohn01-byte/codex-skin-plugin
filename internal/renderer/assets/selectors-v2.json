@@ -71,7 +71,7 @@
     },
     {
       "key": "composer-chrome",
-      "selector": ".composer-surface-chrome",
+      "selector": ":is(.composer-surface-chrome, [class*=\"_ComposerLayoutRoot_\"])",
       "tier": "L2",
       "scope": "home+thread",
       "required": false

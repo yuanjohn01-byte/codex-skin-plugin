@@ -312,3 +312,34 @@ func TestCurrentTemplateKeepsTaskRouteFallbackWithinTheSignedScopeContract(t *te
 		}
 	}
 }
+
+func TestCurrentTemplateRepairsCurrentWorkspaceWithoutLegacyThreadContainer(t *testing.T) {
+	tokens := theme.Tokens{
+		TextPrimary: "#FFF5EC", TextSecondary: "#D9C0AE", Accent: "#E78A4E",
+	}
+	previous, err := compileTemplateV9("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := compileTemplateV10("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous == current || strings.Contains(previous, `--cs-workspace-contract: 10`) {
+		t.Fatal("Template v10 workspace repair was not added")
+	}
+	for _, fragment := range []string{
+		`--cs-workspace-contract: 10`,
+		`--color-background-primary`,
+		`--color-token-main-surface-primary`,
+		`_ComposerLayoutRoot_`,
+		`[class~="text-default"]`,
+		`[class~="text-token-text-primary"]`,
+		`[class*="_MainContentBottomFade_"]`,
+		`.bg-gradient-to-t.from-token-main-surface-primary`,
+	} {
+		if !strings.Contains(current, fragment) {
+			t.Fatalf("Template v10 is missing %q", fragment)
+		}
+	}
+}

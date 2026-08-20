@@ -207,7 +207,7 @@ func CompileTheme(verified theme.Verified, stagedRoot string) (CompiledTheme, er
 		surfaceRGB,
 		RootMarkerAttribute,
 	)
-	previousStyle, err := compileTemplateV8(
+	previousStyle, err := compileTemplateV9(
 		manifest.Design.Mode,
 		tokens,
 		sidebarRGB,
@@ -217,7 +217,7 @@ func CompileTheme(verified theme.Verified, stagedRoot string) (CompiledTheme, er
 	if err != nil {
 		return CompiledTheme{}, err
 	}
-	style, err := compileTemplateV9(
+	style, err := compileTemplateV10(
 		manifest.Design.Mode,
 		tokens,
 		sidebarRGB,
@@ -342,6 +342,188 @@ func compileTemplateV9(
 }
 `
 	return style + strings.ReplaceAll(taskRouteFallbackContract, "__MARKER__", RootMarkerAttribute), nil
+}
+
+func compileTemplateV10(
+	mode string,
+	tokens theme.Tokens,
+	sidebarRGB string,
+	surfaceRGB string,
+	shadowAlpha string,
+) (string, error) {
+	style, err := compileTemplateV9(mode, tokens, sidebarRGB, surfaceRGB, shadowAlpha)
+	if err != nil {
+		return "", err
+	}
+	const currentWorkspaceContract = `
+
+/* Current-workspace visual contract v10. New Codex task pages can omit the
+   legacy thread-scroll container while still containing the active main,
+   composer, token text and bottom gradient. Keep the repair attached only to
+   the renderer-marked Home/task main; theme packages still cannot choose
+   selectors or change this signed surface policy. */
+:root[__MARKER__="active"] {
+  --cs-workspace-contract: 10;
+  /* Current Codex shell variables. These are fixed renderer tokens, not
+     theme-defined CSS: without this bridge the light native defaults can
+     reappear in Scheduled, Plugins and the current ComposerLayoutRoot. */
+  --color-background-primary: rgb(var(--cs-surface-rgb) / .96);
+  --color-background-secondary: rgb(var(--cs-surface-rgb) / .92);
+  --color-background-surface: rgb(var(--cs-surface-rgb) / .92);
+  --color-background-elevated-primary: rgb(var(--cs-surface-rgb) / .94);
+  --color-background-elevated-secondary: rgb(var(--cs-surface-rgb) / .90);
+  --color-text-primary: var(--cs-text-primary);
+  --color-text-secondary: var(--cs-text-secondary);
+  --color-text-foreground: var(--cs-text-primary);
+  --color-border-primary: var(--cs-border);
+  --background: rgb(var(--cs-surface-rgb) / .96);
+  --foreground: var(--cs-text-primary);
+  --card: rgb(var(--cs-surface-rgb) / .92);
+  --card-foreground: var(--cs-text-primary);
+  --popover: rgb(var(--cs-surface-rgb) / .94);
+  --popover-foreground: var(--cs-text-primary);
+  --secondary: rgb(var(--cs-surface-rgb) / .92);
+  --secondary-foreground: var(--cs-text-primary);
+  --muted-foreground: var(--cs-text-secondary);
+  --border: var(--cs-border);
+  --input: var(--cs-border);
+  --color-token-main-surface-primary: rgb(var(--cs-surface-rgb) / .96);
+  --color-token-main-surface-secondary: rgb(var(--cs-surface-rgb) / .92);
+  --color-token-main-surface-tertiary: rgb(var(--cs-surface-rgb) / .88);
+  --color-token-foreground: var(--cs-text-primary);
+  --color-token-text-primary: var(--cs-text-primary);
+  --color-token-text-secondary: var(--cs-text-secondary);
+  --color-token-text-tertiary: var(--cs-text-secondary);
+  --color-token-muted-foreground: var(--cs-text-secondary);
+  --color-token-description-foreground: var(--cs-text-secondary);
+  --color-token-input-placeholder-foreground: var(--cs-text-secondary);
+  --color-token-border-default: var(--cs-border);
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is(
+    [class~="bg-token-main-surface-primary"],
+    [class~="bg-token-main-surface-secondary"],
+    [class~="bg-token-main-surface-tertiary"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  background-color: rgb(var(--cs-surface-rgb) / .92) !important;
+  background-image: none !important;
+}
+
+/* The current task composer may be a sticky input wrapper rather than the
+   old composer-surface-chrome element. Give both shapes the same readable
+   surface so the lower window never falls back to the native bright band. */
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is(
+    .composer-surface-chrome,
+    [class*="_ComposerLayoutRoot_"],
+    div.sticky:has(:is(input[type="text"], textarea, [contenteditable="true"], [role="textbox"]))
+  ) {
+  color: var(--cs-text-primary) !important;
+  background: rgb(var(--cs-surface-rgb) / var(--cs-surface-opacity)) !important;
+  border: 1px solid var(--cs-border) !important;
+  border-radius: calc(16px * var(--cs-radius-scale)) !important;
+  box-shadow: 0 18px 50px rgb(0 0 0 / __SHADOW_ALPHA__) !important;
+  backdrop-filter: blur(var(--cs-surface-blur)) saturate(108%);
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is(
+    .composer-surface-chrome,
+    [class*="_ComposerLayoutRoot_"],
+    div.sticky:has(:is(input[type="text"], textarea, [contenteditable="true"], [role="textbox"]))
+  )
+  :is(input, textarea, [class~="text-token-text-primary"], [class~="text-token-foreground"]) {
+  color: var(--cs-text-primary) !important;
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is(
+    .composer-surface-chrome,
+    [class*="_ComposerLayoutRoot_"],
+    div.sticky:has(:is(input[type="text"], textarea, [contenteditable="true"], [role="textbox"]))
+  )
+  :is(input, textarea)::placeholder {
+  color: var(--cs-text-secondary) !important;
+  opacity: 1 !important;
+}
+
+/* Token foregrounds are stable renderer semantics rather than a theme
+   supplied selector. This covers the new task page without recolouring
+   unmarked native windows after the style is removed. */
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is(
+    [class~="text-token-text-primary"],
+    [class~="text-token-foreground"],
+    [class~="text-default"],
+    [class~="text-token-conversation-body"],
+    [data-message-author-role],
+    [class*="_markdown"],
+    h1, h2, h3, h4, h5, h6, p, li, [role="heading"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  text-shadow: none !important;
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is([class~="text-token-text-secondary"], [class~="text-token-text-tertiary"]) {
+  color: var(--cs-text-secondary) !important;
+  text-shadow: none !important;
+}
+
+/* Clear only the known app-shell/content fade primitives. They are layers,
+   not content cards, and otherwise create the bright lower/top bands seen on
+   the current Scheduled and Plugins routes. */
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"]:is(
+      [data-codex-skin-scope="home"],
+      [data-codex-skin-scope="thread"]
+    )
+  )
+  :is(
+    .app-shell-main-content-top-fade,
+    [data-app-shell-main-content-top-fade],
+    [class*="_MainContentTopFade_"],
+    [class*="_MainContentBottomFade_"],
+    [class*="_MainContentBottomGradient_"],
+    .bg-gradient-to-t.from-token-main-surface-primary
+  ) {
+  display: none !important;
+  opacity: 0 !important;
+  background: none !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+}
+`
+	contract := strings.ReplaceAll(currentWorkspaceContract, "__MARKER__", RootMarkerAttribute)
+	contract = strings.ReplaceAll(contract, "__SHADOW_ALPHA__", shadowAlpha)
+	return style + contract, nil
 }
 
 func compileTemplateV7(
