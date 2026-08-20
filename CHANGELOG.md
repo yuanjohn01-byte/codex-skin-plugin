@@ -2,6 +2,9 @@
 
 ## 0.1.0-paid-alpha - Code-stage candidate
 
+- Release the immutable Staging-only candidate: Helper `.13` and Bootstrap `.12`.
+  Plugin launchers now pin the signed prerelease and exact per-platform Bootstrap
+  SHA-256 values; it is not a stable/latest or Production channel.
 - Prepare the next immutable Staging-only candidate: Helper `.13` and Bootstrap `.12`.
   Existing Plugin launcher pins remain on the verified `.12/.11` closure until the
   new signed release assets and their exact platform SHA-256 values are available.
