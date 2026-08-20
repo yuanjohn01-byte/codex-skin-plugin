@@ -2,6 +2,9 @@
 
 ## 0.1.0-paid-alpha - Code-stage candidate
 
+- Prepare the next immutable Staging-only candidate: Helper `.13` and Bootstrap `.12`.
+  Existing Plugin launcher pins remain on the verified `.12/.11` closure until the
+  new signed release assets and their exact platform SHA-256 values are available.
 - Add Template v10's current-workspace visual bridge for the current Codex
   ComposerLayoutRoot and background/foreground token family. It keeps the
   direct Apply/Switch/Restore runtime while removing native light surfaces,
