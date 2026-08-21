@@ -207,7 +207,10 @@ func CompileTheme(verified theme.Verified, stagedRoot string) (CompiledTheme, er
 		surfaceRGB,
 		RootMarkerAttribute,
 	)
-	previousStyle, err := compileTemplateV9(
+	// Keep the preceding two signed templates byte-for-byte available. V11 was
+	// preview-only, while the installed staging Helper can still carry V10; both
+	// must move to the scoped repair without a restart or intermediate Restore.
+	migrationStyle, err := compileTemplateV10(
 		manifest.Design.Mode,
 		tokens,
 		sidebarRGB,
@@ -217,7 +220,17 @@ func CompileTheme(verified theme.Verified, stagedRoot string) (CompiledTheme, er
 	if err != nil {
 		return CompiledTheme{}, err
 	}
-	style, err := compileTemplateV10(
+	previousStyle, err := compileTemplateV11(
+		manifest.Design.Mode,
+		tokens,
+		sidebarRGB,
+		surfaceRGB,
+		shadowAlpha,
+	)
+	if err != nil {
+		return CompiledTheme{}, err
+	}
+	style, err := compileTemplateV12(
 		manifest.Design.Mode,
 		tokens,
 		sidebarRGB,
@@ -228,14 +241,15 @@ func CompileTheme(verified theme.Verified, stagedRoot string) (CompiledTheme, er
 		return CompiledTheme{}, err
 	}
 	return CompiledTheme{
-		ThemePublicID:     manifest.ThemePublicID,
-		ThemeVersion:      manifest.ThemeVersion,
-		TemplateVersion:   TemplateVersion,
-		AppearanceMode:    manifest.Design.Mode,
-		StyleText:         style,
-		PreviousStyleText: previousStyle,
-		LegacyStyleText:   legacyStyle,
-		BackgroundDataURL: imageURL,
+		ThemePublicID:      manifest.ThemePublicID,
+		ThemeVersion:       manifest.ThemeVersion,
+		TemplateVersion:    TemplateVersion,
+		AppearanceMode:     manifest.Design.Mode,
+		StyleText:          style,
+		PreviousStyleText:  previousStyle,
+		MigrationStyleText: migrationStyle,
+		LegacyStyleText:    legacyStyle,
+		BackgroundDataURL:  imageURL,
 	}, nil
 }
 
@@ -262,9 +276,18 @@ func compileTemplateV8(
 }
 
 :root[__MARKER__="active"]
-  main[data-codex-skin-main="true"]:is(
-    [data-codex-skin-scope="home"],
-    [data-codex-skin-scope="thread"]
+  main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+    :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+  ),
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+    :is(
+      .thread-scroll-container,
+      [data-message-author-role],
+      [data-local-conversation-user-anchor],
+      [data-local-conversation-final-assistant],
+      [class*="_markdown"]
+    )
   ) {
   background:
     linear-gradient(
@@ -524,6 +547,1000 @@ func compileTemplateV10(
 	contract := strings.ReplaceAll(currentWorkspaceContract, "__MARKER__", RootMarkerAttribute)
 	contract = strings.ReplaceAll(contract, "__SHADOW_ALPHA__", shadowAlpha)
 	return style + contract, nil
+}
+
+func compileTemplateV11(
+	mode string,
+	tokens theme.Tokens,
+	sidebarRGB string,
+	surfaceRGB string,
+	shadowAlpha string,
+) (string, error) {
+	if err := validateTemplateContrast(mode, tokens); err != nil {
+		return "", err
+	}
+	textShadowRGB := "0 0 0"
+	if mode == "light" {
+		textShadowRGB = "255 255 255"
+	}
+	// Start a new narrow baseline instead of extending v10. Earlier templates
+	// wrote Codex's foreground/background tokens at :root, which let a native
+	// white utility pane inherit a skin foreground. V11 owns only its --cs-
+	// variables; the app's System/Light/Dark pairing remains untouched.
+	const scopedWorkspaceContract = `:root[__MARKER__="active"] {
+  --cs-background-overlay: __BACKGROUND_OVERLAY__;
+  --cs-surface-opacity: __SURFACE_OPACITY__;
+  --cs-surface-blur: __SURFACE_BLUR__px;
+  --cs-surface-rgb: __SURFACE_RGB__;
+  --cs-text-shadow-rgb: __TEXT_SHADOW_RGB__;
+  --cs-text-primary: __TEXT_PRIMARY__;
+  --cs-text-secondary: __TEXT_SECONDARY__;
+  --cs-accent: __ACCENT__;
+  --cs-border: __BORDER__;
+  --cs-radius-scale: __RADIUS_SCALE__;
+  --cs-scope-contract: 11;
+  --cs-workspace-contract: 11;
+}
+
+/* Scoped workspace contract v11. A skin owns a marked Home/task workspace
+   only while it contains a composer, message or Markdown signal; native utility routes, output side panels and overlays keep Codex's own paired
+   System/Light/Dark background and foreground behavior. App token names are never reassigned here. */
+:root[__MARKER__="active"] body {
+  background:
+    linear-gradient(
+      rgb(0 0 0 / var(--cs-background-overlay)),
+      rgb(0 0 0 / var(--cs-background-overlay))
+    ),
+    var(--cs-background-image) center / cover fixed !important;
+}
+
+:root[__MARKER__="active"] aside.app-shell-left-panel {
+  color: var(--cs-text-primary) !important;
+  background: rgb(__SIDEBAR_RGB__ / var(--cs-surface-opacity)) !important;
+  border-right: 1px solid var(--cs-border);
+  backdrop-filter: blur(var(--cs-surface-blur)) saturate(108%);
+}
+
+:root[__MARKER__="active"] aside.app-shell-left-panel::after {
+  content: none !important;
+  display: none !important;
+  width: 0 !important;
+  background: none !important;
+}
+
+:root[__MARKER__="active"] aside.app-shell-left-panel,
+:root[__MARKER__="active"] aside.app-shell-left-panel * {
+  color: var(--cs-text-primary) !important;
+}
+
+:root[__MARKER__="active"] aside.app-shell-left-panel
+  :is(
+    [class~="text-token-text-secondary"],
+    [class~="text-token-text-tertiary"],
+    [class*="text-token-input-placeholder-foreground"]
+  ) {
+  color: var(--cs-text-secondary) !important;
+}
+
+/* Only a marked active Home/task workspace may reveal the artwork beneath its
+   main region. The controller assigns this marker only after a positive
+   workspace signal; current Codex utilities remain marked native. */
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  ) {
+  background:
+    linear-gradient(
+      rgb(var(--cs-surface-rgb) / .22),
+      rgb(var(--cs-surface-rgb) / .22)
+  ) !important;
+  border: 0 !important;
+  border-inline-start: 0 !important;
+  box-shadow: none !important;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"]:is(
+      [data-codex-skin-scope="home"],
+      [data-codex-skin-scope="thread"]
+    )
+  )
+  header:is(
+    .app-header-tint,
+    [data-app-shell-header-edge-scroll],
+    [class*="_Header_"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  background: transparent !important;
+  border-bottom: 0 !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  text-shadow:
+    0 1px 2px rgb(var(--cs-text-shadow-rgb) / .82),
+    0 0 10px rgb(var(--cs-text-shadow-rgb) / .56);
+}
+
+/* The current ComposerLayoutRoot replaces the old sticky composer on newer
+   Codex builds. Its surface, editable foreground, caret and placeholder are
+   set together, so a light or dark skin cannot create an unreadable input. */
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is(.composer-surface-chrome, [class*="_ComposerLayoutRoot_"]) {
+  color: var(--cs-text-primary) !important;
+  background: rgb(var(--cs-surface-rgb) / var(--cs-surface-opacity)) !important;
+  border: 1px solid var(--cs-border) !important;
+  border-radius: calc(16px * var(--cs-radius-scale)) !important;
+  box-shadow: 0 18px 50px rgb(0 0 0 / __SHADOW_ALPHA__) !important;
+  backdrop-filter: blur(var(--cs-surface-blur)) saturate(108%);
+}
+
+/* The current ComposerLayoutRoot has independent body and utility-bar paint
+   layers. Keep those layers paired with the composer shell instead of letting
+   their native light fill show through a dark skin. */
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is(.composer-surface-chrome, [class*="_ComposerLayoutRoot_"])
+  :is(
+    [class*="_ComposerLayoutBody_"],
+    [class*="_ComposerFooter_"],
+    [class*="_ComposerHomeUtilityBar_"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  background: rgb(var(--cs-surface-rgb) / var(--cs-surface-opacity)) !important;
+  background-image: none !important;
+}
+
+/* Footer controls can carry a native dark foreground even when their parent
+   has been paired with a dark skin surface. Keep interactive labels and icons
+   readable inside the scoped composer without touching native utility cards. */
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is(.composer-surface-chrome, [class*="_ComposerLayoutRoot_"])
+  :is(button, [role="button"], label, svg) {
+  color: var(--cs-text-primary) !important;
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is(.composer-surface-chrome, [class*="_ComposerLayoutRoot_"])
+  :is(button, [role="button"], label) * {
+  color: var(--cs-text-primary) !important;
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is(.composer-surface-chrome, [class*="_ComposerLayoutRoot_"])
+  [data-placeholder]::before {
+  color: var(--cs-text-secondary) !important;
+  opacity: 1 !important;
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is(.composer-surface-chrome, [class*="_ComposerLayoutRoot_"])
+  .ProseMirror p.is-editor-empty:first-child::before {
+  color: var(--cs-text-secondary) !important;
+  opacity: 1 !important;
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is(.composer-surface-chrome, [class*="_ComposerLayoutRoot_"])
+  :is(
+    input, textarea, [contenteditable="true"], [role="textbox"],
+    [class*="_RichTextInput_"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  caret-color: var(--cs-text-primary) !important;
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is(.composer-surface-chrome, [class*="_ComposerLayoutRoot_"])
+  :is(input, textarea)::placeholder {
+  color: var(--cs-text-secondary) !important;
+  opacity: 1 !important;
+}
+
+/* Conversation foregrounds are paired with the themed conversation surface,
+   not with every token-labelled element in main. This intentionally excludes
+   native Output and Sources cards that happen to sit beside a task. */
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]
+  :is(
+    .thread-scroll-container,
+    [data-message-author-role],
+    [data-local-conversation-user-anchor],
+    [data-local-conversation-final-assistant],
+    [class*="_markdown"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  text-shadow: none !important;
+}
+
+/* Current message leaves can carry their own token color. Override those
+   leaves only beneath a positively identified message/Markdown container;
+   native cards that reuse a token class remain outside this rule. */
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]
+  :is(
+    .thread-scroll-container,
+    [data-message-author-role],
+    [data-local-conversation-user-anchor],
+    [data-local-conversation-final-assistant],
+    [class*="_markdown"]
+  )
+  :is(
+    p, li, h1, h2, h3, h4, h5, h6, strong, em, code,
+    [class~="text-token-text-primary"],
+    [class~="text-token-foreground"],
+    [class~="text-token-conversation-body"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  text-shadow: none !important;
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]
+  :is(
+    .thread-scroll-container,
+    [data-message-author-role],
+    [data-local-conversation-user-anchor],
+    [data-local-conversation-final-assistant],
+    [class*="_markdown"]
+  )
+  :is(
+    [class~="bg-token-main-surface-primary"],
+    [class~="bg-token-main-surface-secondary"],
+    [class~="bg-token-main-surface-tertiary"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  background-color: rgb(var(--cs-surface-rgb) / .92) !important;
+  background-image: none !important;
+}
+
+/* Home has no messages, so theme its heading and suggested actions only after
+   the renderer's positive Home marker has selected this scope. */
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"][data-codex-skin-scope="home"]
+  :is(
+    .group\/home-suggestions,
+    .group\/home-suggestions *,
+    [class*="_homeUtilityBar_"],
+    button[class*="_utilityBarLabel_"],
+    [class~="heading-xl"],
+    [class~="group/title"],
+    [class~="group/title"] *,
+    h1, h2, h3, [role="heading"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  text-shadow: none !important;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"]:is(
+      [data-codex-skin-scope="home"],
+      [data-codex-skin-scope="thread"]
+    )
+  )
+  :is(
+    .app-shell-main-content-top-fade,
+    [data-app-shell-main-content-top-fade],
+    [class*="_MainContentTopFade_"],
+    [class*="_MainContentBottomFade_"],
+    [class*="_MainContentBottomGradient_"],
+    .bg-gradient-to-t.from-token-main-surface-primary
+  ) {
+  display: none !important;
+  opacity: 0 !important;
+  background: none !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  transition: none !important;
+}
+`
+	replacer := strings.NewReplacer(
+		"__MARKER__", RootMarkerAttribute,
+		"__BACKGROUND_OVERLAY__", fmt.Sprintf("%.4f", tokens.BackgroundOverlay),
+		"__SURFACE_OPACITY__", fmt.Sprintf("%.4f", tokens.SurfaceOpacity),
+		"__SURFACE_BLUR__", strconv.Itoa(tokens.SurfaceBlurPx),
+		"__SURFACE_RGB__", surfaceRGB,
+		"__SIDEBAR_RGB__", sidebarRGB,
+		"__TEXT_SHADOW_RGB__", textShadowRGB,
+		"__TEXT_PRIMARY__", tokens.TextPrimary,
+		"__TEXT_SECONDARY__", tokens.TextSecondary,
+		"__ACCENT__", tokens.Accent,
+		"__BORDER__", tokens.Border,
+		"__RADIUS_SCALE__", fmt.Sprintf("%.4f", tokens.RadiusScale),
+		"__SHADOW_ALPHA__", shadowAlpha,
+	)
+	return replacer.Replace(scopedWorkspaceContract), nil
+}
+
+func compileTemplateV12(
+	mode string,
+	tokens theme.Tokens,
+	sidebarRGB string,
+	surfaceRGB string,
+	shadowAlpha string,
+) (string, error) {
+	if err := validateTemplateContrast(mode, tokens); err != nil {
+		return "", err
+	}
+	textShadowRGB := "0 0 0"
+	if mode == "light" {
+		textShadowRGB = "255 255 255"
+	}
+	const focusedConversationContract = `:root[__MARKER__="active"] {
+  --cs-background-overlay: __BACKGROUND_OVERLAY__;
+  --cs-surface-opacity: __SURFACE_OPACITY__;
+  --cs-surface-blur: __SURFACE_BLUR__px;
+  --cs-surface-rgb: __SURFACE_RGB__;
+  --cs-text-shadow-rgb: __TEXT_SHADOW_RGB__;
+  --cs-text-primary: __TEXT_PRIMARY__;
+  --cs-text-secondary: __TEXT_SECONDARY__;
+  --cs-accent: __ACCENT__;
+  --cs-border: __BORDER__;
+  --cs-radius-scale: __RADIUS_SCALE__;
+}
+
+:root[__MARKER__="active"] aside.app-shell-left-panel {
+  color: var(--cs-text-primary) !important;
+  background: rgb(__SIDEBAR_RGB__ / var(--cs-surface-opacity)) !important;
+  border-right: 1px solid var(--cs-border);
+  backdrop-filter: blur(var(--cs-surface-blur)) saturate(108%);
+}
+
+:root[__MARKER__="active"] aside.app-shell-left-panel::after {
+  content: none !important;
+  display: none !important;
+  width: 0 !important;
+  background: none !important;
+}
+
+:root[__MARKER__="active"] aside.app-shell-left-panel,
+:root[__MARKER__="active"] aside.app-shell-left-panel * {
+  color: var(--cs-text-primary) !important;
+}
+
+:root[__MARKER__="active"] aside.app-shell-left-panel
+  :is(
+    [class~="text-token-text-secondary"],
+    [class~="text-token-text-tertiary"],
+    [class*="text-token-input-placeholder-foreground"]
+  ) {
+  color: var(--cs-text-secondary) !important;
+}
+
+/* Focused conversation contract v12. The artwork is painted only by a
+   controller-marked Home/task main, never by body. Therefore Sites, Scheduled
+   and Plugins retain exactly the official Codex System/Light/Dark surface and
+   text pairing. The composer can be a sibling of main on current task pages;
+   its marker is applied only after the same positive Home/thread route probe. */
+:root[__MARKER__="active"] {
+  --cs-scope-contract: 12;
+  --cs-workspace-contract: 12;
+}
+
+/* The controller owns the positive route probe. Paint only its explicit
+   conversation scopes; a generic main or heading can never reveal artwork. */
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"][data-codex-skin-scope="home"],
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"][data-codex-skin-scope="thread"] {
+  background-color: transparent !important;
+  background-image:
+    linear-gradient(
+      rgb(var(--cs-surface-rgb) / .22),
+      rgb(var(--cs-surface-rgb) / .22)
+    ),
+    linear-gradient(
+      rgb(0 0 0 / var(--cs-background-overlay)),
+      rgb(0 0 0 / var(--cs-background-overlay))
+    ),
+    var(--cs-background-image) !important;
+  background-position: center, center, center !important;
+  background-size: cover, cover, cover !important;
+  background-attachment: fixed, fixed, fixed !important;
+  border-inline-start: 0 !important;
+  box-shadow: none !important;
+}
+
+/* Codex keeps one shell main while React swaps Home, conversations and native
+   utility pages below it. The Helper intentionally installs no route watcher.
+   Fail closed in CSS when that retained marker no longer contains a live
+   conversation/Home signal, or when a known native utility anchor appears.
+   This uses one non-nested :has() probe; it does not repeat V11's unsupported
+   :has(...:has(...)) shape. */
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:has(
+    :is(
+      #appgen-site-search,
+      #sites-page-search,
+      #scheduled-page-search,
+      #plugins-store-page-search
+    )
+  ),
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:not(:has(
+    :is(
+      .thread-scroll-container,
+      [data-message-author-role],
+      [data-local-conversation-user-anchor],
+      [data-local-conversation-final-assistant],
+      [class*="_markdown"],
+      [data-testid="home-icon"],
+      .group\/home-suggestions,
+      .composer-surface-chrome,
+      [class*="_ComposerLayoutRoot_"]
+    )
+  )) {
+  /* Reset the native page to Codex's explicit surface colour. Using the
+     background shorthand with a custom property is serialized by the current
+     Chromium build as a transparent background-color, which exposes the skin
+     layer while the sticky search region keeps its official bg-surface fill. */
+  background-color: var(--color-surface) !important;
+  background-image: none !important;
+  background-position: initial !important;
+  background-size: auto !important;
+  background-attachment: scroll !important;
+  border-inline-start: 1px solid var(--color-border) !important;
+  box-shadow: none !important;
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]
+  :is(
+    .thread-scroll-container,
+    [data-message-author-role],
+    [data-local-conversation-user-anchor],
+    [data-local-conversation-final-assistant],
+    [class*="_markdown"]
+  ),
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]
+  :is(
+    .thread-scroll-container,
+    [data-message-author-role],
+    [data-local-conversation-user-anchor],
+    [data-local-conversation-final-assistant],
+    [class*="_markdown"]
+  )
+  :is(
+    p, li, h1, h2, h3, h4, h5, h6, strong, em, code,
+    [class~="text-token-text-primary"],
+    [class~="text-token-foreground"],
+    [class~="text-token-conversation-body"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  text-shadow: none !important;
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]
+  :is(
+    .thread-scroll-container,
+    [data-message-author-role],
+    [data-local-conversation-user-anchor],
+    [data-local-conversation-final-assistant],
+    [class*="_markdown"]
+  )
+  :is([class~="text-token-text-secondary"], [class~="text-token-text-tertiary"]) {
+  color: var(--cs-text-secondary) !important;
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]
+  :is(
+    .thread-scroll-container,
+    [data-message-author-role],
+    [data-local-conversation-user-anchor],
+    [data-local-conversation-final-assistant],
+    [class*="_markdown"]
+  )
+  :is(
+    [class~="bg-token-main-surface-primary"],
+    [class~="bg-token-main-surface-secondary"],
+    [class~="bg-token-main-surface-tertiary"],
+    [class*="bg-surface-elevated-secondary"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  background-color: rgb(var(--cs-surface-rgb) / .92) !important;
+  background-image: none !important;
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"][data-codex-skin-scope="home"]
+  :is(
+    .group\/home-suggestions,
+    .group\/home-suggestions *,
+    [class*="_homeUtilityBar_"],
+    button[class*="_utilityBarLabel_"],
+    [class~="heading-xl"],
+    [class~="group/title"],
+    [class~="group/title"] *,
+    h1, h2, h3, [role="heading"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  text-shadow: none !important;
+}
+
+:root[__MARKER__="active"]
+  main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  )
+  :is(
+    .app-shell-main-content-top-fade,
+    [data-app-shell-main-content-top-fade],
+    [class*="_MainContentTopFade_"],
+    [class*="_MainContentBottomFade_"],
+    [class*="_MainContentBottomGradient_"],
+    [class~="bg-gradient-to-t"][class~="from-token-main-surface-primary"],
+    [class~="bg-gradient-to-t"][class~="from-surface"][class~="via-surface"]
+  ) {
+  display: none !important;
+  opacity: 0 !important;
+  background: none !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  transition: none !important;
+}
+
+:root[__MARKER__="active"] [data-codex-skin-composer="true"] {
+  color: var(--cs-text-primary) !important;
+  background: rgb(var(--cs-surface-rgb) / var(--cs-surface-opacity)) !important;
+  background-image: none !important;
+  border: 1px solid var(--cs-border) !important;
+  border-radius: calc(16px * var(--cs-radius-scale)) !important;
+  box-shadow: 0 18px 50px rgb(0 0 0 / __SHADOW_ALPHA__) !important;
+  backdrop-filter: blur(var(--cs-surface-blur)) saturate(108%);
+}
+
+:root[__MARKER__="active"] [data-codex-skin-composer="true"]
+  :is(
+  [class*="_ComposerLayoutBody_"],
+  [class*="_ComposerFooter_"],
+  [class*="_ComposerHomeUtilityBar_"]
+  ) {
+  color: var(--cs-text-primary) !important;
+	background: rgb(var(--cs-surface-rgb) / var(--cs-surface-opacity)) !important;
+  background-image: none !important;
+}
+
+:root[__MARKER__="active"] [data-codex-skin-composer="true"]
+  :is(
+  button, [role="button"], label, svg,
+	button *, [role="button"] *, label *,
+  input, textarea, [contenteditable="true"], [role="textbox"], [class*="_RichTextInput_"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  caret-color: var(--cs-text-primary) !important;
+}
+
+:root[__MARKER__="active"] [data-codex-skin-composer="true"] [data-placeholder]::before,
+:root[__MARKER__="active"] [data-codex-skin-composer="true"]
+  .ProseMirror p.is-editor-empty:first-child::before,
+:root[__MARKER__="active"] [data-codex-skin-composer="true"]
+  :is(input, textarea)::placeholder {
+  color: var(--cs-text-secondary) !important;
+  opacity: 1 !important;
+}
+
+/* V11 source is retained solely as an exact migration payload. It used nested
+   relational selectors that current Chromium rejects, so it must not be
+   emitted as part of V12. */
+/*
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) main[data-codex-skin-main="true"]:is(
+    [data-codex-skin-scope="home"],
+    [data-codex-skin-scope="thread"]
+  ) {
+	background-color: transparent !important;
+  background-image:
+    linear-gradient(
+      rgb(var(--cs-surface-rgb) / .22),
+      rgb(var(--cs-surface-rgb) / .22)
+    ),
+    linear-gradient(
+      rgb(0 0 0 / var(--cs-background-overlay)),
+      rgb(0 0 0 / var(--cs-background-overlay))
+    ),
+    var(--cs-background-image) !important;
+  background-position: center, center, center !important;
+  background-size: cover, cover, cover !important;
+  background-attachment: fixed, fixed, fixed !important;
+	border-inline-start: 0 !important;
+	box-shadow: none !important;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"],
+        .thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) :is(
+  .app-shell-main-content-top-fade,
+  [data-app-shell-main-content-top-fade],
+  [class*="_MainContentTopFade_"]
+  ) {
+	display: none !important;
+	opacity: 0 !important;
+	background: none !important;
+	background-image: none !important;
+	box-shadow: none !important;
+	backdrop-filter: none !important;
+	transition: none !important;
+}
+
+V11 legacy note: apply-on-demand route branch retained only for migration text.
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) main[data-codex-skin-main="true"] {
+	background-color: transparent !important;
+	background-image:
+	  linear-gradient(rgb(var(--cs-surface-rgb) / .22), rgb(var(--cs-surface-rgb) / .22)),
+	  linear-gradient(
+	    rgb(0 0 0 / var(--cs-background-overlay)),
+	    rgb(0 0 0 / var(--cs-background-overlay))
+	  ),
+	  var(--cs-background-image) !important;
+	background-position: center, center, center !important;
+	background-size: cover, cover, cover !important;
+	background-attachment: fixed, fixed, fixed !important;
+	border-inline-start: 0 !important;
+	box-shadow: none !important;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) main[data-codex-skin-main="true"]
+  :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"]) {
+	color: var(--cs-text-primary) !important;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) :is(
+	[data-codex-skin-composer="true"],
+	.composer-surface-chrome,
+	[class*="_ComposerLayoutRoot_"],
+	div.sticky:has(:is(input[type="text"], textarea, [contenteditable="true"], [role="textbox"]))
+  ) {
+	color: var(--cs-text-primary) !important;
+	background: rgb(var(--cs-surface-rgb) / var(--cs-surface-opacity)) !important;
+	background-image: none !important;
+	border-color: var(--cs-border) !important;
+	border-radius: calc(16px * var(--cs-radius-scale)) !important;
+	box-shadow: 0 18px 50px rgb(0 0 0 / __SHADOW_ALPHA__) !important;
+	backdrop-filter: blur(var(--cs-surface-blur)) saturate(108%);
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) :is(
+	[data-codex-skin-composer="true"],
+	.composer-surface-chrome,
+	[class*="_ComposerLayoutRoot_"],
+	div.sticky:has(:is(input[type="text"], textarea, [contenteditable="true"], [role="textbox"]))
+  ) :is(
+	[class*="_ComposerLayoutBody_"],
+	[class*="_ComposerFooter_"],
+	[class*="_ComposerHomeUtilityBar_"],
+	button, [role="button"], label, svg,
+	input, textarea, [contenteditable="true"], [role="textbox"], [class*="_RichTextInput_"]
+  ) {
+	color: var(--cs-text-primary) !important;
+	caret-color: var(--cs-text-primary) !important;
+	background-image: none !important;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) :is(
+	[data-codex-skin-composer="true"],
+	.composer-surface-chrome,
+	[class*="_ComposerLayoutRoot_"],
+	div.sticky:has(:is(input[type="text"], textarea, [contenteditable="true"], [role="textbox"]))
+  ) :is([data-placeholder]::before, .ProseMirror p.is-editor-empty:first-child::before, input::placeholder, textarea::placeholder) {
+	color: var(--cs-text-secondary) !important;
+	opacity: 1 !important;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) :is(
+	[class*="_MainContentBottomFade_"],
+	[class*="_MainContentBottomGradient_"],
+	.bg-gradient-to-t.from-token-main-surface-primary
+  ) {
+	display: none !important;
+	opacity: 0 !important;
+	background: none !important;
+	background-image: none !important;
+	box-shadow: none !important;
+	backdrop-filter: none !important;
+	transition: none !important;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) main[data-codex-skin-main="true"]
+  :is(
+    .thread-scroll-container,
+    [data-message-author-role],
+    [class*="_markdown"],
+    .group\/home-suggestions,
+    [data-testid="home-icon"],
+    [class~="heading-xl"]
+  ) {
+	color: var(--cs-text-primary) !important;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) main[data-codex-skin-main="true"]
+  :is([class~="text-token-text-secondary"], [class~="text-token-text-tertiary"]) {
+	color: var(--cs-text-secondary) !important;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) main[data-codex-skin-main="true"]
+  :is(
+    .app-shell-main-content-top-fade,
+    [data-app-shell-main-content-top-fade],
+    [class*="_MainContentTopFade_"],
+    [class*="_MainContentBottomFade_"],
+    [class*="_MainContentBottomGradient_"],
+    .bg-gradient-to-t.from-token-main-surface-primary
+  ) {
+	display: none !important;
+	opacity: 0 !important;
+	background: none !important;
+	background-image: none !important;
+	box-shadow: none !important;
+	backdrop-filter: none !important;
+	transition: none !important;
+}
+
+V11 legacy note: composer marker branch retained only for migration text.
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) [data-codex-skin-composer="true"],
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) [data-codex-skin-composer-boundary="true"] {
+  color: var(--cs-text-primary) !important;
+  background: rgb(var(--cs-surface-rgb) / var(--cs-surface-opacity)) !important;
+  background-image: none !important;
+  border-color: var(--cs-border) !important;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) [data-codex-skin-composer="true"] {
+  border: 1px solid var(--cs-border) !important;
+  border-radius: calc(16px * var(--cs-radius-scale)) !important;
+  box-shadow: 0 18px 50px rgb(0 0 0 / __SHADOW_ALPHA__) !important;
+  backdrop-filter: blur(var(--cs-surface-blur)) saturate(108%);
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) [data-codex-skin-composer="true"]
+  :is(
+    [class*="_ComposerLayoutBody_"],
+    [class*="_ComposerFooter_"],
+    [class*="_ComposerHomeUtilityBar_"]
+  ) {
+  color: var(--cs-text-primary) !important;
+  background: rgb(var(--cs-surface-rgb) / var(--cs-surface-opacity)) !important;
+  background-image: none !important;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) [data-codex-skin-composer="true"]
+  :is(button, [role="button"], label, svg),
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) [data-codex-skin-composer="true"]
+  :is(button, [role="button"], label) *,
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) [data-codex-skin-composer="true"]
+  :is(input, textarea, [contenteditable="true"], [role="textbox"], [class*="_RichTextInput_"]) {
+  color: var(--cs-text-primary) !important;
+  caret-color: var(--cs-text-primary) !important;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) [data-codex-skin-composer="true"] [data-placeholder]::before,
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) [data-codex-skin-composer="true"]
+  .ProseMirror p.is-editor-empty:first-child::before,
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) [data-codex-skin-composer="true"]
+  :is(input, textarea)::placeholder {
+  color: var(--cs-text-secondary) !important;
+  opacity: 1 !important;
+}
+
+V11 legacy note: local lower-fade branch retained only for migration text.
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) [data-codex-skin-composer-boundary="true"]
+  :is(
+    [class*="_MainContentBottomFade_"],
+    [class*="_MainContentBottomGradient_"],
+    .bg-gradient-to-t.from-token-main-surface-primary
+  ) {
+  display: none !important;
+  opacity: 0 !important;
+  background: none !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+	transition: none !important;
+}
+
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) [data-codex-skin-composer-boundary="true"]::before,
+:root[__MARKER__="active"]:has(
+    main[data-codex-skin-main="true"][data-codex-skin-scope="home"]:has(
+      :is([data-testid="home-icon"], .group\/home-suggestions, [class~="heading-xl"])
+    ),
+    main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]:has(
+      :is(.thread-scroll-container, [data-message-author-role], [class*="_markdown"])
+    )
+  ) [data-codex-skin-composer-boundary="true"]::after {
+	background: none !important;
+	background-image: none !important;
+	box-shadow: none !important;
+}
+*/
+`
+	replacer := strings.NewReplacer(
+		"__MARKER__", RootMarkerAttribute,
+		"__BACKGROUND_OVERLAY__", fmt.Sprintf("%.4f", tokens.BackgroundOverlay),
+		"__SURFACE_OPACITY__", fmt.Sprintf("%.4f", tokens.SurfaceOpacity),
+		"__SURFACE_BLUR__", strconv.Itoa(tokens.SurfaceBlurPx),
+		"__SURFACE_RGB__", surfaceRGB,
+		"__SIDEBAR_RGB__", sidebarRGB,
+		"__TEXT_SHADOW_RGB__", textShadowRGB,
+		"__TEXT_PRIMARY__", tokens.TextPrimary,
+		"__TEXT_SECONDARY__", tokens.TextSecondary,
+		"__ACCENT__", tokens.Accent,
+		"__BORDER__", tokens.Border,
+		"__RADIUS_SCALE__", fmt.Sprintf("%.4f", tokens.RadiusScale),
+		"__SHADOW_ALPHA__", shadowAlpha,
+	)
+	return replacer.Replace(focusedConversationContract), nil
 }
 
 func compileTemplateV7(

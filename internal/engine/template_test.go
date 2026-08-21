@@ -343,3 +343,103 @@ func TestCurrentTemplateRepairsCurrentWorkspaceWithoutLegacyThreadContainer(t *t
 		}
 	}
 }
+
+func TestCurrentTemplateScopesCurrentTokensAndConversationTextAwayFromNativeUtilities(t *testing.T) {
+	tokens := theme.Tokens{
+		TextPrimary: "#FFF5EC", TextSecondary: "#D9C0AE", Accent: "#E78A4E",
+	}
+	previous, err := compileTemplateV10("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := compileTemplateV11("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous == current || strings.Contains(previous, `--cs-workspace-contract: 11`) {
+		t.Fatal("Template v11 scoped workspace repair was not added")
+	}
+	for _, fragment := range []string{
+		`--cs-scope-contract: 11`,
+		`--cs-workspace-contract: 11`,
+		`Scoped workspace contract v11`,
+		`native utility routes, output side panels and overlays`,
+		`App token names are never reassigned here`,
+		`[contenteditable="true"]`,
+		`caret-color: var(--cs-text-primary) !important`,
+		`data-local-conversation-final-assistant`,
+		`[class~="text-token-conversation-body"]`,
+		`[class*="_ComposerLayoutBody_"]`,
+		`[class*="_ComposerHomeUtilityBar_"]`,
+		`[class*="_RichTextInput_"]`,
+		`.ProseMirror p.is-editor-empty:first-child::before`,
+		`[class*="_MainContentBottomFade_"]`,
+	} {
+		if !strings.Contains(current, fragment) {
+			t.Fatalf("Template v11 is missing %q", fragment)
+		}
+	}
+	for _, forbidden := range []string{
+		`--color-background-primary`,
+		`--color-text-primary`,
+		`--color-token-main-surface-primary`,
+		`:root[data-codex-skin="active"] {\n  color-scheme:`,
+		`[class~="text-default"],\n    [class~="text-token-conversation-body"],`,
+	} {
+		if strings.Contains(current, forbidden) {
+			t.Fatalf("Template v11 still leaks a workspace token into native UI: %q", forbidden)
+		}
+	}
+}
+
+func TestTemplateV12GatesArtworkAndComposerToTheLiveConversationWorkspace(t *testing.T) {
+	tokens := theme.Tokens{
+		TextPrimary: "#FFF5EC", TextSecondary: "#D9C0AE", Accent: "#E78A4E",
+	}
+	previous, err := compileTemplateV11("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := compileTemplateV12("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous == current || strings.Contains(previous, `--cs-workspace-contract: 12`) {
+		t.Fatal("Template v12 focused conversation repair was not added")
+	}
+	for _, fragment := range []string{
+		`--cs-scope-contract: 12`,
+		`--cs-workspace-contract: 12`,
+		`Focused conversation contract v12`,
+		`Sites, Scheduled`,
+		`main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]`,
+		`data-codex-skin-composer`,
+		`data-codex-skin-composer-boundary`,
+		`[class*="_MainContentBottomFade_"]`,
+		`[class~="from-surface"][class~="via-surface"]`,
+		`#appgen-site-search`,
+		`main[data-codex-skin-main="true"]:not(:has(`,
+		`background-color: var(--color-surface) !important`,
+		`background-image: none !important`,
+	} {
+		if !strings.Contains(current, fragment) {
+			t.Fatalf("Template v12 is missing %q", fragment)
+		}
+	}
+	active := strings.SplitN(current, "/* V11 source is retained", 2)[0]
+	for _, forbidden := range []string{
+		`:root[data-codex-skin="active"] body {`,
+		`--color-background-primary`,
+		`--color-text-primary`,
+		`--color-token-main-surface-primary`,
+		`:root[data-codex-skin="active"]:has(`,
+		`:has(
+      main`,
+		`) main[data-codex-skin-main="true"] {`,
+		`:root[data-codex-skin="active"] .composer-surface-chrome`,
+	} {
+		if strings.Contains(active, forbidden) {
+			t.Fatalf("Template v12 leaks into a native surface: %q", forbidden)
+		}
+	}
+}

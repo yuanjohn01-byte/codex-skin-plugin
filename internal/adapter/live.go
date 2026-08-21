@@ -621,12 +621,23 @@ func selectPrimedTheme(
 		copy.TemplateVersion = engine.TemplateVersion - 1
 		copy.StyleText = compiled.PreviousStyleText
 		copy.PreviousStyleText = ""
+		copy.MigrationStyleText = ""
+		copy.LegacyStyleText = ""
+	case snapshot.TemplateVersion == engine.TemplateVersion-2 &&
+		compiled.MigrationStyleText != "" &&
+		snapshot.StyleText == compiled.MigrationStyleText:
+		copy.TemplateVersion = engine.TemplateVersion - 2
+		copy.StyleText = compiled.MigrationStyleText
+		copy.PreviousStyleText = ""
+		copy.MigrationStyleText = ""
 		copy.LegacyStyleText = ""
 	case snapshot.TemplateVersion == engine.MinimumTemplateVersion &&
 		compiled.LegacyStyleText != "" &&
 		snapshot.StyleText == compiled.LegacyStyleText:
 		copy.TemplateVersion = engine.MinimumTemplateVersion
 		copy.StyleText = compiled.LegacyStyleText
+		copy.PreviousStyleText = ""
+		copy.MigrationStyleText = ""
 		copy.LegacyStyleText = ""
 	default:
 		return nil, engine.ErrCapabilityBlocked
@@ -1238,13 +1249,22 @@ const verifyFunction = `function (expectedTemplateVersion, selectors) {
 	  const root = document.documentElement;
 	  const query = (key) => typeof selectors?.[key] === "string"
 	    ? document.querySelector(selectors[key]) : null;
+	  const inMain = (key) => {
+	    if (!main || typeof selectors?.[key] !== "string") return null;
+	    try {
+	      return main.matches(selectors[key]) ? main : main.querySelector(selectors[key]);
+	    } catch {
+	      return null;
+	    }
+	  };
 	  const styles = document.querySelectorAll("#codex-skin-theme-v1");
 	  const style = styles[0] || null;
 	  const shellMain = query("shell-main");
 	  const main = shellMain?.getAttribute("data-codex-skin-main") === "true" ? shellMain : null;
 	  const sidebar = query("left-panel");
 	  const header = query("header-tint");
-	  const composer = query("composer-chrome");
+	  const composer = document.querySelector('[data-codex-skin-composer="true"]') ||
+	    query("composer-chrome");
 	  const suggestions = query("home-suggestions");
 	  const home = query("home-icon") || query("home-route");
 	  const thread = query("thread-surface");
@@ -1275,18 +1295,44 @@ const verifyFunction = `function (expectedTemplateVersion, selectors) {
   const background = getComputedStyle(document.body).backgroundImage || "";
   const rootBackground = getComputedStyle(root).getPropertyValue("--cs-background-image") || "";
   const routeScope = main?.getAttribute("data-codex-skin-scope") || "";
-  const scopedMain = routeScope === "home" || routeScope === "thread";
+	  const nativeUtilitySignals = Boolean(main && inMain("native-utility-route"));
+	  const homeSignals = Boolean(main && !nativeUtilitySignals && (
+	    inMain("home-route") || inMain("home-icon") || inMain("home-suggestions") ||
+	    (inMain("home-title") && composer && main.contains(composer))
+	  ));
+	  const threadSignals = Boolean(main && (
+	    inMain("thread-surface") || inMain("message") || inMain("markdown")
+	  ));
+	  const workspaceSignals = (routeScope === "home" && homeSignals) ||
+	    (routeScope === "thread" && threadSignals);
+  const scopedMain = (routeScope === "home" || routeScope === "thread") && workspaceSignals;
   const scopeContractSafe = Boolean(style &&
     style.textContent.includes(expectedTemplateVersion < 9
       ? "--cs-scope-contract: 8"
-      : "--cs-scope-contract: 9") &&
+      : expectedTemplateVersion < 11
+        ? "--cs-scope-contract: 9"
+        : expectedTemplateVersion < 12
+          ? "--cs-scope-contract: 11"
+          : "--cs-scope-contract: 12") &&
     style.textContent.includes('data-codex-skin-scope="home"') &&
     style.textContent.includes('data-codex-skin-scope="thread"'));
   const workspaceContractSafe = expectedTemplateVersion < 10 || Boolean(style &&
-    style.textContent.includes("--cs-workspace-contract: 10") &&
-    style.textContent.includes("--color-background-primary") &&
-    style.textContent.includes("--color-token-main-surface-primary") &&
-    style.textContent.includes("_ComposerLayoutRoot_") &&
+    (expectedTemplateVersion < 11
+      ? style.textContent.includes("--cs-workspace-contract: 10") &&
+        style.textContent.includes("--color-background-primary") &&
+        style.textContent.includes("--color-token-main-surface-primary")
+      : expectedTemplateVersion < 12
+        ? style.textContent.includes("--cs-workspace-contract: 11") &&
+        style.textContent.includes("Scoped workspace contract v11") &&
+        style.textContent.includes("App token names are never reassigned here")
+	        : style.textContent.includes("--cs-workspace-contract: 12") &&
+	          style.textContent.includes("Focused conversation contract v12") &&
+	          style.textContent.includes("data-codex-skin-composer") &&
+	          style.textContent.includes('class~="from-surface"') &&
+	          !style.textContent.includes(':root[data-codex-skin="active"] body {')) &&
+    (expectedTemplateVersion < 12
+      ? style.textContent.includes("_ComposerLayoutRoot_")
+      : style.textContent.includes("data-codex-skin-composer-boundary")) &&
     style.textContent.includes("_MainContentBottomFade_"));
   const topFadeContractSafe = expectedTemplateVersion < 6 || (expectedTemplateVersion < 8
     ? Boolean(style && style.textContent.includes("--cs-top-fade-contract: 6") &&
@@ -1327,14 +1373,19 @@ const verifyFunction = `function (expectedTemplateVersion, selectors) {
     ? Boolean(style && mainStyle?.backgroundImage.includes("linear-gradient"))
     : Boolean(style && scopedMain && scopeContractSafe && workspaceContractSafe &&
         mainStyle?.backgroundImage.includes("linear-gradient"));
-  const bottomFade = main?.querySelector(
-    ".thread-scroll-container .bg-gradient-to-t.from-token-main-surface-primary"
-  ) || null;
-  const bottomFadeStyle = bottomFade ? getComputedStyle(bottomFade) : null;
-  const bottomFadeNeutralized = !bottomFadeStyle ||
-    (bottomFadeStyle.backgroundImage === "none" &&
-      (bottomFadeStyle.backgroundColor === "rgba(0, 0, 0, 0)" ||
-        bottomFadeStyle.backgroundColor === "transparent"));
+  const bottomFadeSelector = typeof selectors?.["conversation-bottom-fade"] === "string"
+    ? selectors["conversation-bottom-fade"]
+    : ':is(.bg-gradient-to-t.from-token-main-surface-primary, ' +
+      '[class*="_MainContentBottomFade_"], [class*="_MainContentBottomGradient_"])';
+  const bottomFades = main
+    ? [...main.querySelectorAll(bottomFadeSelector)].filter(visible) : [];
+  const bottomFadeNeutralized = bottomFades.every((fade) => {
+    const computed = getComputedStyle(fade);
+    return computed.display === "none" ||
+      (computed.backgroundImage === "none" &&
+        (computed.backgroundColor === "rgba(0, 0, 0, 0)" ||
+          computed.backgroundColor === "transparent"));
+  });
   const rootStyle = getComputedStyle(root);
   const surface = rootStyle.getPropertyValue("--cs-surface-rgb").trim()
     .split(/\s+/).map(Number);
@@ -1386,10 +1437,12 @@ const verifyFunction = `function (expectedTemplateVersion, selectors) {
 	      shellMain: visible(main) ? "pass" : "fail",
 	      mainBoundary: mainBoundaryNeutralized ? "pass" : "fail",
 	      sidebar: visible(sidebar) ? "pass" : "fail",
-	      headerTint: visible(header) && shellEdgeContractSafe ? "pass" : "fail",
+	      // Newer renderers keep an inactive header node alongside the visible
+	      // shell header. A hidden match has no visual surface to validate.
+	      headerTint: !visible(header) || shellEdgeContractSafe ? "pass" : "fail",
 	      composerUtilityBar: optional(composerUtilityBar, composerUtilityNeutralized),
 	      topFade: topFades.length === 0 ? "not_present" : (topFadeNeutralized ? "pass" : "fail"),
-	      bottomFade: optional(bottomFade, bottomFadeNeutralized),
+      bottomFade: bottomFades.length === 0 ? "not_present" : (bottomFadeNeutralized ? "pass" : "fail"),
       templateScope: templateScopeSafe ? "pass" : "fail",
       themeContrast: themeContrastSafe ? "pass" : "fail",
 		conversationActivity: activityHeaders.length === 0
@@ -1416,6 +1469,12 @@ const restoreFunction = `function () {
     main.removeAttribute("data-codex-skin-main");
     main.removeAttribute("data-codex-skin-scope");
   }
+  for (const node of document.querySelectorAll(
+    '[data-codex-skin-composer], [data-codex-skin-composer-boundary]'
+  )) {
+    node.removeAttribute("data-codex-skin-composer");
+    node.removeAttribute("data-codex-skin-composer-boundary");
+  }
   const root = document.documentElement;
   const backgroundURL = root.getAttribute("data-codex-skin-background-url");
   if (backgroundURL && backgroundURL.startsWith("blob:")) URL.revokeObjectURL(backgroundURL);
@@ -1433,9 +1492,11 @@ const restoreFunction = `function () {
 const officialFunction = `function () {
   const root = document.documentElement;
 	return !globalThis["__CODEX_SKIN_RENDERER_CONTROLLER_V2__"] &&
-		document.querySelectorAll("#codex-skin-theme-v1").length === 0 &&
+    document.querySelectorAll("#codex-skin-theme-v1").length === 0 &&
     document.querySelectorAll('main[data-codex-skin-main="true"]').length === 0 &&
     document.querySelectorAll('main[data-codex-skin-scope]').length === 0 &&
+    document.querySelectorAll('[data-codex-skin-composer]').length === 0 &&
+    document.querySelectorAll('[data-codex-skin-composer-boundary]').length === 0 &&
     !root.hasAttribute("data-codex-skin") &&
     !root.hasAttribute("data-codex-skin-theme") &&
     !root.hasAttribute("data-codex-skin-theme-version") &&

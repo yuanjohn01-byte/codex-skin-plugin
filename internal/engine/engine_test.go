@@ -90,6 +90,10 @@ func (adapter *primingAdapter) Prime(_ context.Context, _ Session, compiled Comp
 		adapter.state.StyleText == compiled.PreviousStyleText {
 		return nil
 	}
+	if adapter.state.TemplateVersion == TemplateVersion-2 &&
+		adapter.state.StyleText == compiled.MigrationStyleText {
+		return nil
+	}
 	if adapter.state.TemplateVersion == MinimumTemplateVersion &&
 		adapter.state.StyleText == compiled.LegacyStyleText {
 		return nil
@@ -253,19 +257,33 @@ func TestApplyVerifiedCommitsOnlyAfterVerification(t *testing.T) {
 	}
 	if !strings.Contains(adapter.state.StyleText, `main[data-codex-skin-main="true"]`) ||
 		!strings.Contains(adapter.state.StyleText, "aside.app-shell-left-panel") ||
-		!strings.Contains(adapter.state.StyleText, ".composer-surface-chrome") ||
+		!strings.Contains(adapter.state.StyleText, "data-codex-skin-composer") ||
 		!strings.Contains(adapter.state.StyleText, ".group\\/home-suggestions") ||
 		!strings.Contains(adapter.state.StyleText, ".app-shell-main-content-top-fade") ||
 		!strings.Contains(adapter.state.StyleText, ":has(") ||
 		!strings.Contains(adapter.state.StyleText, ".thread-scroll-container") ||
 		!strings.Contains(adapter.state.StyleText, ".bg-gradient-to-t.from-token-main-surface-primary") ||
+		!strings.Contains(adapter.state.StyleText, `[class~="from-surface"][class~="via-surface"]`) ||
 		!strings.Contains(adapter.state.StyleText, "aside.app-shell-left-panel::after") ||
 		!strings.Contains(adapter.state.StyleText, "content: none !important") ||
+		!strings.Contains(adapter.state.StyleText, "background-color: var(--color-surface) !important") ||
 		!strings.Contains(adapter.state.StyleText, "background-image: none !important") ||
 		!strings.Contains(adapter.state.StyleText, "transition: none !important") ||
 		strings.Contains(adapter.state.StyleText, `main[data-codex-skin-main="true"] [class~="text-token-text-primary"],
 :root[data-codex-skin="active"] main[data-codex-skin-main="true"] [class~="text-token-foreground"]`) {
 		t.Fatalf("compiled template is missing fixed region selectors")
+	}
+	activeV12 := strings.SplitN(adapter.state.StyleText, "/* V11 source is retained", 2)[0]
+	for _, forbidden := range []string{
+		`:root[data-codex-skin="active"] body {`,
+		`:root[data-codex-skin="active"]:has(`,
+		`:has(
+      main`,
+		`) main[data-codex-skin-main="true"] {`,
+	} {
+		if strings.Contains(activeV12, forbidden) {
+			t.Fatalf("compiled template v12 leaks into a native surface: %q", forbidden)
+		}
 	}
 	if !strings.HasPrefix(adapter.state.BackgroundDataURL, "data:image/png;base64,") ||
 		strings.Contains(adapter.state.StyleText, "data:image/") {
@@ -1133,7 +1151,7 @@ func legacyV8VerificationSummary() *VerificationSummary {
 	report.Scope = "shell"
 	report.RuntimeVersion = 2
 	report.StyleMarkerCount = 1
-	report.TemplateVersion = TemplateVersion - 1
+	report.TemplateVersion = 8
 	report.ThemePublicID = "100001"
 	report.BackgroundLoaded = true
 	report.Regions["mainBoundary"] = RegionFail

@@ -88,11 +88,21 @@ func TestInstallControllerUsesCurrentDocumentOnly(t *testing.T) {
 
 func TestApplyFunctionMarksAnExplicitHomeOrThreadScope(t *testing.T) {
 	for _, fragment := range []string{
-		`const routeScope = () =>`,
+		`const routeScope = (main) =>`,
 		`if (settingsScope()) return "settings";`,
-		`selector("home-suggestions")`,
-		`selector("thread-surface")`,
-		`return "thread";`,
+		`const inMain = (main, key) =>`,
+		`inMain(main, "home-suggestions")`,
+		`inMain(main, "home-title")`,
+		`inMain(main, "native-utility-route")`,
+		`inMain(main, "thread-surface")`,
+		`inMain(main, "message")`,
+		`inMain(main, "markdown")`,
+		`selector("composer-chrome")`,
+		`const visibleComposer = (root = document) =>`,
+		`visibleComposer(main) || visibleComposer()`,
+		`data-codex-skin-composer`,
+		`data-codex-skin-composer-boundary`,
+		`return "native";`,
 		`setAttribute(main, "data-codex-skin-scope", scope)`,
 		`node.removeAttribute("data-codex-skin-scope")`,
 	} {
@@ -102,21 +112,32 @@ func TestApplyFunctionMarksAnExplicitHomeOrThreadScope(t *testing.T) {
 	}
 }
 
-func TestApplyFunctionUsesTaskFallbackWhenLegacyThreadContainerIsAbsent(t *testing.T) {
-	if strings.Contains(applyFunction, `return "shell";`) {
-		t.Fatal("apply function can still classify a verified normal shell as an unstyled shell")
-	}
+func TestApplyFunctionRequiresPositiveWorkspaceSignalBeforeUsingThreadScope(t *testing.T) {
 	for _, fragment := range []string{
 		`if (settingsScope()) return "settings";`,
-		`selector("home-route")`,
-		`selector("home-icon")`,
-		`selector("home-suggestions")`,
-		`if (document.querySelector(selector("thread-surface"))) return "thread";`,
-		`every remaining normal shell is a task route`,
-		`return "thread";`,
+		`const inMain = (main, key) =>`,
+		`inMain(main, "home-route")`,
+		`inMain(main, "home-icon")`,
+		`inMain(main, "home-suggestions")`,
+		`inMain(main, "home-title")`,
+		`if (inMain(main, "native-utility-route")) return "native";`,
+		`inMain(main, "thread-surface")`,
+		`inMain(main, "message")`,
+		`inMain(main, "markdown")`,
+		`const visibleComposer = (root = document) =>`,
+		`if (inMain(main, "home-title") && visibleComposer(main)) return "home";`,
+		`visibleComposer(main) || visibleComposer()`,
+		`stable search controls must win before any generic heading fallback`,
+		`return "native";`,
 	} {
 		if !strings.Contains(applyFunction, fragment) {
-			t.Fatalf("task-route fallback contract is missing %q", fragment)
+			t.Fatalf("positive workspace scope contract is missing %q", fragment)
 		}
+	}
+	if strings.Contains(applyFunction, `every remaining normal shell is a task route`) {
+		t.Fatal("apply function still treats every native route as a conversation")
+	}
+	if strings.Contains(applyFunction, `inMain(main, "home-title")) return "home"`) {
+		t.Fatal("route scope must not treat a generic utility heading as Home")
 	}
 }

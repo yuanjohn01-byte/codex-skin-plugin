@@ -9,7 +9,7 @@ const (
 	StateSchemaVersion     = 1
 	CurrentEngineVersion   = "0.2.0"
 	MinimumTemplateVersion = 1
-	TemplateVersion        = 10
+	TemplateVersion        = 12
 	MarkerID               = "codex-skin-theme-v1"
 	RootMarkerAttribute    = "data-codex-skin"
 	ThemeMarkerAttribute   = "data-codex-skin-theme"
@@ -85,14 +85,15 @@ type Snapshot struct {
 }
 
 type CompiledTheme struct {
-	ThemePublicID     string
-	ThemeVersion      string
-	TemplateVersion   int
-	AppearanceMode    string
-	StyleText         string
-	PreviousStyleText string
-	LegacyStyleText   string
-	BackgroundDataURL string
+	ThemePublicID      string
+	ThemeVersion       string
+	TemplateVersion    int
+	AppearanceMode     string
+	StyleText          string
+	PreviousStyleText  string
+	MigrationStyleText string
+	LegacyStyleText    string
+	BackgroundDataURL  string
 }
 
 type Adapter interface {

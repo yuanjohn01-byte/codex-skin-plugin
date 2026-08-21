@@ -429,7 +429,7 @@ func isRetirableLegacyV8Verification(journal Journal) bool {
 	}
 	verification := journal.Verification
 	return verification.RuntimeVersion == 2 &&
-		verification.TemplateVersion == TemplateVersion-1 &&
+		verification.TemplateVersion == 8 &&
 		verification.ReapplyAttempted && verification.ProbeCompleted
 }
 

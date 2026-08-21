@@ -1,6 +1,9 @@
 package renderer
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSelectorContractIsVersionedAndComplete(t *testing.T) {
 	contract, err := Load()
@@ -17,7 +20,8 @@ func TestSelectorContractIsVersionedAndComplete(t *testing.T) {
 	}
 	for _, key := range []string{
 		"shell-main", "left-panel", "header-tint", "main-content-top-fade",
-		"home-route-css", "home-banners", "markdown", "overlay-menu", "overlay-popper",
+		"home-route-css", "home-banners", "home-title", "native-utility-route",
+		"markdown", "conversation-bottom-fade", "overlay-menu", "overlay-popper",
 	} {
 		if selectors[key] == "" {
 			t.Fatalf("missing selector %q", key)
@@ -29,5 +33,14 @@ func TestSelectorContractIsVersionedAndComplete(t *testing.T) {
 	if selectors["home-route"] != `[role="main"]:has([data-testid="home-icon"])` ||
 		selectors["home-route-css"] != `[role="main"]` {
 		t.Fatal("v2 home route must preserve separate DOM and CSS-safe selectors")
+	}
+	if selectors["home-title"] != `[class~="heading-xl"][class~="text-default"]` {
+		t.Fatal("v2 home title must identify the current home greeting")
+	}
+	if selectors["native-utility-route"] != `:is(#appgen-site-search, #sites-page-search, #scheduled-page-search, #plugins-store-page-search)` {
+		t.Fatal("v2 native utility route must exclude current Sites, Scheduled and Plugins pages")
+	}
+	if !strings.Contains(selectors["conversation-bottom-fade"], `[class~="from-surface"][class~="via-surface"]`) {
+		t.Fatal("v2 conversation bottom fade must include the current native surface gradient")
 	}
 }

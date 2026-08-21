@@ -154,6 +154,7 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
   let styleSheet = null;
   let styleNode = null;
   let currentMain = null;
+	let currentComposer = null;
   let stopped = false;
 
   const selector = (key) => typeof selectors[key] === "string" ? selectors[key] : "";
@@ -172,18 +173,66 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
       }
     }
   };
-  const routeScope = () => {
-    if (settingsScope()) return "settings";
-    if (document.querySelector(selector("home-route")) ||
-        document.querySelector(selector("home-icon")) ||
-        document.querySelector(selector("home-suggestions"))) return "home";
-    if (document.querySelector(selector("thread-surface"))) return "thread";
-    // Codex can replace the old thread scroll container on an otherwise
-    // verified shell. The Home and Settings routes above have positive
-    // anchors; every remaining normal shell is a task route for the signed
-    // template's limited surface treatment.
-    return "thread";
+  const removeComposerMarkers = () => {
+    for (const node of document.querySelectorAll(
+      '[data-codex-skin-composer], [data-codex-skin-composer-boundary]'
+    )) {
+      node.removeAttribute("data-codex-skin-composer");
+      node.removeAttribute("data-codex-skin-composer-boundary");
+    }
   };
+  const visible = (node) => {
+    if (!node) return false;
+    const rect = node.getBoundingClientRect();
+    const computed = getComputedStyle(node);
+    return rect.width > 1 && rect.height > 1 && computed.display !== "none" &&
+      computed.visibility !== "hidden";
+  };
+  const inMain = (main, key) => {
+    const rule = selector(key);
+    if (!main || !rule) return false;
+    try {
+      return main.matches(rule) || Boolean(main.querySelector(rule));
+    } catch {
+      return false;
+    }
+  };
+  const visibleComposer = (root = document) => {
+		const rule = selector("composer-chrome");
+		if (!rule) return null;
+		try {
+			return [...root.querySelectorAll(rule)].find(visible) || null;
+		} catch {
+			return null;
+		}
+	};
+  const routeScope = (main) => {
+    if (settingsScope()) return "settings";
+    // Current utility pages reuse the same heading classes as Home. Their
+    // stable search controls must win before any generic heading fallback.
+    if (inMain(main, "native-utility-route")) return "native";
+    if (inMain(main, "home-route") || inMain(main, "home-icon") ||
+        inMain(main, "home-suggestions")) return "home";
+    if (inMain(main, "thread-surface") || inMain(main, "message") ||
+        inMain(main, "markdown")) return "thread";
+    // The latest empty Home has a generic heading-xl. Accept that fallback
+    // only when the same main also owns a visible composer.
+    if (inMain(main, "home-title") && visibleComposer(main)) return "home";
+    return "native";
+  };
+	const markComposer = (composer) => {
+		removeComposerMarkers();
+		if (!composer) return;
+		composer.setAttribute("data-codex-skin-composer", "true");
+		let boundary = composer;
+		for (let depth = 0; boundary && boundary !== document.body && depth < 6; depth += 1) {
+			const classes = typeof boundary.className === "string" ? boundary.className : "";
+			if (boundary === composer || /(?:^|\s)[^\s]*Composer[^\s]*/.test(classes)) {
+				boundary.setAttribute("data-codex-skin-composer-boundary", "true");
+			}
+			boundary = boundary.parentElement;
+		}
+	};
   const setAttribute = (node, name, value) => {
     if (node.getAttribute(name) !== value) node.setAttribute(name, value);
   };
@@ -240,7 +289,9 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
   const deactivate = () => {
     removeSheet();
     removeMainMarkers();
+		removeComposerMarkers();
     currentMain = null;
+		currentComposer = null;
     const root = document.documentElement;
     if (root) {
       for (const name of ROOT_ATTRIBUTES) root.removeAttribute(name);
@@ -267,9 +318,12 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
     const styleInstalled = styleMode === "adopted"
       ? Boolean(styleSheet && document.adoptedStyleSheets.includes(styleSheet))
       : Boolean(styleNode && styleNode.isConnected && !styleNode.disabled);
-    const scope = routeScope();
+    const scope = routeScope(main);
+		const composer = scope === "home" || scope === "thread"
+			? (visibleComposer(main) || visibleComposer()) : null;
     if (currentMain === main && main.getAttribute("data-codex-skin-main") === "true" &&
         main.getAttribute("data-codex-skin-scope") === scope &&
+			currentComposer === composer &&
         root.getAttribute("data-codex-skin") === "active" &&
         root.getAttribute("data-codex-skin-theme") === themeId &&
         root.getAttribute("data-codex-skin-theme-version") === themeVersion &&
@@ -278,9 +332,12 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
         document.querySelectorAll("#codex-skin-theme-v1").length === 1) return true;
     activateRoot();
     removeMainMarkers(main);
+		removeComposerMarkers();
     currentMain = main;
+		currentComposer = composer;
     setAttribute(main, "data-codex-skin-main", "true");
     setAttribute(main, "data-codex-skin-scope", scope);
+		markComposer(composer);
     return true;
   };
   const cleanup = () => {

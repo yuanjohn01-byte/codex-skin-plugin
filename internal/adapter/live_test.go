@@ -50,19 +50,36 @@ func TestRuntimeFunctionsSupportStableAndModuleMainSurfaces(t *testing.T) {
 		`[data-app-shell-header-edge-scroll]`,
 		`[class*="_Header_"]`,
 		`[data-app-shell-main-content-top-fade]`,
-		`visible(header) && shellEdgeContractSafe`,
+		`!visible(header) || shellEdgeContractSafe`,
 		`--cs-scope-contract: 9`,
 		`--cs-workspace-contract: 10`,
+		`--cs-scope-contract: 11`,
+		`--cs-workspace-contract: 11`,
+		`Scoped workspace contract v11`,
+		`--cs-scope-contract: 12`,
+		`--cs-workspace-contract: 12`,
+		`Focused conversation contract v12`,
+		`data-codex-skin-composer-boundary`,
 		`--color-background-primary`,
 		`--color-token-main-surface-primary`,
 		`_ComposerLayoutRoot_`,
 		`_MainContentBottomFade_`,
+		`native-utility-route`,
+		`conversation-bottom-fade`,
+		`class~="from-surface"`,
+		`const inMain = (key)`,
+		`const nativeUtilitySignals`,
+		`workspaceSignals`,
+		`bottomFades`,
 		`data-codex-skin-scope`,
 		`expectedTemplateVersion < 9`,
 	} {
 		if !strings.Contains(verifyFunction, fragment) {
 			t.Fatalf("verify function is missing top-fade contract %q", fragment)
 		}
+	}
+	if strings.Contains(verifyFunction, `main.querySelector(selector(`) {
+		t.Fatal("verify function calls the apply-only selector helper")
 	}
 	for _, fragment := range []string{
 		`The legacy thread container is an optional L2 probe. A verified normal`,
@@ -195,7 +212,8 @@ func TestSelectPrimedThemeOnlyAcceptsCurrentOrExactMigrationTemplates(t *testing
 	compiled := engine.CompiledTheme{
 		ThemePublicID: "100002", ThemeVersion: "1.0.0",
 		TemplateVersion: engine.TemplateVersion,
-		StyleText:       "template-v3", PreviousStyleText: "template-v2", LegacyStyleText: "template-v1",
+		StyleText:       "template-v3", PreviousStyleText: "template-v2",
+		MigrationStyleText: "template-v1.1", LegacyStyleText: "template-v1",
 		BackgroundDataURL: "data:image/png;base64,AAAA",
 		AppearanceMode:    "dark",
 	}
@@ -227,6 +245,22 @@ func TestSelectPrimedThemeOnlyAcceptsCurrentOrExactMigrationTemplates(t *testing
 			snapshot: engine.Snapshot{
 				ThemePublicID: "100002", ThemeVersion: "1.0.0",
 				TemplateVersion: engine.TemplateVersion - 1, StyleText: "tampered", AppearanceMode: "dark",
+			},
+			wantRejected: true,
+		},
+		{
+			name: "exact migration",
+			snapshot: engine.Snapshot{
+				ThemePublicID: "100002", ThemeVersion: "1.0.0",
+				TemplateVersion: engine.TemplateVersion - 2, StyleText: "template-v1.1", AppearanceMode: "dark",
+			},
+			wantVersion: engine.TemplateVersion - 2, wantStyle: "template-v1.1",
+		},
+		{
+			name: "tampered migration style",
+			snapshot: engine.Snapshot{
+				ThemePublicID: "100002", ThemeVersion: "1.0.0",
+				TemplateVersion: engine.TemplateVersion - 2, StyleText: "tampered", AppearanceMode: "dark",
 			},
 			wantRejected: true,
 		},

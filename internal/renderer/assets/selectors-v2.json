@@ -70,6 +70,20 @@
       "required": false
     },
     {
+      "key": "home-title",
+      "selector": "[class~=\"heading-xl\"][class~=\"text-default\"]",
+      "tier": "L2",
+      "scope": "home",
+      "required": false
+    },
+    {
+      "key": "native-utility-route",
+      "selector": ":is(#appgen-site-search, #sites-page-search, #scheduled-page-search, #plugins-store-page-search)",
+      "tier": "L2",
+      "scope": "native",
+      "required": false
+    },
+    {
       "key": "composer-chrome",
       "selector": ":is(.composer-surface-chrome, [class*=\"_ComposerLayoutRoot_\"])",
       "tier": "L2",
@@ -130,6 +144,13 @@
       "selector": ":is([data-message-author-role], [data-local-conversation-user-anchor], [data-local-conversation-final-assistant])",
       "tier": "L2",
       "scope": "thread",
+      "required": false
+    },
+    {
+      "key": "conversation-bottom-fade",
+      "selector": ":is([class*=\"_MainContentBottomFade_\"], [class*=\"_MainContentBottomGradient_\"], [class~=\"bg-gradient-to-t\"][class~=\"from-token-main-surface-primary\"], [class~=\"bg-gradient-to-t\"][class~=\"from-surface\"][class~=\"via-surface\"])",
+      "tier": "L2",
+      "scope": "home+thread",
       "required": false
     },
     {
