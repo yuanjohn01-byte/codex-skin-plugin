@@ -5,6 +5,9 @@
 - Prepare the next immutable Staging-only candidate: Helper `.14` and Bootstrap `.13`.
   Existing Plugin launcher pins remain on the verified `.13/.12` closure until the
   new signed release assets and their exact platform SHA-256 values are available.
+- Release the immutable Staging-only candidate: Helper `.14` and Bootstrap `.13`.
+  Plugin launchers now pin the protected-workflow prerelease and exact per-platform
+  Bootstrap SHA-256 values; it is not a stable/latest or Production channel.
 - Finalize the V11 visual repair as Template v12, scoping theme colors to the verified Home/conversation workspace and
   its current ComposerLayoutRoot surfaces. Native Sites, Scheduled, Plugins, and
   right-side utility/output pages keep Codex's official paired light/dark surfaces,
