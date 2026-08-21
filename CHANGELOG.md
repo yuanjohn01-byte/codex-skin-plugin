@@ -2,6 +2,14 @@
 
 ## 0.1.0-paid-alpha - Code-stage candidate
 
+- Prepare the next immutable Staging-only candidate: Helper `.14` and Bootstrap `.13`.
+  Existing Plugin launcher pins remain on the verified `.13/.12` closure until the
+  new signed release assets and their exact platform SHA-256 values are available.
+- Finalize the V11 visual repair as Template v12, scoping theme colors to the verified Home/conversation workspace and
+  its current ComposerLayoutRoot surfaces. Native Sites, Scheduled, Plugins, and
+  right-side utility/output pages keep Codex's official paired light/dark surfaces,
+  while task composers, result cards, output cards, and bottom fades remain readable
+  without white bands in both dark and light skins.
 - Release the immutable Staging-only candidate: Helper `.13` and Bootstrap `.12`.
   Plugin launchers now pin the signed prerelease and exact per-platform Bootstrap
   SHA-256 values; it is not a stable/latest or Production channel.
