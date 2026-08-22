@@ -262,6 +262,8 @@ func TestIsolatedCodexAppearanceUISwitchesWithoutRestart(t *testing.T) {
 		TargetID           string                         `json:"targetId"`
 		RendererRecreated  bool                           `json:"rendererRecreated"`
 		ElapsedMS          int64                          `json:"elapsedMs"`
+		DiskNeedsPin       bool                           `json:"diskNeedsPin"`
+		AppearancePrepared bool                           `json:"appearancePrepared"`
 		AppearanceVerified bool                           `json:"appearanceVerified"`
 		SkinVerified       bool                           `json:"skinVerified"`
 	}
@@ -495,7 +497,7 @@ func TestIsolatedCodexAppearanceUISwitchesWithoutRestart(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		_, restartRequired, err := live.reconcileCurrentAppearance(
+		appearancePrepared, restartRequired, err := live.reconcileCurrentAppearance(
 			ctx, verified, mode, diskNeedsPin,
 		)
 		if err != nil {
@@ -508,7 +510,26 @@ func TestIsolatedCodexAppearanceUISwitchesWithoutRestart(t *testing.T) {
 			writeEvidence()
 			t.Fatal("production appearance scheduler did not use the verified macOS UI path")
 		}
-		probe, setting, err := isolatedWaitForAppearance(ctx, live, session, mode)
+		if !appearancePrepared {
+			if _, err := appearanceManager.Pin(mode); err != nil {
+				evidence.Error = "same-mode recovery point: " + err.Error()
+				writeEvidence()
+				t.Fatal(err)
+			}
+		}
+		sameModeReuse := !diskNeedsPin && !appearancePrepared
+		readSettledAppearance := func() (isolatedAppearanceProbe, string, error) {
+			if !sameModeReuse {
+				return isolatedWaitForAppearance(ctx, live, session, mode)
+			}
+			verifiedState, hostMode, err := live.readVerifiedAppearance(ctx, verified)
+			if err != nil || !currentAppearanceMatchesTarget(verifiedState, hostMode, mode) {
+				return isolatedAppearanceProbe{}, hostMode, engine.ErrVerifyFailed
+			}
+			probe, err := isolatedReadAppearanceProbe(ctx, live, session)
+			return probe, hostMode, err
+		}
+		probe, setting, err := readSettledAppearance()
 		if err != nil {
 			evidence.Error = err.Error()
 			writeEvidence()
@@ -544,7 +565,7 @@ func TestIsolatedCodexAppearanceUISwitchesWithoutRestart(t *testing.T) {
 			t.Fatal(ctx.Err())
 		case <-time.After(500 * time.Millisecond):
 		}
-		probe, setting, err = isolatedWaitForAppearance(ctx, live, session, mode)
+		probe, setting, err = readSettledAppearance()
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -563,6 +584,8 @@ func TestIsolatedCodexAppearanceUISwitchesWithoutRestart(t *testing.T) {
 			TargetID:           verifiedSession.targetID,
 			RendererRecreated:  probe.TimeOrigin != previousTimeOrigin,
 			ElapsedMS:          time.Since(started).Milliseconds(),
+			DiskNeedsPin:       diskNeedsPin,
+			AppearancePrepared: appearancePrepared,
 			AppearanceVerified: true,
 		})
 		previousTimeOrigin = probe.TimeOrigin
@@ -587,12 +610,21 @@ func TestIsolatedCodexAppearanceUISwitchesWithoutRestart(t *testing.T) {
 		writeEvidence()
 	}
 
+	sameModeOffset := 0
+	switch originalSetting {
+	case "light":
+		transition("light", lightCompiled)
+		sameModeOffset = 1
+	case "dark":
+		transition("dark", darkCompiled)
+		sameModeOffset = 1
+	}
 	transition("dark", darkCompiled)
 	transition("light", lightCompiled)
 	transition("dark", darkCompiled)
-	firstDark := evidence.Transitions[0].Probe
-	light := evidence.Transitions[1].Probe
-	secondDark := evidence.Transitions[2].Probe
+	firstDark := evidence.Transitions[sameModeOffset].Probe
+	light := evidence.Transitions[sameModeOffset+1].Probe
+	secondDark := evidence.Transitions[sameModeOffset+2].Probe
 	if firstDark.BackgroundPrimary == light.BackgroundPrimary &&
 		firstDark.BackgroundSecondary == light.BackgroundSecondary &&
 		firstDark.BackgroundSurface == light.BackgroundSurface &&

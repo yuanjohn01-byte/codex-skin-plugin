@@ -1,8 +1,11 @@
 package adapter
 
 import (
+	"errors"
 	"strings"
 	"testing"
+
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 )
 
 func TestAppearanceUIPlatformGateKeepsWindowsOnRestartFallback(t *testing.T) {
@@ -202,10 +205,10 @@ func TestCurrentAppearanceMatchRequiresLiveHostAndEffectivePalette(t *testing.T)
 		BridgeAvailable:   true,
 		Route:             "/",
 		SystemVariant:     "light",
-		ColorScheme:       "light",
-		BackgroundSurface: "#ffffff",
-		TextForeground:    "#1a1c1f",
-		BodyColor:         "rgb(26, 28, 31)",
+		ColorScheme:       "normal",
+		BackgroundSurface: "",
+		TextForeground:    "",
+		BodyColor:         "rgb(0, 0, 0)",
 		TimeOrigin:        42,
 	}
 	if !currentAppearanceMatchesTarget(state, "light", "light") {
@@ -219,9 +222,31 @@ func TestCurrentAppearanceMatchRequiresLiveHostAndEffectivePalette(t *testing.T)
 	}
 	state.SystemVariant = "light"
 	state.DarkMedia = false
-	state.ColorScheme = "light"
+	state.ColorScheme = "normal"
 	if currentAppearanceMatchesTarget(state, "dark", "light") {
 		t.Fatal("mismatched live host setting was accepted")
+	}
+	if decision := classifyCurrentAppearance(false, state, "dark", "light"); decision != currentAppearanceRestart {
+		t.Fatalf("disk light/live host dark decision = %d, want restart fallback", decision)
+	}
+	if decision := classifyCurrentAppearance(true, state, "dark", "light"); decision != currentAppearanceAttemptUI {
+		t.Fatalf("cross-mode disk decision = %d, want UI attempt", decision)
+	}
+	if decision := classifyCurrentAppearance(false, state, "light", "light"); decision != currentAppearanceAlreadyTarget {
+		t.Fatalf("healthy baseline same-mode decision = %d, want direct reuse", decision)
+	}
+}
+
+func TestAppearanceRestartFallbackRejectsUnsafeJoinedError(t *testing.T) {
+	if !appearanceRestartFallbackAllowed(errAppearanceUIUnavailable) {
+		t.Fatal("pre-mutation UI unavailability did not permit restart fallback")
+	}
+	unsafe := errors.Join(engine.ErrStateUnsafe, errAppearanceUIUnavailable)
+	if appearanceRestartFallbackAllowed(unsafe) {
+		t.Fatal("unsafe rollback was downgraded to an ordinary restart fallback")
+	}
+	if appearanceRestartFallbackAllowed(engine.ErrVerifyFailed) {
+		t.Fatal("unclassified verification failure permitted restart fallback")
 	}
 }
 

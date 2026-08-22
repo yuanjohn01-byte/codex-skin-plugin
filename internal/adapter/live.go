@@ -522,21 +522,31 @@ func (adapter *Live) reconcileCurrentAppearance(
 	}
 	if !diskNeedsPin {
 		state, hostMode, err := adapter.readVerifiedAppearance(ctx, live)
-		if err == nil && currentAppearanceMatchesTarget(state, hostMode, targetMode) {
-			live.appearanceMode = targetMode
-			return false, false, nil
-		}
 		if errors.Is(err, codex.ErrListenerUntrusted) {
 			return false, true, errors.Join(engine.ErrStateUnsafe, err)
 		}
+		if err == nil {
+			switch classifyCurrentAppearance(false, state, hostMode, targetMode) {
+			case currentAppearanceAlreadyTarget:
+				live.appearanceMode = targetMode
+				return false, false, nil
+			case currentAppearanceRestart:
+				return false, true, nil
+			}
+		}
 	}
 	if err := adapter.switchAppearanceInPlace(ctx, live, targetMode); err != nil {
-		if errors.Is(err, errAppearanceUIUnavailable) {
+		if appearanceRestartFallbackAllowed(err) {
 			return false, true, nil
 		}
 		return false, true, err
 	}
 	return true, false, nil
+}
+
+func appearanceRestartFallbackAllowed(err error) bool {
+	return err != nil && errors.Is(err, errAppearanceUIUnavailable) &&
+		!errors.Is(err, engine.ErrStateUnsafe)
 }
 
 // restoreLegacyAppearanceIfNeeded is retained only to consume a backup written
@@ -1111,7 +1121,7 @@ func (adapter *Live) Restore(ctx context.Context, session engine.Session, snapsh
 			appearanceErr = adapter.switchAppearanceInPlace(ctx, live, snapshot.AppearanceMode)
 		}
 		if appearanceErr != nil {
-			if !errors.Is(appearanceErr, errAppearanceUIUnavailable) {
+			if !appearanceRestartFallbackAllowed(appearanceErr) {
 				return errors.Join(engine.ErrRollbackFailed, appearanceErr)
 			}
 			if err := adapter.restartSessionAppearance(ctx, live, snapshot.AppearanceMode); err != nil {

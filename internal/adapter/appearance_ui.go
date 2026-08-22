@@ -51,6 +51,14 @@ type appearanceUIHostResult struct {
 	Value  string `json:"value"`
 }
 
+type currentAppearanceDecision uint8
+
+const (
+	currentAppearanceAttemptUI currentAppearanceDecision = iota
+	currentAppearanceAlreadyTarget
+	currentAppearanceRestart
+)
+
 const appearanceUIStateFunction = `function () {
   const visible = (node) => {
     if (!node) return false;
@@ -850,8 +858,42 @@ func currentAppearanceMatchesTarget(
 ) bool {
 	return state.TrustedOrigin && state.BridgeAvailable && state.Route != "" &&
 		state.TimeOrigin != 0 && hostMode == targetMode &&
-		state.BackgroundSurface != "" && state.TextForeground != "" && state.BodyColor != "" &&
-		appearanceEffectiveState(state, targetMode)
+		currentAppearanceEffectiveState(state, targetMode)
+}
+
+func classifyCurrentAppearance(
+	diskNeedsPin bool,
+	state appearanceUIState,
+	hostMode string,
+	targetMode string,
+) currentAppearanceDecision {
+	if diskNeedsPin {
+		return currentAppearanceAttemptUI
+	}
+	if currentAppearanceMatchesTarget(state, hostMode, targetMode) {
+		return currentAppearanceAlreadyTarget
+	}
+	// NeedsPin=false proves that disk already contains targetMode. If the
+	// independently queried live host still reports the opposite setting, the
+	// pre-click state is inconsistent; do not start a UI transaction whose
+	// exact backup precondition cannot be met. Use the confirmed restart path.
+	if validAppearanceSetting(hostMode) && hostMode != targetMode {
+		return currentAppearanceRestart
+	}
+	return currentAppearanceAttemptUI
+}
+
+func currentAppearanceEffectiveState(state appearanceUIState, mode string) bool {
+	if mode != "dark" && mode != "light" || state.SystemVariant != mode ||
+		state.DarkMedia != (mode == "dark") {
+		return false
+	}
+	// The ordinary Home renderer can legitimately expose `normal` and omit
+	// Settings-only palette variables. getSystemThemeVariant + matchMedia are
+	// live renderer signals, while an explicit contradictory color-scheme is
+	// still rejected. Appearance-page settlement remains on the stricter
+	// appearanceEffectiveState contract below.
+	return state.ColorScheme == mode || state.ColorScheme == "normal"
 }
 
 func appearanceEffectiveState(state appearanceUIState, mode string) bool {
