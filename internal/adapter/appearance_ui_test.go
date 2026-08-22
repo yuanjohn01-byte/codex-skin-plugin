@@ -154,7 +154,7 @@ func TestReturnedAppearanceRequiresOriginalRouteAndRenderer(t *testing.T) {
 	returned.BackgroundSurface = "#ffffff"
 	returned.TextForeground = "#1a1c1f"
 	returned.BodyColor = "rgb(26, 28, 31)"
-	if !returnedAppearanceMatches(returned, "light", baseline, "/") {
+	if !returnedAppearanceMatches(returned, "light", baseline, "/", false) {
 		t.Fatal("verified returned Appearance state was rejected")
 	}
 
@@ -175,10 +175,53 @@ func TestReturnedAppearanceRequiresOriginalRouteAndRenderer(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := returned
 			test.mutate(&candidate)
-			if returnedAppearanceMatches(candidate, "light", baseline, "/") {
+			if returnedAppearanceMatches(candidate, "light", baseline, "/", false) {
 				t.Fatal("invalid returned Appearance state was accepted")
 			}
 		})
+	}
+	rolledBack := baseline
+	rolledBack.Route = "/"
+	rolledBack.AppearanceEntries = 0
+	rolledBack.RadioCount = 0
+	rolledBack.VisibleRadios = 0
+	rolledBack.Checked = nil
+	rolledBack.BackLinks = 0
+	if !returnedAppearanceMatches(rolledBack, "dark", baseline, "/", true) {
+		t.Fatal("exact rollback palette was rejected after returning to the original route")
+	}
+	rolledBack.BodyColor = "rgb(1, 2, 3)"
+	if returnedAppearanceMatches(rolledBack, "dark", baseline, "/", true) {
+		t.Fatal("rollback accepted a changed native palette after Back")
+	}
+}
+
+func TestCurrentAppearanceMatchRequiresLiveHostAndEffectivePalette(t *testing.T) {
+	state := appearanceUIState{
+		TrustedOrigin:     true,
+		BridgeAvailable:   true,
+		Route:             "/",
+		SystemVariant:     "light",
+		ColorScheme:       "light",
+		BackgroundSurface: "#ffffff",
+		TextForeground:    "#1a1c1f",
+		BodyColor:         "rgb(26, 28, 31)",
+		TimeOrigin:        42,
+	}
+	if !currentAppearanceMatchesTarget(state, "light", "light") {
+		t.Fatal("verified current light renderer was rejected")
+	}
+	state.SystemVariant = "dark"
+	state.DarkMedia = true
+	state.ColorScheme = "dark"
+	if currentAppearanceMatchesTarget(state, "light", "light") {
+		t.Fatal("disk/host light incorrectly accepted a live dark renderer")
+	}
+	state.SystemVariant = "light"
+	state.DarkMedia = false
+	state.ColorScheme = "light"
+	if currentAppearanceMatchesTarget(state, "dark", "light") {
+		t.Fatal("mismatched live host setting was accepted")
 	}
 }
 
@@ -197,6 +240,16 @@ func TestAppearanceUIContractDoesNotUseLocalizedLabelsOrCoordinates(t *testing.T
 			if strings.Contains(contract, forbidden) {
 				t.Fatalf("UI contract contains localized or coordinate selector %q", forbidden)
 			}
+		}
+	}
+	for _, required := range []string{
+		`getAttribute("aria-expanded")`,
+		`getAttribute("aria-controls")`,
+		`visibleMenus.length !== 1`,
+		`item.closest('[role="menu"]') === menu`,
+	} {
+		if !strings.Contains(appearanceUISettingsMenuItemFunction, required) {
+			t.Fatalf("Settings selector is not scoped to the verified profile menu: missing %q", required)
 		}
 	}
 }

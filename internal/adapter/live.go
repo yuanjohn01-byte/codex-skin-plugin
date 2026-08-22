@@ -299,7 +299,7 @@ func (adapter *Live) openVerifiedSession(
 			if current.ControlledPort > 0 {
 				port = current.ControlledPort
 				process = current.Process
-				if appearanceRestart && targetAppearance != "" && !restoreAppearance &&
+				if targetAppearance != "" && !restoreAppearance &&
 					supportsInAppAppearance(runtime.GOOS) {
 					connectedProcess, target, connectedClient, connectErr := adapter.connectControlled(
 						ctx, installation, process.ProcessID, port, profile,
@@ -308,22 +308,27 @@ func (adapter *Live) openVerifiedSession(
 						if ctx.Err() != nil {
 							return engine.Session{}, ctx.Err()
 						}
+						// A disk-only same-mode decision is not enough to reuse a
+						// renderer that could not be inspected. Require the existing
+						// controlled restart fallback instead.
+						appearanceRestart = true
 					} else {
 						fast := &liveSession{
 							client: connectedClient, installation: installation,
 							process: connectedProcess, port: port, profile: profile,
 							targetID: target.ID,
 						}
-						fastErr := adapter.switchAppearanceInPlace(ctx, fast, targetAppearance)
-						if fastErr == nil {
+						var fastErr error
+						appearancePrepared, appearanceRestart, fastErr = adapter.reconcileCurrentAppearance(
+							ctx, fast, targetAppearance, appearanceRestart,
+						)
+						if fastErr == nil && !appearanceRestart {
 							process = fast.process
 							client = fast.client
 							targetID = fast.targetID
-							appearanceRestart = false
-							appearancePrepared = true
 						} else {
 							_ = fast.client.Close()
-							if !errors.Is(fastErr, errAppearanceUIUnavailable) {
+							if fastErr != nil {
 								return engine.Session{}, fastErr
 							}
 						}
@@ -503,6 +508,35 @@ func (adapter *Live) openVerifiedSession(
 			ProcessStartID: process.ProcessStartID,
 		},
 	}, nil
+}
+
+func (adapter *Live) reconcileCurrentAppearance(
+	ctx context.Context,
+	live *liveSession,
+	targetMode string,
+	diskNeedsPin bool,
+) (bool, bool, error) {
+	if !supportsInAppAppearance(runtime.GOOS) || adapter.appearance == nil ||
+		(targetMode != "dark" && targetMode != "light") {
+		return false, diskNeedsPin, nil
+	}
+	if !diskNeedsPin {
+		state, hostMode, err := adapter.readVerifiedAppearance(ctx, live)
+		if err == nil && currentAppearanceMatchesTarget(state, hostMode, targetMode) {
+			live.appearanceMode = targetMode
+			return false, false, nil
+		}
+		if errors.Is(err, codex.ErrListenerUntrusted) {
+			return false, true, errors.Join(engine.ErrStateUnsafe, err)
+		}
+	}
+	if err := adapter.switchAppearanceInPlace(ctx, live, targetMode); err != nil {
+		if errors.Is(err, errAppearanceUIUnavailable) {
+			return false, true, nil
+		}
+		return false, true, err
+	}
+	return true, false, nil
 }
 
 // restoreLegacyAppearanceIfNeeded is retained only to consume a backup written
@@ -1363,6 +1397,10 @@ func (adapter *Live) StopOwned(ctx context.Context, session engine.Session) erro
 	if live == nil {
 		return codex.ErrListenerUntrusted
 	}
+	// Close CDP before SIGTERM. Keeping the renderer socket open while waiting
+	// for process exit can hold an otherwise isolated Electron QA instance alive
+	// until after the bounded stop window.
+	closeErr := live.client.Close()
 	stopErr := codex.StopOwnedProcess(
 		ctx,
 		live.installation,
@@ -1370,7 +1408,6 @@ func (adapter *Live) StopOwned(ctx context.Context, session engine.Session) erro
 		live.port,
 		live.profile,
 	)
-	closeErr := live.client.Close()
 	return errors.Join(closeErr, stopErr)
 }
 

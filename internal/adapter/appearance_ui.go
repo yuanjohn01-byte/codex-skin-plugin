@@ -168,7 +168,16 @@ const appearanceUIProfileTriggerFunction = `function () {
         hasClass(parent, "flex-1") && hasClass(parent, "items-center") &&
         hasClass(parent, "gap-0");
     });
-  if (triggers.length === 1) setTimeout(() => {
+  const visibleMenus = [...document.querySelectorAll('[role="menu"]')]
+    .filter(visible);
+  if (triggers.length !== 1) return { count: triggers.length };
+  if (triggers[0].getAttribute("aria-expanded") === "true") {
+    return { count: 0 };
+  }
+  // Never open the profile menu over another visible menu. The next action
+  // can then prove that the one menu it sees belongs to this exact trigger.
+  if (visibleMenus.length !== 0) return { count: visibleMenus.length + 1 };
+  setTimeout(() => {
     triggers[0].dispatchEvent(new PointerEvent("pointerdown", {
       bubbles: true,
       cancelable: true,
@@ -179,7 +188,7 @@ const appearanceUIProfileTriggerFunction = `function () {
       pointerType: "mouse"
     }));
   }, 100);
-  return { count: triggers.length };
+  return { count: 1 };
 }`
 
 const appearanceUISettingsMenuItemFunction = `function () {
@@ -190,9 +199,35 @@ const appearanceUISettingsMenuItemFunction = `function () {
     return rect.width > 1 && rect.height > 1 &&
       style.display !== "none" && style.visibility !== "hidden";
   };
+  const hasClass = (node, name) => node?.classList?.contains(name) === true;
+  const triggers = [...document.querySelectorAll('button[aria-haspopup="menu"]')]
+    .filter((button) => {
+      const parent = button.parentElement;
+      return visible(button) && hasClass(button, "sidebar-item") &&
+        hasClass(button, "min-w-0") && hasClass(button, "flex-1") &&
+        hasClass(button, "text-start") &&
+        hasClass(parent, "sidebar-item") && hasClass(parent, "min-w-0") &&
+        hasClass(parent, "flex-1") && hasClass(parent, "items-center") &&
+        hasClass(parent, "gap-0");
+    });
+  if (triggers.length !== 1) return { count: triggers.length };
+  if (triggers[0].getAttribute("aria-expanded") !== "true") {
+    return { count: 0 };
+  }
+  const visibleMenus = [...document.querySelectorAll('[role="menu"]')]
+    .filter(visible);
+  if (visibleMenus.length !== 1) return { count: visibleMenus.length };
+  const controlledId = triggers[0].getAttribute("aria-controls");
+  const menu = visibleMenus[0];
+  if ((controlledId && menu.id !== controlledId) ||
+      (!controlledId && !triggers[0].contains(menu) &&
+       menu.getAttribute("data-radix-menu-content") === null)) {
+    return { count: 0 };
+  }
   const shortcut = ".ms-2.shrink-0.text-xs.text-codex-description";
-  const items = [...document.querySelectorAll('[role="menuitem"]')]
+  const items = [...menu.querySelectorAll('[role="menuitem"]')]
     .filter((item) => visible(item) &&
+      item.closest('[role="menu"]') === menu &&
       item.querySelectorAll(shortcut).length === 1);
   if (items.length === 1) setTimeout(() => items[0].click(), 100);
   return { count: items.length };
@@ -340,7 +375,7 @@ func (adapter *Live) switchAppearanceInPlace(
 			)
 		}
 		if err := adapter.verifyReturnedAppearance(
-			ctx, live, transaction, targetMode, targetEffective, baseline, originalRoute,
+			ctx, live, transaction, targetMode, targetEffective, baseline, originalRoute, false,
 		); err != nil {
 			return adapter.rollbackAppearanceUI(
 				ctx, live, transaction, baseline, oldMode, originalRoute, true, err,
@@ -387,6 +422,11 @@ func (adapter *Live) rollbackAppearanceUI(
 		if err := adapter.returnFromAppearance(ctx, live, originalRoute); err != nil {
 			return errors.Join(engine.ErrStateUnsafe, cause, err)
 		}
+		if err := adapter.verifyReturnedAppearance(
+			ctx, live, transaction, oldMode, oldEffective, baseline, originalRoute, true,
+		); err != nil {
+			return errors.Join(engine.ErrStateUnsafe, cause, err)
+		}
 	}
 	if oldMode == "dark" || oldMode == "light" {
 		live.appearanceMode = oldMode
@@ -419,8 +459,9 @@ func (adapter *Live) openAppearanceControls(
 	}
 	originalRoute := state.Route
 
-	// A menu may already be open. Select its unique shortcut-bearing Settings
-	// item first; otherwise open the unique profile-footer menu.
+	// A profile menu may already be open. Select Settings only when that menu is
+	// structurally downstream of the exact verified footer trigger;
+	// otherwise open the trigger only when no other menu is visible.
 	selected, _ := adapter.performAppearanceUIAction(ctx, live, appearanceUISettingsMenuItemFunction, nil)
 	if selected != 1 {
 		if err := adapter.waitForAppearanceUIAction(
@@ -556,13 +597,16 @@ func (adapter *Live) verifyReturnedAppearance(
 	effectiveMode string,
 	baseline appearanceUIState,
 	originalRoute string,
+	requireBaselinePalette bool,
 ) error {
 	state, hostMode, err := adapter.readVerifiedAppearance(ctx, live)
 	if err != nil {
 		return err
 	}
 	if transaction.VerifyMode(settingMode) != nil || hostMode != settingMode ||
-		!returnedAppearanceMatches(state, effectiveMode, baseline, originalRoute) {
+		!returnedAppearanceMatches(
+			state, effectiveMode, baseline, originalRoute, requireBaselinePalette,
+		) {
 		return engine.ErrVerifyFailed
 	}
 	return nil
@@ -784,6 +828,7 @@ func returnedAppearanceMatches(
 	effectiveMode string,
 	baseline appearanceUIState,
 	originalRoute string,
+	requireBaselinePalette bool,
 ) bool {
 	if !state.TrustedOrigin || !state.BridgeAvailable || state.Route != originalRoute ||
 		state.AppearanceEntries != 0 || state.RadioCount != 0 || state.BackLinks != 0 ||
@@ -792,7 +837,21 @@ func returnedAppearanceMatches(
 		!appearanceEffectiveState(state, effectiveMode) {
 		return false
 	}
+	if requireBaselinePalette {
+		return sameAppearancePalette(state, baseline)
+	}
 	return baseline.SystemVariant == effectiveMode || !sameAppearancePalette(state, baseline)
+}
+
+func currentAppearanceMatchesTarget(
+	state appearanceUIState,
+	hostMode string,
+	targetMode string,
+) bool {
+	return state.TrustedOrigin && state.BridgeAvailable && state.Route != "" &&
+		state.TimeOrigin != 0 && hostMode == targetMode &&
+		state.BackgroundSurface != "" && state.TextForeground != "" && state.BodyColor != "" &&
+		appearanceEffectiveState(state, targetMode)
 }
 
 func appearanceEffectiveState(state appearanceUIState, mode string) bool {

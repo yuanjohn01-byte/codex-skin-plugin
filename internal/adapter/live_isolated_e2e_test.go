@@ -5,10 +5,14 @@ package adapter
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -367,20 +371,76 @@ func TestIsolatedCodexAppearanceUISwitchesWithoutRestart(t *testing.T) {
 	}
 	originalSetting := ""
 	var appearanceManager *appearance.Manager
+	appearanceRecoveryDir := ""
 	t.Cleanup(func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
-		defer cleanupCancel()
-		_ = live.RestoreOfficial(cleanupCtx, session)
+		cleanupFailed := false
+		runCleanup := func(run func(context.Context) error) error {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
+			defer cleanupCancel()
+			return run(cleanupCtx)
+		}
+		if err := runCleanup(func(cleanupCtx context.Context) error {
+			return live.RestoreOfficial(cleanupCtx, session)
+		}); err != nil {
+			cleanupFailed = true
+			t.Errorf("cleanup official Restore failed: %v", err)
+		}
 		if originalSetting != "" {
-			_ = isolatedSelectAppearanceViaUI(cleanupCtx, live, session, originalSetting)
+			if err := runCleanup(func(cleanupCtx context.Context) error {
+				return isolatedSelectAppearanceViaUI(cleanupCtx, live, session, originalSetting)
+			}); err != nil {
+				cleanupFailed = true
+				t.Errorf("cleanup native appearance restore failed: %v", err)
+			}
 		}
 		if appearanceManager != nil {
-			_, _ = appearanceManager.Restore()
+			if _, err := appearanceManager.Restore(); err != nil {
+				cleanupFailed = true
+				t.Errorf("cleanup config restore failed: %v", err)
+			}
 		}
 		if attachedProfile != "" {
-			_ = live.Close(cleanupCtx, session)
+			if err := runCleanup(func(cleanupCtx context.Context) error {
+				return live.Close(cleanupCtx, session)
+			}); err != nil {
+				cleanupFailed = true
+				t.Errorf("cleanup attached session close failed: %v", err)
+			}
 		} else {
-			_ = live.StopOwned(cleanupCtx, session)
+			live.mu.Lock()
+			owned := live.sessions[session.OpaqueID]
+			var ownedSnapshot liveSession
+			if owned != nil {
+				ownedSnapshot = *owned
+			}
+			live.mu.Unlock()
+			stopErr := runCleanup(func(cleanupCtx context.Context) error {
+				return live.StopOwned(cleanupCtx, session)
+			})
+			if stopErr != nil {
+				// The isolated Electron process can outlive its exact verified
+				// SIGTERM. Never leave it behind: re-verify the same executable,
+				// start identity, flags, port, and temporary profile before the
+				// test-only force stop, then positively observe that PID gone.
+				forceErr := runCleanup(func(cleanupCtx context.Context) error {
+					if owned == nil {
+						return fmt.Errorf("isolated owned session disappeared before cleanup")
+					}
+					return isolatedForceStopOwned(cleanupCtx, ownedSnapshot)
+				})
+				if forceErr != nil {
+					cleanupFailed = true
+					t.Errorf(
+						"cleanup isolated Codex stop failed: stop=%v forceStop=%v",
+						stopErr, forceErr,
+					)
+				}
+			}
+		}
+		if !cleanupFailed && appearanceRecoveryDir != "" {
+			if err := os.Remove(appearanceRecoveryDir); err != nil && !os.IsNotExist(err) {
+				t.Errorf("cleanup durable appearance recovery directory failed: %v", err)
+			}
 		}
 	})
 
@@ -392,9 +452,15 @@ func TestIsolatedCodexAppearanceUISwitchesWithoutRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	appearanceRecoveryDir, err = os.MkdirTemp(
+		filepath.Join(userHome, ".codex"), ".codex-skin-appearance-e2e-",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
 	appearanceManager, err = appearance.New(
 		filepath.Join(userHome, ".codex", "config.toml"),
-		filepath.Join(root, "recovery", "appearance.json"),
+		filepath.Join(appearanceRecoveryDir, "appearance.json"),
 		"darwin",
 	)
 	if err != nil {
@@ -421,20 +487,26 @@ func TestIsolatedCodexAppearanceUISwitchesWithoutRestart(t *testing.T) {
 	transition := func(mode string, compiled engine.CompiledTheme) {
 		t.Helper()
 		started := time.Now()
-		currentMode, err := isolatedGetAppearance(ctx, live, session)
+		diskNeedsPin, err := appearanceManager.NeedsPin(mode)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if currentMode != mode {
-			verified, err := live.verifiedLiveSession(ctx, session)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := live.switchAppearanceInPlace(ctx, verified, mode); err != nil {
-				evidence.Error = err.Error()
-				writeEvidence()
-				t.Fatal(err)
-			}
+		verified, err := live.verifiedLiveSession(ctx, session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, restartRequired, err := live.reconcileCurrentAppearance(
+			ctx, verified, mode, diskNeedsPin,
+		)
+		if err != nil {
+			evidence.Error = err.Error()
+			writeEvidence()
+			t.Fatal(err)
+		}
+		if restartRequired {
+			evidence.Error = "production appearance scheduler requested restart"
+			writeEvidence()
+			t.Fatal("production appearance scheduler did not use the verified macOS UI path")
 		}
 		probe, setting, err := isolatedWaitForAppearance(ctx, live, session, mode)
 		if err != nil {
@@ -569,6 +641,77 @@ func TestIsolatedCodexAppearanceUISwitchesWithoutRestart(t *testing.T) {
 	writeEvidence()
 
 	t.Logf("live appearance experiment passed: original=%s transitions=%+v", originalSetting, evidence.Transitions)
+}
+
+func isolatedWaitForProcessExit(ctx context.Context, processID int) error {
+	if processID <= 0 {
+		return fmt.Errorf("invalid isolated Codex process ID")
+	}
+	for {
+		exists, err := isolatedProcessExists(ctx, processID)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(250 * time.Millisecond):
+		}
+	}
+}
+
+func isolatedForceStopOwned(ctx context.Context, owned liveSession) error {
+	exists, err := isolatedProcessExists(ctx, owned.process.ProcessID)
+	if err != nil || !exists {
+		return err
+	}
+	verified, err := codex.VerifyProcess(
+		ctx, owned.installation, owned.process.ProcessID, owned.port, owned.profile,
+	)
+	if err != nil {
+		return fmt.Errorf("re-verify isolated Codex before force stop: %w", err)
+	}
+	if verified.ProcessStartID != owned.process.ProcessStartID ||
+		verified.ExecutableSHA256 != owned.process.ExecutableSHA256 {
+		return fmt.Errorf("isolated Codex process identity changed before force stop")
+	}
+	process, err := os.FindProcess(owned.process.ProcessID)
+	if err != nil {
+		return fmt.Errorf("find isolated Codex process: %w", err)
+	}
+	if err := process.Kill(); err != nil {
+		return fmt.Errorf("force stop isolated Codex process: %w", err)
+	}
+	return isolatedWaitForProcessExit(ctx, owned.process.ProcessID)
+}
+
+func isolatedProcessExists(ctx context.Context, processID int) (bool, error) {
+	output, err := exec.CommandContext(
+		ctx, "/bin/ps", "-p", strconv.Itoa(processID), "-o", "pid=,stat=",
+	).Output()
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	if err != nil {
+		var processMissing *exec.ExitError
+		if errors.As(err, &processMissing) && processMissing.ExitCode() == 1 {
+			return false, nil
+		}
+		return false, fmt.Errorf("query isolated Codex process: %w", err)
+	}
+	fields := strings.Fields(string(output))
+	if len(fields) == 0 {
+		return false, nil
+	}
+	if len(fields) != 2 {
+		return false, fmt.Errorf("unexpected isolated Codex process status")
+	}
+	// A zombie has already exited and cannot execute or retain the temporary
+	// profile; its parent/system reaps the PID after this test returns.
+	return !strings.HasPrefix(fields[1], "Z"), nil
 }
 
 func firstNonEmpty(values ...string) string {
