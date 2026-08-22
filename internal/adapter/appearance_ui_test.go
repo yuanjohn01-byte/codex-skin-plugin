@@ -123,6 +123,65 @@ func TestAppearanceStateMatchesRejectsStalePaletteAndRendererReplacement(t *test
 	}
 }
 
+func TestReturnedAppearanceRequiresOriginalRouteAndRenderer(t *testing.T) {
+	baseline := appearanceUIState{
+		TrustedOrigin:     true,
+		BridgeAvailable:   true,
+		Route:             "/settings/appearance",
+		AppearanceEntries: 1,
+		RadioCount:        3,
+		VisibleRadios:     3,
+		Checked:           []bool{false, false, true},
+		BackLinks:         1,
+		SystemVariant:     "dark",
+		DarkMedia:         true,
+		ColorScheme:       "dark",
+		BackgroundSurface: "#181818",
+		TextForeground:    "#dfdfdf",
+		BodyColor:         "rgb(223, 223, 223)",
+		TimeOrigin:        42,
+	}
+	returned := baseline
+	returned.Route = "/"
+	returned.AppearanceEntries = 0
+	returned.RadioCount = 0
+	returned.VisibleRadios = 0
+	returned.Checked = nil
+	returned.BackLinks = 0
+	returned.SystemVariant = "light"
+	returned.DarkMedia = false
+	returned.ColorScheme = "light"
+	returned.BackgroundSurface = "#ffffff"
+	returned.TextForeground = "#1a1c1f"
+	returned.BodyColor = "rgb(26, 28, 31)"
+	if !returnedAppearanceMatches(returned, "light", baseline, "/") {
+		t.Fatal("verified returned Appearance state was rejected")
+	}
+
+	tests := []struct {
+		name   string
+		mutate func(*appearanceUIState)
+	}{
+		{"wrong route", func(state *appearanceUIState) { state.Route = "/settings/appearance" }},
+		{"settings controls remain", func(state *appearanceUIState) { state.RadioCount = 3 }},
+		{"renderer replaced", func(state *appearanceUIState) { state.TimeOrigin++ }},
+		{"stale palette", func(state *appearanceUIState) {
+			state.BackgroundSurface = baseline.BackgroundSurface
+			state.TextForeground = baseline.TextForeground
+			state.BodyColor = baseline.BodyColor
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			candidate := returned
+			test.mutate(&candidate)
+			if returnedAppearanceMatches(candidate, "light", baseline, "/") {
+				t.Fatal("invalid returned Appearance state was accepted")
+			}
+		})
+	}
+}
+
 func TestAppearanceUIContractDoesNotUseLocalizedLabelsOrCoordinates(t *testing.T) {
 	contracts := []string{
 		appearanceUIProfileTriggerFunction,

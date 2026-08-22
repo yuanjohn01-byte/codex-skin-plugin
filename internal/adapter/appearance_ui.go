@@ -264,6 +264,18 @@ func (adapter *Live) switchAppearanceInPlace(
 		(targetMode != "dark" && targetMode != "light") {
 		return errAppearanceUIUnavailable
 	}
+	entryState, entryMode, err := adapter.readVerifiedAppearance(ctx, live)
+	if err != nil {
+		if errors.Is(err, codex.ErrListenerUntrusted) {
+			return errors.Join(engine.ErrStateUnsafe, err)
+		}
+		return errAppearanceUIUnavailable
+	}
+	if !entryState.TrustedOrigin || !entryState.BridgeAvailable ||
+		entryState.Route == "" || entryState.TimeOrigin == 0 ||
+		!validAppearanceSetting(entryMode) {
+		return errAppearanceUIUnavailable
+	}
 	originalRoute, openedSettings, err := adapter.openAppearanceControls(ctx, live)
 	if err != nil {
 		if openedSettings {
@@ -281,7 +293,9 @@ func (adapter *Live) switchAppearanceInPlace(
 		}
 		return errAppearanceUIUnavailable
 	}
-	if !appearanceControlsReady(baseline, oldMode) || oldMode == targetMode {
+	if !appearanceControlsReady(baseline, oldMode) || oldMode == targetMode ||
+		oldMode != entryMode || originalRoute != entryState.Route ||
+		baseline.TimeOrigin != entryState.TimeOrigin {
 		if openedSettings {
 			_ = adapter.returnFromAppearance(ctx, live, originalRoute)
 		}
@@ -321,6 +335,13 @@ func (adapter *Live) switchAppearanceInPlace(
 	}
 	if openedSettings {
 		if err := adapter.returnFromAppearance(ctx, live, originalRoute); err != nil {
+			return adapter.rollbackAppearanceUI(
+				ctx, live, transaction, baseline, oldMode, originalRoute, true, err,
+			)
+		}
+		if err := adapter.verifyReturnedAppearance(
+			ctx, live, transaction, targetMode, targetEffective, baseline, originalRoute,
+		); err != nil {
 			return adapter.rollbackAppearanceUI(
 				ctx, live, transaction, baseline, oldMode, originalRoute, true, err,
 			)
@@ -525,6 +546,26 @@ func (adapter *Live) readVerifiedAppearance(
 	}
 	hostMode, err := adapter.readAppearanceHostMode(ctx, live)
 	return state, hostMode, err
+}
+
+func (adapter *Live) verifyReturnedAppearance(
+	ctx context.Context,
+	live *liveSession,
+	transaction *appearance.LiveSwitch,
+	settingMode string,
+	effectiveMode string,
+	baseline appearanceUIState,
+	originalRoute string,
+) error {
+	state, hostMode, err := adapter.readVerifiedAppearance(ctx, live)
+	if err != nil {
+		return err
+	}
+	if transaction.VerifyMode(settingMode) != nil || hostMode != settingMode ||
+		!returnedAppearanceMatches(state, effectiveMode, baseline, originalRoute) {
+		return engine.ErrVerifyFailed
+	}
+	return nil
 }
 
 func verifyAppearanceUIProcess(ctx context.Context, live *liveSession) error {
@@ -736,6 +777,22 @@ func appearanceStateMatches(
 		return false
 	}
 	return true
+}
+
+func returnedAppearanceMatches(
+	state appearanceUIState,
+	effectiveMode string,
+	baseline appearanceUIState,
+	originalRoute string,
+) bool {
+	if !state.TrustedOrigin || !state.BridgeAvailable || state.Route != originalRoute ||
+		state.AppearanceEntries != 0 || state.RadioCount != 0 || state.BackLinks != 0 ||
+		state.TimeOrigin != baseline.TimeOrigin || state.BackgroundSurface == "" ||
+		state.TextForeground == "" || state.BodyColor == "" ||
+		!appearanceEffectiveState(state, effectiveMode) {
+		return false
+	}
+	return baseline.SystemVariant == effectiveMode || !sameAppearancePalette(state, baseline)
 }
 
 func appearanceEffectiveState(state appearanceUIState, mode string) bool {
