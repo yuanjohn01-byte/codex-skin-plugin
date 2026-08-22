@@ -157,6 +157,88 @@ func TestPinCreatesRestorePointWhenRequestedModeIsAlreadyActive(t *testing.T) {
 	}
 }
 
+func TestLiveSwitchCreatesBackupWithoutPredictingCodexWrite(t *testing.T) {
+	root := t.TempDir()
+	config := filepath.Join(root, "config.toml")
+	backupPath := filepath.Join(root, "state", "appearance.json")
+	original := "model = \"codex\"\n\n[desktop]\nappearanceTheme = \"dark\" # exact\nappearanceDarkCodeThemeId = \"night\"\n"
+	if err := os.WriteFile(config, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := New(config, backupPath, "darwin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	transaction, err := manager.BeginLiveSwitch("dark")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(current) != original {
+		t.Fatalf("BeginLiveSwitch rewrote config: %q", current)
+	}
+	if _, err := os.Lstat(backupPath); err != nil {
+		t.Fatalf("BeginLiveSwitch did not persist Restore point: %v", err)
+	}
+	if err := transaction.VerifyMode("dark"); err != nil {
+		t.Fatalf("VerifyMode(dark) before Codex write: %v", err)
+	}
+
+	light := strings.Replace(original, `appearanceTheme = "dark" # exact`, `appearanceTheme = "light"`, 1)
+	if err := os.WriteFile(config, []byte(light), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := transaction.VerifyMode("light"); err != nil {
+		t.Fatalf("VerifyMode(light) after Codex write: %v", err)
+	}
+	transaction.Close()
+	transaction.Close()
+
+	if changed, err := manager.Restore(); err != nil || !changed {
+		t.Fatalf("Restore() = %t, %v", changed, err)
+	}
+	restored, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(restored) != original {
+		t.Fatalf("Restore did not preserve exact pre-UI config\nwant: %q\n got: %q", original, restored)
+	}
+}
+
+func TestLiveSwitchTreatsAbsentAppearanceAsSystemAndRejectsMismatch(t *testing.T) {
+	root := t.TempDir()
+	config := filepath.Join(root, "config.toml")
+	backupPath := filepath.Join(root, "state", "appearance.json")
+	original := "[desktop]\nappearanceDarkCodeThemeId = \"night\"\n"
+	if err := os.WriteFile(config, []byte(original), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	manager, err := New(config, backupPath, "darwin")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := manager.BeginLiveSwitch("dark"); err == nil {
+		t.Fatal("BeginLiveSwitch(dark) accepted an on-disk system setting")
+	}
+	if _, err := os.Lstat(backupPath); !os.IsNotExist(err) {
+		t.Fatalf("mismatched BeginLiveSwitch created a backup: %v", err)
+	}
+	transaction, err := manager.BeginLiveSwitch("system")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer transaction.Close()
+	if err := transaction.VerifyMode("system"); err != nil {
+		t.Fatalf("VerifyMode(system) = %v", err)
+	}
+}
+
 func TestPinRejectsMissingDesktopTableWithoutCreatingBackup(t *testing.T) {
 	root := t.TempDir()
 	config := filepath.Join(root, "config.toml")

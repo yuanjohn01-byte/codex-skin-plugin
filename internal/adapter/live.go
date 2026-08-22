@@ -255,13 +255,20 @@ func (adapter *Live) openVerifiedSession(
 	if err != nil {
 		return engine.Session{}, err
 	}
+	opaqueID, err := randomSessionID()
+	if err != nil {
+		return engine.Session{}, err
+	}
 	profile := adapter.profile
 	port := adapter.port
 	launchedPID := 0
 	appearanceChanged := false
 	appearanceRestart := false
+	appearancePrepared := false
 	mutated := false
 	var process codex.ProcessIdentity
+	var client *cdp.Client
+	targetID := ""
 	if adapter.currentProfile && adapter.appearance != nil {
 		switch {
 		case restoreAppearance:
@@ -287,17 +294,52 @@ func (adapter *Live) openVerifiedSession(
 	if adapter.currentProfile {
 		current, currentErr := codex.DiscoverCurrentInstance(ctx, installation)
 		switch {
-		case currentErr == nil && current.ControlledPort > 0 && !appearanceRestart:
-			profile = current.Profile
-			port = current.ControlledPort
-			process = current.Process
-		case currentErr == nil && !adapter.restartApproved:
-			return engine.Session{}, engine.ErrRestartConsent
 		case currentErr == nil:
 			profile = current.Profile
+			if current.ControlledPort > 0 {
+				port = current.ControlledPort
+				process = current.Process
+				if appearanceRestart && targetAppearance != "" && !restoreAppearance &&
+					supportsInAppAppearance(runtime.GOOS) {
+					connectedProcess, target, connectedClient, connectErr := adapter.connectControlled(
+						ctx, installation, process.ProcessID, port, profile,
+					)
+					if connectErr != nil {
+						if ctx.Err() != nil {
+							return engine.Session{}, ctx.Err()
+						}
+					} else {
+						fast := &liveSession{
+							client: connectedClient, installation: installation,
+							process: connectedProcess, port: port, profile: profile,
+							targetID: target.ID,
+						}
+						fastErr := adapter.switchAppearanceInPlace(ctx, fast, targetAppearance)
+						if fastErr == nil {
+							process = fast.process
+							client = fast.client
+							targetID = fast.targetID
+							appearanceRestart = false
+							appearancePrepared = true
+						} else {
+							_ = fast.client.Close()
+							if !errors.Is(fastErr, errAppearanceUIUnavailable) {
+								return engine.Session{}, fastErr
+							}
+						}
+					}
+				}
+				if !appearanceRestart {
+					break
+				}
+			}
+			if !adapter.restartApproved {
+				return engine.Session{}, engine.ErrRestartConsent
+			}
 			if err := codex.StopCurrentInstance(ctx, installation, current); err != nil {
 				return engine.Session{}, err
 			}
+			process = codex.ProcessIdentity{}
 			mutated = true
 		case errors.Is(currentErr, codex.ErrCurrentMissing):
 			profile, err = codex.DefaultUserProfile(installation)
@@ -315,7 +357,8 @@ func (adapter *Live) openVerifiedSession(
 	// Pin returns true when it created the recovery point even if appearanceTheme
 	// was already correct; that durable state is still an operation mutation and
 	// must be cleaned up if opening the verified session later fails.
-	if adapter.currentProfile && adapter.appearance != nil && !appearanceRestart {
+	if adapter.currentProfile && adapter.appearance != nil &&
+		!appearanceRestart && !appearancePrepared {
 		switch {
 		case targetAppearance != "":
 			appearanceChanged, err = adapter.appearance.Pin(targetAppearance)
@@ -385,74 +428,70 @@ func (adapter *Live) openVerifiedSession(
 		}
 		mutated = true
 	}
-	deadline := time.Now().Add(adapter.launchWait)
-	var targets []cdp.Target
-	for time.Now().Before(deadline) {
-		if ctx.Err() != nil {
-			return engine.Session{}, adapter.recoverOpenFailure(
-				ctx, installation, launchedPID, port, profile, process, mutated, ctx.Err(),
-			)
-		}
-		if launchedPID > 0 {
-			process, err = codex.VerifyListener(ctx, installation, launchedPID, port, profile)
-		} else {
-			process, err = codex.VerifyListener(
-				ctx,
-				installation,
-				process.ProcessID,
-				port,
-				profile,
-			)
-		}
-		if err == nil {
-			targets, err = cdp.Discover(ctx, port)
-			if err == nil {
-				break
+	if client == nil {
+		deadline := time.Now().Add(adapter.launchWait)
+		var targets []cdp.Target
+		for time.Now().Before(deadline) {
+			if ctx.Err() != nil {
+				return engine.Session{}, adapter.recoverOpenFailure(
+					ctx, installation, launchedPID, port, profile, process, mutated, ctx.Err(),
+				)
 			}
+			if launchedPID > 0 {
+				process, err = codex.VerifyListener(ctx, installation, launchedPID, port, profile)
+			} else {
+				process, err = codex.VerifyListener(
+					ctx,
+					installation,
+					process.ProcessID,
+					port,
+					profile,
+				)
+			}
+			if err == nil {
+				targets, err = cdp.Discover(ctx, port)
+				if err == nil {
+					break
+				}
+			}
+			time.Sleep(250 * time.Millisecond)
 		}
-		time.Sleep(250 * time.Millisecond)
-	}
-	if err != nil {
-		err = errors.Join(codex.ErrListenerUntrusted, err)
-		return engine.Session{}, adapter.recoverOpenFailure(
-			ctx, installation, launchedPID, port, profile, process, mutated, err,
-		)
-	}
-	target, err := cdp.SelectPage(targets)
-	if err != nil {
-		return engine.Session{}, adapter.recoverOpenFailure(
-			ctx, installation, launchedPID, port, profile, process, mutated, err,
-		)
-	}
-	client, err := cdp.Dial(ctx, target, port)
-	if err != nil {
-		return engine.Session{}, adapter.recoverOpenFailure(
-			ctx, installation, launchedPID, port, profile, process, mutated, err,
-		)
-	}
-	if err := client.Call(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
-		client.Close()
-		return engine.Session{}, adapter.recoverOpenFailure(
-			ctx, installation, launchedPID, port, profile, process, mutated, err,
-		)
-	}
-	if err := client.Call(ctx, "Page.enable", map[string]any{}, nil); err != nil {
-		client.Close()
-		return engine.Session{}, adapter.recoverOpenFailure(
-			ctx, installation, launchedPID, port, profile, process, mutated, err,
-		)
-	}
-	opaqueID, err := randomSessionID()
-	if err != nil {
-		client.Close()
-		return engine.Session{}, adapter.recoverOpenFailure(
-			ctx, installation, launchedPID, port, profile, process, mutated, err,
-		)
+		if err != nil {
+			err = errors.Join(codex.ErrListenerUntrusted, err)
+			return engine.Session{}, adapter.recoverOpenFailure(
+				ctx, installation, launchedPID, port, profile, process, mutated, err,
+			)
+		}
+		target, err := cdp.SelectPage(targets)
+		if err != nil {
+			return engine.Session{}, adapter.recoverOpenFailure(
+				ctx, installation, launchedPID, port, profile, process, mutated, err,
+			)
+		}
+		client, err = cdp.Dial(ctx, target, port)
+		if err != nil {
+			return engine.Session{}, adapter.recoverOpenFailure(
+				ctx, installation, launchedPID, port, profile, process, mutated, err,
+			)
+		}
+		if err := client.Call(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
+			client.Close()
+			return engine.Session{}, adapter.recoverOpenFailure(
+				ctx, installation, launchedPID, port, profile, process, mutated, err,
+			)
+		}
+		if err := client.Call(ctx, "Page.enable", map[string]any{}, nil); err != nil {
+			client.Close()
+			return engine.Session{}, adapter.recoverOpenFailure(
+				ctx, installation, launchedPID, port, profile, process, mutated, err,
+			)
+		}
+		targetID = target.ID
 	}
 	adapter.mu.Lock()
 	adapter.sessions[opaqueID] = &liveSession{
 		client: client, installation: installation, process: process, port: port, profile: profile,
-		appearanceMode: targetAppearance, targetID: target.ID,
+		appearanceMode: targetAppearance, targetID: targetID,
 	}
 	adapter.mu.Unlock()
 	return engine.Session{
@@ -1033,8 +1072,17 @@ func (adapter *Live) Restore(ctx context.Context, session engine.Session, snapsh
 	// failure that the transaction is intended to prevent.
 	if adapter.currentProfile && adapter.appearance != nil &&
 		live.appearanceMode != snapshot.AppearanceMode {
-		if err := adapter.restartSessionAppearance(ctx, live, snapshot.AppearanceMode); err != nil {
-			return errors.Join(engine.ErrRollbackFailed, err)
+		appearanceErr := errAppearanceUIUnavailable
+		if supportsInAppAppearance(runtime.GOOS) {
+			appearanceErr = adapter.switchAppearanceInPlace(ctx, live, snapshot.AppearanceMode)
+		}
+		if appearanceErr != nil {
+			if !errors.Is(appearanceErr, errAppearanceUIUnavailable) {
+				return errors.Join(engine.ErrRollbackFailed, appearanceErr)
+			}
+			if err := adapter.restartSessionAppearance(ctx, live, snapshot.AppearanceMode); err != nil {
+				return errors.Join(engine.ErrRollbackFailed, err)
+			}
 		}
 	}
 	restoredTheme := engine.CompiledTheme{

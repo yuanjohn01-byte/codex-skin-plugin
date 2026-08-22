@@ -25,6 +25,16 @@ type Manager struct {
 	platform   string
 }
 
+// LiveSwitch holds the Helper-only appearance lock while Codex's own
+// Appearance control updates config.toml. Theme packages never receive this
+// capability; the signed Helper owns both the fixed UI contract and the exact
+// recovery point.
+type LiveSwitch struct {
+	manager *Manager
+	release func()
+	closed  bool
+}
+
 type backup struct {
 	SchemaVersion int                `json:"schemaVersion"`
 	Platform      string             `json:"platform"`
@@ -103,6 +113,84 @@ func (manager *Manager) NeedsRestore() (bool, error) {
 	return false, nil
 }
 
+// BeginLiveSwitch verifies that config.toml and the live Codex setting agree,
+// creates the exact pre-theme recovery point when needed, and keeps the local
+// appearance lock held until Close. Codex itself performs the setting write
+// through its Appearance UI; this transaction never predicts or rewrites that
+// result.
+func (manager *Manager) BeginLiveSwitch(expectedMode string) (*LiveSwitch, error) {
+	if !validMode(expectedMode) {
+		return nil, fmt.Errorf("unsupported appearance mode")
+	}
+	release, err := manager.lock()
+	if err != nil {
+		return nil, err
+	}
+	failed := true
+	defer func() {
+		if failed {
+			release()
+		}
+	}()
+
+	content, _, err := manager.readConfig()
+	if err != nil {
+		return nil, err
+	}
+	section, err := desktopSection(content)
+	if err != nil {
+		return nil, err
+	}
+	if section == nil {
+		return nil, fmt.Errorf("Codex config has no desktop table")
+	}
+	currentMode, err := appearanceMode(content)
+	if err != nil {
+		return nil, err
+	}
+	if currentMode != expectedMode {
+		return nil, fmt.Errorf("Codex config and live appearance differ")
+	}
+	if _, err := manager.ensureBackup(content); err != nil {
+		return nil, err
+	}
+
+	failed = false
+	return &LiveSwitch{manager: manager, release: release}, nil
+}
+
+// VerifyMode confirms the setting persisted by Codex while this transaction's
+// Helper lock is still held.
+func (transaction *LiveSwitch) VerifyMode(mode string) error {
+	if transaction == nil || transaction.manager == nil || transaction.closed || !validMode(mode) {
+		return fmt.Errorf("appearance transaction is closed")
+	}
+	content, _, err := transaction.manager.readConfig()
+	if err != nil {
+		return err
+	}
+	currentMode, err := appearanceMode(content)
+	if err != nil {
+		return err
+	}
+	if currentMode != mode {
+		return fmt.Errorf("Codex appearance setting did not settle")
+	}
+	return nil
+}
+
+// Close releases the Helper-only appearance lock. It is idempotent so cleanup
+// paths can safely defer it before any UI mutation occurs.
+func (transaction *LiveSwitch) Close() {
+	if transaction == nil || transaction.closed {
+		return
+	}
+	transaction.closed = true
+	if transaction.release != nil {
+		transaction.release()
+	}
+}
+
 // Pin records the original managed desktop settings once, then changes only
 // appearanceTheme to the requested native mode. It preserves all unrelated
 // TOML text and keeps the backup until offline Restore consumes it.
@@ -130,27 +218,9 @@ func (manager *Manager) Pin(mode string) (bool, error) {
 	if section == nil {
 		return false, fmt.Errorf("Codex config has no desktop table")
 	}
-	backupCreated := false
-	if _, found, err := manager.readBackup(); err != nil {
+	backupCreated, err := manager.ensureBackup(content)
+	if err != nil {
 		return false, err
-	} else if !found {
-		values := map[string]*string{}
-		for _, key := range managedKeys {
-			line, err := settingLine(content, key)
-			if err != nil {
-				return false, err
-			}
-			values[key] = line
-		}
-		if err := manager.writeBackup(backup{
-			SchemaVersion: backupSchemaVersion,
-			Platform:      manager.platform,
-			ConfigPath:    manager.configPath,
-			Values:        values,
-		}); err != nil {
-			return false, err
-		}
-		backupCreated = true
 	}
 	current, err := settingValue(content, "appearanceTheme")
 	if err != nil {
@@ -167,6 +237,31 @@ func (manager *Manager) Pin(mode string) (bool, error) {
 		return backupCreated, nil
 	}
 	if err := atomicReplace(manager.configPath, []byte(content), []byte(updated), info); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (manager *Manager) ensureBackup(content string) (bool, error) {
+	if _, found, err := manager.readBackup(); err != nil {
+		return false, err
+	} else if found {
+		return false, nil
+	}
+	values := map[string]*string{}
+	for _, key := range managedKeys {
+		line, err := settingLine(content, key)
+		if err != nil {
+			return false, err
+		}
+		values[key] = line
+	}
+	if err := manager.writeBackup(backup{
+		SchemaVersion: backupSchemaVersion,
+		Platform:      manager.platform,
+		ConfigPath:    manager.configPath,
+		Values:        values,
+	}); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -367,6 +462,25 @@ func settingValue(content, key string) (*string, error) {
 	}
 	value = strings.TrimSpace(stripComment(value))
 	return &value, nil
+}
+
+func appearanceMode(content string) (string, error) {
+	value, err := settingValue(content, "appearanceTheme")
+	if err != nil {
+		return "", err
+	}
+	if value == nil {
+		return "system", nil
+	}
+	mode := strings.Trim(*value, `"`)
+	if *value != `"`+mode+`"` || !validMode(mode) {
+		return "", fmt.Errorf("unsupported appearance setting")
+	}
+	return mode, nil
+}
+
+func validMode(mode string) bool {
+	return mode == "system" || mode == "light" || mode == "dark"
 }
 
 func backupValue(line *string) (*string, error) {

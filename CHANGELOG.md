@@ -2,6 +2,15 @@
 
 ## 0.1.0-paid-alpha - Code-stage candidate
 
+- On macOS, switch trusted controlled Codex windows between native dark and light
+  through Codex's verified in-app Appearance controls before applying the skin.
+  The Helper verifies the setting, native palette, renderer identity, and exact
+  recovery point without restarting; an unavailable UI contract safely falls back
+  to the existing confirmed restart path. Windows keeps that restart path pending
+  separate native GUI evidence.
+- Prepare the next immutable Staging-only candidate: Helper `.16` and Bootstrap `.15`.
+  Existing Plugin launcher pins remain on the verified `.15/.14` closure until the
+  new signed release assets and their exact platform SHA-256 values are available.
 - Correct the native-appearance contract: dark skins pin Codex to native dark and
   light skins pin it to native light; the first Apply preserves the exact original
   `system`/`light`/`dark` choice for offline Restore. Same-mode switches do not
