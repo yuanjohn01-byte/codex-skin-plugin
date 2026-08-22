@@ -11,6 +11,10 @@
 - Prepare the next immutable Staging-only candidate: Helper `.15` and Bootstrap `.14`.
   Existing Plugin launcher pins remain on the verified `.14/.13` closure until the
   new signed release assets and their exact platform SHA-256 values are available.
+- Release the immutable Staging-only candidate: Helper `.15` and Bootstrap `.14`.
+  Plugin launchers now pin the protected-workflow prerelease and exact per-platform
+  Bootstrap SHA-256 values; full cross-platform CI remains deferred until Founder
+  manual testing, and this is not a stable/latest or Production channel.
 - Release the immutable Staging-only candidate: Helper `.14` and Bootstrap `.13`.
   Plugin launchers now pin the protected-workflow prerelease and exact per-platform
   Bootstrap SHA-256 values; it is not a stable/latest or Production channel.
