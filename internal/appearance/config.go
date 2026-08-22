@@ -1,6 +1,5 @@
-// Package appearance consumes a strictly validated native-appearance backup
-// left by earlier Paid Alpha builds. Runtime v2.4 themes never modify Codex's
-// native preference; they carry their light/dark contract in scoped CSS.
+// Package appearance synchronizes Codex's native light/dark preference with a
+// data-only Codex Skin theme and restores the exact pre-theme setting.
 package appearance
 
 import (
@@ -57,13 +56,119 @@ func New(configPath, backupPath, platform string) (*Manager, error) {
 	return &Manager{configPath: configPath, backupPath: backupPath, platform: platform}, nil
 }
 
+// NeedsPin reports whether changing to mode requires a controlled reload. Pin
+// still records the exact pre-theme preference when no backup exists, but a
+// backup-only write never changes the live native palette and must not trigger
+// a needless reload.
+func (manager *Manager) NeedsPin(mode string) (bool, error) {
+	if mode != "dark" && mode != "light" {
+		return false, fmt.Errorf("unsupported appearance mode")
+	}
+	if _, _, err := manager.readBackup(); err != nil {
+		return false, err
+	}
+	content, _, err := manager.readConfig()
+	if err != nil {
+		return false, err
+	}
+	current, err := settingValue(content, "appearanceTheme")
+	if err != nil {
+		return false, err
+	}
+	return current == nil || *current != `"`+mode+`"`, nil
+}
+
 func (manager *Manager) NeedsRestore() (bool, error) {
-	_, found, err := manager.readBackup()
+	stored, found, err := manager.readBackup()
 	if err != nil || !found {
 		return false, err
 	}
-	// A retained backup must be consumed even when the visible values already
-	// match, otherwise a later install could restore stale pre-install state.
+	content, _, err := manager.readConfig()
+	if err != nil {
+		return false, err
+	}
+	for _, key := range managedKeys {
+		current, err := settingValue(content, key)
+		if err != nil {
+			return false, err
+		}
+		original, err := backupValue(stored.Values[key])
+		if err != nil {
+			return false, err
+		}
+		if !sameOptionalValue(current, original) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// Pin records the original managed desktop settings once, then changes only
+// appearanceTheme to the requested native mode. It preserves all unrelated
+// TOML text and keeps the backup until offline Restore consumes it.
+func (manager *Manager) Pin(mode string) (bool, error) {
+	if mode != "dark" && mode != "light" {
+		return false, fmt.Errorf("unsupported appearance mode")
+	}
+	release, err := manager.lock()
+	if err != nil {
+		return false, err
+	}
+	defer release()
+
+	content, info, err := manager.readConfig()
+	if err != nil {
+		return false, err
+	}
+	// Pin is intentionally fail-closed when Codex has no desktop table. Adding
+	// one would make an exact Restore impossible without taking a broad snapshot
+	// of the user's complete configuration file.
+	section, err := desktopSection(content)
+	if err != nil {
+		return false, err
+	}
+	if section == nil {
+		return false, fmt.Errorf("Codex config has no desktop table")
+	}
+	backupCreated := false
+	if _, found, err := manager.readBackup(); err != nil {
+		return false, err
+	} else if !found {
+		values := map[string]*string{}
+		for _, key := range managedKeys {
+			line, err := settingLine(content, key)
+			if err != nil {
+				return false, err
+			}
+			values[key] = line
+		}
+		if err := manager.writeBackup(backup{
+			SchemaVersion: backupSchemaVersion,
+			Platform:      manager.platform,
+			ConfigPath:    manager.configPath,
+			Values:        values,
+		}); err != nil {
+			return false, err
+		}
+		backupCreated = true
+	}
+	current, err := settingValue(content, "appearanceTheme")
+	if err != nil {
+		return false, err
+	}
+	if current != nil && *current == `"`+mode+`"` {
+		return backupCreated, nil
+	}
+	updated, err := replaceSetting(content, "appearanceTheme", pointer(`appearanceTheme = "`+mode+`"`))
+	if err != nil {
+		return false, err
+	}
+	if updated == content {
+		return backupCreated, nil
+	}
+	if err := atomicReplace(manager.configPath, []byte(content), []byte(updated), info); err != nil {
+		return false, err
+	}
 	return true, nil
 }
 
@@ -81,6 +186,28 @@ func (manager *Manager) Restore() (bool, error) {
 	content, info, err := manager.readConfig()
 	if err != nil {
 		return false, err
+	}
+	section, err := desktopSection(content)
+	if err != nil {
+		return false, err
+	}
+	// A legacy or interrupted backup can describe a configuration which no
+	// longer has a desktop table. If every managed key was originally absent,
+	// consuming the backup without manufacturing a new table is the only exact
+	// restore. Any other mismatch is unsafe and must be surfaced to the caller.
+	if section == nil {
+		for _, key := range managedKeys {
+			if stored.Values[key] != nil {
+				return false, fmt.Errorf("Codex config lost desktop table during restore")
+			}
+		}
+		if err := rejectSymlink(manager.backupPath); err != nil {
+			return false, err
+		}
+		if err := os.Remove(manager.backupPath); err != nil {
+			return false, err
+		}
+		return false, syncDirectory(filepath.Dir(manager.backupPath))
 	}
 	updated := content
 	for _, key := range managedKeys {
@@ -151,6 +278,73 @@ func (manager *Manager) readBackup() (backup, bool, error) {
 	return stored, true, nil
 }
 
+func (manager *Manager) writeBackup(stored backup) error {
+	directory := filepath.Dir(manager.backupPath)
+	if err := ensureNonSymlinkDirectory(directory); err != nil {
+		return err
+	}
+	if err := rejectSymlink(manager.backupPath); err != nil {
+		return err
+	}
+	payload, err := json.Marshal(stored)
+	if err != nil {
+		return err
+	}
+	payload = append(payload, '\n')
+	temporary, err := temporaryName(directory, ".appearance-backup-")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(temporary)
+	if err := os.WriteFile(temporary, payload, 0o600); err != nil {
+		return err
+	}
+	file, err := os.OpenFile(temporary, os.O_RDWR, 0)
+	if err != nil {
+		return err
+	}
+	err = file.Sync()
+	_ = file.Close()
+	if err != nil {
+		return err
+	}
+	if err := replaceFile(temporary, manager.backupPath); err != nil {
+		return err
+	}
+	return syncDirectory(directory)
+}
+
+// ensureNonSymlinkDirectory verifies every existing ancestor before creating
+// the recovery directory, then verifies the result again. This avoids silently
+// following a user-controlled symlink while persisting the Restore point.
+func ensureNonSymlinkDirectory(directory string) error {
+	directory = filepath.Clean(directory)
+	for probe := directory; ; probe = filepath.Dir(probe) {
+		info, err := os.Lstat(probe)
+		if err == nil {
+			if !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+				return fmt.Errorf("unsafe appearance state directory")
+			}
+			break
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("unsafe appearance state directory")
+		}
+		parent := filepath.Dir(probe)
+		if parent == probe {
+			return fmt.Errorf("appearance state directory has no existing ancestor")
+		}
+	}
+	if err := os.MkdirAll(directory, 0o700); err != nil {
+		return err
+	}
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("unsafe appearance state directory")
+	}
+	return os.Chmod(directory, 0o700)
+}
+
 func (manager *Manager) lock() (func(), error) {
 	path := manager.configPath + ".codex-skin.lock"
 	if err := rejectSymlink(path); err != nil {
@@ -173,6 +367,25 @@ func settingValue(content, key string) (*string, error) {
 	}
 	value = strings.TrimSpace(stripComment(value))
 	return &value, nil
+}
+
+func backupValue(line *string) (*string, error) {
+	if line == nil {
+		return nil, nil
+	}
+	_, value, ok := strings.Cut(*line, "=")
+	if !ok {
+		return nil, fmt.Errorf("invalid setting")
+	}
+	value = strings.TrimSpace(stripComment(value))
+	return &value, nil
+}
+
+func sameOptionalValue(left, right *string) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return *left == *right
 }
 
 func settingLine(content, key string) (*string, error) {

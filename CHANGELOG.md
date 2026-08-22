@@ -2,8 +2,14 @@
 
 ## 0.1.0-paid-alpha - Code-stage candidate
 
-- Prepare the next immutable Staging-only candidate: Helper `.14` and Bootstrap `.13`.
-  Existing Plugin launcher pins remain on the verified `.13/.12` closure until the
+- Correct the native-appearance contract: dark skins pin Codex to native dark and
+  light skins pin it to native light; the first Apply preserves the exact original
+  `system`/`light`/`dark` choice for offline Restore. Same-mode switches do not
+  rewrite configuration or restart; a mode change uses at most one confirmed
+  controlled reload. The current-document route classifier also clears stale chat
+  scope when Codex reuses a main container for a native utility page.
+- Prepare the next immutable Staging-only candidate: Helper `.15` and Bootstrap `.14`.
+  Existing Plugin launcher pins remain on the verified `.14/.13` closure until the
   new signed release assets and their exact platform SHA-256 values are available.
 - Release the immutable Staging-only candidate: Helper `.14` and Bootstrap `.13`.
   Plugin launchers now pin the protected-workflow prerelease and exact per-platform

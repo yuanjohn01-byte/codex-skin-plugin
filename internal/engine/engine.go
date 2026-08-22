@@ -123,7 +123,7 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 		return ApplyResult{}, err
 	}
 
-	session, err := engine.openThemeSession(ctx, compiled)
+	session, err := engine.openThemeSession(ctx, compiled, previousCompiled)
 	if err != nil {
 		// A live adapter returns ErrRestartConsent before it changes the native
 		// appearance, stops Codex, opens a controlled listener, or touches the
@@ -282,7 +282,14 @@ func (engine *Engine) RestoreOfficial(ctx context.Context) (result RestoreResult
 	return RestoreResult{OperationID: operationID, Identity: session.Identity, WasThemed: wasThemed}, nil
 }
 
-func (engine *Engine) openThemeSession(ctx context.Context, compiled CompiledTheme) (Session, error) {
+func (engine *Engine) openThemeSession(
+	ctx context.Context,
+	compiled CompiledTheme,
+	previous *CompiledTheme,
+) (Session, error) {
+	if opener, supported := engine.adapter.(ThemeTransitionSessionOpener); supported {
+		return opener.OpenVerifiedThemeTransitionSession(ctx, compiled, previous)
+	}
 	if opener, supported := engine.adapter.(ThemeSessionOpener); supported {
 		return opener.OpenVerifiedThemeSession(ctx, compiled)
 	}
@@ -377,7 +384,16 @@ func (engine *Engine) recoverInterruptedLocked(ctx context.Context) error {
 		}
 		return err
 	}
-	session, err := engine.adapter.OpenVerifiedSession(ctx)
+	var session Session
+	if snapshot.StylePresent {
+		session, err = engine.openThemeSession(
+			ctx,
+			CompiledTheme{AppearanceMode: snapshot.AppearanceMode},
+			nil,
+		)
+	} else {
+		session, err = engine.openOfficialSession(ctx)
+	}
 	if err != nil {
 		return err
 	}

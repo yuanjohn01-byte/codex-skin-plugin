@@ -129,16 +129,26 @@ type SessionPrimer interface {
 }
 
 // ThemeSessionOpener lets the live adapter open the verified renderer used
-// for a theme apply. The theme's scoped CSS carries its own light/dark
-// contract; opening a theme session must not require rewriting Codex's native
-// appearance preference. Test/fake adapters keep using Adapter.OpenVerifiedSession.
+// for a theme apply. The live adapter pins Codex's native light/dark mode to
+// the theme before a controlled reload when required, while same-mode changes
+// reuse the existing verified renderer. Test/fake adapters keep using
+// Adapter.OpenVerifiedSession.
 type ThemeSessionOpener interface {
 	OpenVerifiedThemeSession(context.Context, CompiledTheme) (Session, error)
 }
 
+// ThemeTransitionSessionOpener receives the previously committed theme while
+// opening a new one. A live adapter uses this only to recover the prior skin
+// if a required cross-mode controlled reload fails before a Session can be
+// returned to the engine. Older and test adapters continue to use
+// ThemeSessionOpener unchanged.
+type ThemeTransitionSessionOpener interface {
+	OpenVerifiedThemeTransitionSession(context.Context, CompiledTheme, *CompiledTheme) (Session, error)
+}
+
 // OfficialSessionOpener lets the live adapter open the verified renderer used
-// to restore the official appearance, including a one-time migration of a
-// legacy native-appearance backup when one exists.
+// to restore the official appearance and consume the exact native appearance
+// backup before the controlled renderer is opened.
 type OfficialSessionOpener interface {
 	OpenVerifiedOfficialSession(context.Context) (Session, error)
 }

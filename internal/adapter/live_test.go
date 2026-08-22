@@ -377,21 +377,30 @@ func TestApplyFunctionKeepsRuntimeBackgroundInOwnedStylesheet(t *testing.T) {
 	}
 }
 
-func TestRendererInjectorDoesNotInstallAWatcherOrPersistentBootstrap(t *testing.T) {
+func TestRendererInjectorSynchronizesRouteMarkersWithoutPersistentBootstrap(t *testing.T) {
 	for _, fragment := range []string{
 		`selector("settings-panel")`,
 		`selector("appearance-radio")`,
 		`if (!main) return settingsScope() ? activateRoot() : false`,
 		`removeMainMarkers()`,
 		`URL.revokeObjectURL(backgroundURL)`,
+		`new MutationObserver`,
+		`routeObserver.observe(document.documentElement`,
+		`routeObserver?.disconnect()`,
+		`globalThis.clearTimeout(routeRefreshTimer)`,
+		`const scheduleRouteRefresh = () =>`,
+		`const routeSelectors = [`,
+		`const routeNode = (node) =>`,
+		`[...record.addedNodes, ...record.removedNodes].some(routeNode)`,
 	} {
 		if !strings.Contains(applyFunction, fragment) {
 			t.Fatalf("renderer injector is missing %q", fragment)
 		}
 	}
 	for _, forbidden := range []string{
-		`MutationObserver`, `setInterval(`, `addEventListener("popstate"`,
+		`setInterval(`, `addEventListener("popstate"`,
 		`addEventListener("hashchange"`, `Page.addScriptToEvaluateOnNewDocument`,
+		`record.type === "childList" || record.type === "attributes"`,
 	} {
 		if strings.Contains(applyFunction, forbidden) {
 			t.Fatalf("on-demand injector still contains watcher/bootstrap %q", forbidden)

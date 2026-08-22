@@ -41,6 +41,31 @@ type restartConsentThemeAdapter struct {
 	*fakeAdapter
 }
 
+type recoveryModeAdapter struct {
+	*fakeAdapter
+	themeModes    []string
+	officialOpens int
+}
+
+type transitionThemeAdapter struct {
+	*fakeAdapter
+	target   CompiledTheme
+	previous *CompiledTheme
+}
+
+func (adapter *transitionThemeAdapter) OpenVerifiedThemeTransitionSession(
+	ctx context.Context,
+	target CompiledTheme,
+	previous *CompiledTheme,
+) (Session, error) {
+	adapter.target = target
+	if previous != nil {
+		copy := *previous
+		adapter.previous = &copy
+	}
+	return adapter.fakeAdapter.OpenVerifiedSession(ctx)
+}
+
 type boundedVerificationAdapter struct {
 	*fakeAdapter
 	verification ThemeVerificationResult
@@ -62,6 +87,19 @@ func (adapter *restartConsentThemeAdapter) OpenVerifiedThemeSession(
 ) (Session, error) {
 	adapter.events = append(adapter.events, "open_theme_consent")
 	return Session{}, ErrRestartConsent
+}
+
+func (adapter *recoveryModeAdapter) OpenVerifiedThemeSession(
+	ctx context.Context,
+	compiled CompiledTheme,
+) (Session, error) {
+	adapter.themeModes = append(adapter.themeModes, compiled.AppearanceMode)
+	return adapter.fakeAdapter.OpenVerifiedSession(ctx)
+}
+
+func (adapter *recoveryModeAdapter) OpenVerifiedOfficialSession(ctx context.Context) (Session, error) {
+	adapter.officialOpens++
+	return adapter.fakeAdapter.OpenVerifiedSession(ctx)
 }
 
 func (adapter *finalizingAdapter) FinalizeOfficialRollback(context.Context, Session) error {
@@ -288,6 +326,35 @@ func TestApplyVerifiedCommitsOnlyAfterVerification(t *testing.T) {
 	if !strings.HasPrefix(adapter.state.BackgroundDataURL, "data:image/png;base64,") ||
 		strings.Contains(adapter.state.StyleText, "data:image/") {
 		t.Fatalf("compiled background transport is invalid")
+	}
+}
+
+func TestApplyVerifiedPassesCommittedThemeToTransitionOpener(t *testing.T) {
+	verified := verifiedThemeForEngine(t)
+	store := testStore(t)
+	adapter := &transitionThemeAdapter{
+		fakeAdapter: &fakeAdapter{probe: passingReport()},
+	}
+	instance, err := New(store, adapter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := instance.ApplyVerified(context.Background(), verified); err != nil {
+		t.Fatalf("first ApplyVerified() error = %v", err)
+	}
+	if adapter.previous != nil {
+		t.Fatalf("first transition previous = %#v, want nil", adapter.previous)
+	}
+	if _, err := instance.ApplyVerified(context.Background(), verified); err != nil {
+		t.Fatalf("second ApplyVerified() error = %v", err)
+	}
+	if adapter.previous == nil {
+		t.Fatal("transition opener did not receive the committed prior theme")
+	}
+	if adapter.previous.ThemePublicID != "100001" ||
+		adapter.previous.AppearanceMode != "dark" ||
+		adapter.target.ThemePublicID != "100001" {
+		t.Fatalf("transition target=%#v previous=%#v", adapter.target, adapter.previous)
 	}
 }
 
@@ -905,6 +972,81 @@ func TestInterruptedApplyStagesRestoreDurableLastKnownGood(t *testing.T) {
 			running, err := store.RunningJournals()
 			if err != nil || len(running) != 0 {
 				t.Fatalf("running journals = %#v, err=%v", running, err)
+			}
+		})
+	}
+}
+
+func TestInterruptedRecoveryOpensTheNativeModeRequiredByTheSnapshot(t *testing.T) {
+	tests := []struct {
+		name             string
+		snapshot         Snapshot
+		wantThemeMode    string
+		wantOfficialOpen int
+	}{
+		{
+			name: "themed snapshot reopens with its dark native palette",
+			snapshot: Snapshot{
+				StylePresent: true, StyleText: "trusted dark style",
+				BackgroundDataURL: "data:image/png;base64,AA==",
+				ThemePublicID:     "199999", ThemeVersion: "2.0.0", TemplateVersion: 1,
+				AppearanceMode: "dark",
+			},
+			wantThemeMode: "dark",
+		},
+		{
+			name:             "official snapshot consumes the original native preference",
+			snapshot:         Snapshot{},
+			wantOfficialOpen: 1,
+		},
+	}
+	for _, testCase := range tests {
+		t.Run(testCase.name, func(t *testing.T) {
+			store := testStore(t)
+			operationID, err := store.NewOperationID()
+			if err != nil {
+				t.Fatal(err)
+			}
+			recoveryID, err := store.NewRecoveryID()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := store.WriteRecoveryPoint(RecoveryPoint{
+				RecoveryID: recoveryID, OperationID: operationID, CapturedAt: canonicalNow(),
+				WasThemed: testCase.snapshot.StylePresent,
+			}, testCase.snapshot); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.WriteJournal(Journal{
+				OperationID: operationID, Kind: "apply", Stage: "apply", Status: "running",
+				ThemePublicID: "100001", ThemeVersion: "1.0.0", RecoveryID: recoveryID,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			adapter := &recoveryModeAdapter{fakeAdapter: &fakeAdapter{
+				state: Snapshot{
+					StylePresent: true, StyleText: "partially applied style",
+					BackgroundDataURL: "data:image/png;base64,AQ==",
+					ThemePublicID:     "100001", ThemeVersion: "1.0.0", TemplateVersion: 1,
+					AppearanceMode: "light",
+				},
+				probe: passingReport(),
+			}}
+			instance, err := New(store, adapter)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := instance.RecoverInterrupted(context.Background()); err != nil {
+				t.Fatalf("RecoverInterrupted() error = %v", err)
+			}
+			if got := strings.Join(adapter.themeModes, ","); got != testCase.wantThemeMode {
+				t.Fatalf("theme session modes = %q, want %q", got, testCase.wantThemeMode)
+			}
+			if adapter.officialOpens != testCase.wantOfficialOpen {
+				t.Fatalf("official session opens = %d, want %d", adapter.officialOpens, testCase.wantOfficialOpen)
+			}
+			if adapter.state != testCase.snapshot {
+				t.Fatalf("recovered state = %#v, want %#v", adapter.state, testCase.snapshot)
 			}
 		})
 	}

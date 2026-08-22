@@ -973,11 +973,11 @@ func compileTemplateV12(
 }
 
 /* Codex keeps one shell main while React swaps Home, conversations and native
-   utility pages below it. The Helper intentionally installs no route watcher.
-   Fail closed in CSS when that retained marker no longer contains a live
-   conversation/Home signal, or when a known native utility anchor appears.
-   This uses one non-nested :has() probe; it does not repeat V11's unsupported
-   :has(...:has(...)) shape. */
+   utility pages below it. The controller refreshes its local marker after
+   those document mutations; CSS also fails closed when a retained marker no
+   longer contains a live conversation/Home signal or exposes a known native
+   utility anchor. This uses one non-nested :has() probe; it does not repeat
+   V11's unsupported :has(...:has(...)) shape. */
 :root[__MARKER__="active"]
   main[data-codex-skin-main="true"]:has(
     :is(

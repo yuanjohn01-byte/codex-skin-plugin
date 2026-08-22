@@ -11,7 +11,7 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-VERSION = "0.1.0-paid-alpha.14"
+VERSION = "0.1.0-paid-alpha.15"
 
 
 def summary() -> dict[str, object]:

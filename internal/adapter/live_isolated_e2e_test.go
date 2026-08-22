@@ -91,15 +91,11 @@ func TestIsolatedCodexRendererSessionLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	lightVerified := verified
-	lightVerified.Manifest.ThemePublicID = "100002"
-	lightVerified.Manifest.ThemeVersion = "1.0.1"
-	lightVerified.Manifest.Design.Mode = "light"
-	lightVerified.Manifest.Design.Tokens.TextPrimary = "#1A1C1F"
-	lightVerified.Manifest.Design.Tokens.TextSecondary = "#3D4349"
-	lightVerified.Manifest.Design.Tokens.Accent = "#2563EB"
-	lightVerified.Manifest.Design.Tokens.Border = "#1A1C1F24"
-	lightCompiled, err := engine.CompileTheme(lightVerified, stagedTheme)
+	alternateDarkVerified := verified
+	alternateDarkVerified.Manifest.ThemePublicID = "100002"
+	alternateDarkVerified.Manifest.ThemeVersion = "1.0.1"
+	alternateDarkVerified.Manifest.Design.Tokens.Accent = "#A855F7"
+	alternateDarkCompiled, err := engine.CompileTheme(alternateDarkVerified, stagedTheme)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -178,12 +174,12 @@ func TestIsolatedCodexRendererSessionLifecycle(t *testing.T) {
 	stage = "theme_stable"
 	writeReport()
 
-	// Switch directly from the fixture's dark skin to a separately compiled
-	// light skin in the same owned renderer. The two templates set their own
-	// workspace foreground and background together while native pages continue
-	// to follow Codex's appearance. No native preference rewrite, restart or
-	// restore is needed merely because the skin mode changes.
-	switched := lightCompiled
+	// A temporary profile deliberately does not touch the Founder's native
+	// Codex preference, so it can prove only the no-restart contract for a
+	// same-mode skin replacement. Production dark-to-light and light-to-dark
+	// transitions pin the native appearance and use the controlled reload path;
+	// they must never be represented here as a direct CSS-only switch.
+	switched := alternateDarkCompiled
 	if err := live.Apply(ctx, session, switched); err != nil {
 		t.Fatal(err)
 	}
@@ -199,12 +195,12 @@ func TestIsolatedCodexRendererSessionLifecycle(t *testing.T) {
 	if err := writeIsolatedPreview(ctx, live, session, os.Getenv("CODEX_SKIN_ISOLATED_E2E_LIGHT_PREVIEW_PATH")); err != nil {
 		t.Fatal(err)
 	}
-	stage = "cross_appearance_theme_switched"
+	stage = "same_appearance_theme_switched"
 	writeReport()
 
-	// Complete the reverse light-to-dark replacement before Restore. This is
-	// intentionally another direct controller change in the same renderer: no
-	// process restart, native preference change, or offline recovery is allowed.
+	// Complete the reverse same-mode replacement before Restore. This continues
+	// to assert that a verified native dark renderer does not need a reload when
+	// only dark skin data changes.
 	switchedBack := compiled
 	if err := live.Apply(ctx, session, switchedBack); err != nil {
 		t.Fatal(err)
@@ -218,7 +214,7 @@ func TestIsolatedCodexRendererSessionLifecycle(t *testing.T) {
 		}
 		t.Fatalf("isolated renderer did not verify a reverse theme switch: %#v err=%v", switchBackVerification, err)
 	}
-	stage = "cross_appearance_theme_returned"
+	stage = "same_appearance_theme_returned"
 	writeReport()
 
 	if err := live.RestoreOfficial(ctx, session); err != nil {

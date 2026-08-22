@@ -154,8 +154,10 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
   let styleSheet = null;
   let styleNode = null;
   let currentMain = null;
-	let currentComposer = null;
+  let currentComposer = null;
   let stopped = false;
+  let routeObserver = null;
+  let routeRefreshTimer = 0;
 
   const selector = (key) => typeof selectors[key] === "string" ? selectors[key] : "";
   const MAIN_SELECTOR = selector("shell-main");
@@ -198,14 +200,14 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
     }
   };
   const visibleComposer = (root = document) => {
-		const rule = selector("composer-chrome");
-		if (!rule) return null;
-		try {
-			return [...root.querySelectorAll(rule)].find(visible) || null;
-		} catch {
-			return null;
-		}
-	};
+    const rule = selector("composer-chrome");
+    if (!rule) return null;
+    try {
+      return [...root.querySelectorAll(rule)].find(visible) || null;
+    } catch {
+      return null;
+    }
+  };
   const routeScope = (main) => {
     if (settingsScope()) return "settings";
     // Current utility pages reuse the same heading classes as Home. Their
@@ -220,19 +222,19 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
     if (inMain(main, "home-title") && visibleComposer(main)) return "home";
     return "native";
   };
-	const markComposer = (composer) => {
-		removeComposerMarkers();
-		if (!composer) return;
-		composer.setAttribute("data-codex-skin-composer", "true");
-		let boundary = composer;
-		for (let depth = 0; boundary && boundary !== document.body && depth < 6; depth += 1) {
-			const classes = typeof boundary.className === "string" ? boundary.className : "";
-			if (boundary === composer || /(?:^|\s)[^\s]*Composer[^\s]*/.test(classes)) {
-				boundary.setAttribute("data-codex-skin-composer-boundary", "true");
-			}
-			boundary = boundary.parentElement;
-		}
-	};
+  const markComposer = (composer) => {
+    removeComposerMarkers();
+    if (!composer) return;
+    composer.setAttribute("data-codex-skin-composer", "true");
+    let boundary = composer;
+    for (let depth = 0; boundary && boundary !== document.body && depth < 6; depth += 1) {
+      const classes = typeof boundary.className === "string" ? boundary.className : "";
+      if (boundary === composer || /(?:^|\s)[^\s]*Composer[^\s]*/.test(classes)) {
+        boundary.setAttribute("data-codex-skin-composer-boundary", "true");
+      }
+      boundary = boundary.parentElement;
+    }
+  };
   const setAttribute = (node, name, value) => {
     if (node.getAttribute(name) !== value) node.setAttribute(name, value);
   };
@@ -289,9 +291,9 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
   const deactivate = () => {
     removeSheet();
     removeMainMarkers();
-		removeComposerMarkers();
+    removeComposerMarkers();
     currentMain = null;
-		currentComposer = null;
+    currentComposer = null;
     const root = document.documentElement;
     if (root) {
       for (const name of ROOT_ATTRIBUTES) root.removeAttribute(name);
@@ -319,11 +321,11 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
       ? Boolean(styleSheet && document.adoptedStyleSheets.includes(styleSheet))
       : Boolean(styleNode && styleNode.isConnected && !styleNode.disabled);
     const scope = routeScope(main);
-		const composer = scope === "home" || scope === "thread"
-			? (visibleComposer(main) || visibleComposer()) : null;
+    const composer = scope === "home" || scope === "thread"
+      ? (visibleComposer(main) || visibleComposer()) : null;
     if (currentMain === main && main.getAttribute("data-codex-skin-main") === "true" &&
         main.getAttribute("data-codex-skin-scope") === scope &&
-			currentComposer === composer &&
+        currentComposer === composer &&
         root.getAttribute("data-codex-skin") === "active" &&
         root.getAttribute("data-codex-skin-theme") === themeId &&
         root.getAttribute("data-codex-skin-theme-version") === themeVersion &&
@@ -332,17 +334,76 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
         document.querySelectorAll("#codex-skin-theme-v1").length === 1) return true;
     activateRoot();
     removeMainMarkers(main);
-		removeComposerMarkers();
+    removeComposerMarkers();
     currentMain = main;
-		currentComposer = composer;
+    currentComposer = composer;
     setAttribute(main, "data-codex-skin-main", "true");
     setAttribute(main, "data-codex-skin-scope", scope);
-		markComposer(composer);
+    markComposer(composer);
     return true;
+  };
+  // Codex can keep the shell <main> mounted while React swaps a conversation
+  // for Sites, Scheduled, or Plugins inside it. Keep the marker in sync with
+  // that in-document change; this is deliberately not a new-document
+  // bootstrap or a polling loop. It reacts only to route-identity nodes or a
+  // replaced <main>, never to every streamed chat message.
+  const scheduleRouteRefresh = () => {
+    if (stopped || routeRefreshTimer) return;
+    routeRefreshTimer = globalThis.setTimeout(() => {
+      routeRefreshTimer = 0;
+      if (!stopped) activate();
+    }, 32);
+  };
+  const observeRouteChanges = () => {
+    if (typeof MutationObserver !== "function" || !document.documentElement) return;
+    const routeSelectors = [
+      "settings-panel", "appearance-radio", "native-utility-route",
+      "home-route", "home-icon", "home-suggestions", "thread-surface"
+    ].map(selector).filter(Boolean).join(",");
+    const routeNode = (node) => {
+      if (!node || node.nodeType !== 1 || !routeSelectors) return false;
+      try {
+        return node.matches(routeSelectors) || Boolean(node.querySelector(routeSelectors));
+      } catch {
+        return false;
+      }
+    };
+    routeObserver = new MutationObserver((records) => {
+      if (stopped) return;
+      for (const record of records) {
+        const mainChanged = currentMain &&
+          (!currentMain.isConnected || mainSurface() !== currentMain);
+        if (mainChanged) {
+          scheduleRouteRefresh();
+          return;
+        }
+        if (record.type === "attributes" && routeNode(record.target)) {
+          scheduleRouteRefresh();
+          return;
+        }
+        if (record.type === "childList" &&
+            [...record.addedNodes, ...record.removedNodes].some(routeNode)) {
+          scheduleRouteRefresh();
+          return;
+        }
+      }
+    });
+    routeObserver.observe(document.documentElement, {
+      childList: true,
+      subtree: true,
+      attributes: true,
+      attributeFilter: ["class", "data-testid", "data-route", "data-state", "aria-hidden"]
+    });
   };
   const cleanup = () => {
     if (stopped) return;
     stopped = true;
+    if (routeRefreshTimer) {
+      globalThis.clearTimeout(routeRefreshTimer);
+      routeRefreshTimer = 0;
+    }
+    routeObserver?.disconnect();
+    routeObserver = null;
     deactivate();
     styleNode?.remove();
     if (styleRegistry.size === 0) delete globalThis[STYLE_REGISTRY_KEY];
@@ -351,7 +412,11 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
   };
   globalThis[STATE_KEY] = {
     cleanup, styleText, backgroundURL, themeId, themeVersion,
-    templateVersion, appearanceMode, runtimeVersion: 3,
+    // Route observation is an implementation detail of the existing v2
+    // controller contract. Keep the persisted runtime marker at v2 so older
+    // recovery records and the engine's fail-closed verifier continue to
+    // describe the same public protocol.
+    templateVersion, appearanceMode, runtimeVersion: 2,
     get styleMode() { return styleMode; },
     get installed() {
       return styleMode === "adopted"
@@ -360,5 +425,6 @@ const applyFunction = `function (styleText, backgroundDataURL, themeId, themeVer
     },
     get active() { return document.documentElement?.getAttribute("data-codex-skin") === "active"; }
   };
+  observeRouteChanges();
   return activate();
 }`
