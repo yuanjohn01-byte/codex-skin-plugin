@@ -106,6 +106,9 @@ description: Apply a theme.
 
 scripts/codex-skin.sh theme apply THEME_ID --json
 Continue automatically; do not ask the user to repeat the theme request.
+Before invoking the wrapper, warn the user not to click, type, navigate, or close the current Codex window.
+The user may interact with a browser authorization or Pricing page.
+After the first bounded wait, say that the same one-time transaction is still running and tell the user not to submit the apply request again.
 """
 RESTORE_SKILL = """---
 name: codex-skin-restore-theme
@@ -543,14 +546,14 @@ def negative_marketplace(payload: dict[str, object], expected_message: str) -> N
             raise AssertionError(f"validator accepted invalid marketplace metadata:\n{combined}")
 
 
-def negative_skill(content: str, expected_message: str) -> None:
+def negative_skill(skill_name: str, content: str, expected_message: str) -> None:
     with tempfile.TemporaryDirectory(prefix="codex-skin-public-skill-") as directory:
         fixture = Path(directory)
         initialized = run(["git", "init", "--quiet"], fixture)
         if initialized.returncode != 0:
             raise AssertionError(initialized.stderr)
         write_baseline(fixture)
-        skill = fixture / "plugins" / "codex-skin" / "skills" / "codex-skin-version" / "SKILL.md"
+        skill = fixture / "plugins" / "codex-skin" / "skills" / skill_name / "SKILL.md"
         skill.write_text(content, encoding="utf-8")
         added = run(["git", "add", "--force", "."], fixture)
         if added.returncode != 0:
@@ -558,7 +561,7 @@ def negative_skill(content: str, expected_message: str) -> None:
         checked = run([sys.executable, str(VALIDATOR), "--root", str(fixture)], fixture)
         combined = checked.stdout + checked.stderr
         if checked.returncode == 0 or expected_message not in combined:
-            raise AssertionError(f"validator accepted invalid version Skill:\n{combined}")
+            raise AssertionError(f"validator accepted invalid {skill_name} Skill:\n{combined}")
 
 
 def negative_readme(content: str, expected_message: str) -> None:
@@ -754,8 +757,26 @@ def main() -> int:
     invalid_plugins["plugins"] = []
     negative_marketplace(invalid_plugins, "must expose exactly one plugin entry")
 
-    negative_skill(VERSION_SKILL.replace("name: codex-skin-version", "name: wrong-skill"), "missing required marker")
-    negative_skill(VERSION_SKILL.replace("Plugin version: `0.1.0-paid-alpha`.", "Plugin version: `9.9.9`."), "missing required marker")
+    negative_skill(
+        "codex-skin-version",
+        VERSION_SKILL.replace("name: codex-skin-version", "name: wrong-skill"),
+        "missing required marker",
+    )
+    negative_skill(
+        "codex-skin-version",
+        VERSION_SKILL.replace(
+            "Plugin version: `0.1.0-paid-alpha`.", "Plugin version: `9.9.9`."
+        ),
+        "missing required marker",
+    )
+    negative_skill(
+        "codex-skin-install-theme",
+        INSTALL_SKILL.replace(
+            "same one-time transaction is still running",
+            "the operation remains active",
+        ),
+        "missing required marker",
+    )
     negative_fixture(
         "plugins/codex-skin/skills/extra/SKILL.md",
         b"---\nname: extra\ndescription: extra\n---\n",
@@ -797,7 +818,7 @@ def main() -> int:
         "export manifest or SHA-256",
     )
 
-    print("Public repository tests passed (positive scan + 42 negative fixtures).")
+    print("Public repository tests passed (positive scan + 43 negative fixtures).")
     return 0
 
 

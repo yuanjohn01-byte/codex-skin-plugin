@@ -186,6 +186,10 @@ REQUIRED_SKILLS = {
         "name: codex-skin-install-theme\n",
         "scripts/codex-skin.sh theme apply THEME_ID --json",
         "do not ask the user to repeat the theme request",
+        "not click, type, navigate, or close the current Codex window",
+        "browser authorization or Pricing page",
+        "same one-time transaction is still running",
+        "not submit the apply request again",
     ),
     PLUGIN_ROOT / "skills/codex-skin-restore-theme/SKILL.md": (
         "name: codex-skin-restore-theme\n",

@@ -2,6 +2,10 @@
 
 ## 0.1.0-paid-alpha - Code-stage candidate
 
+- Warn before every skin Apply/Switch that the current Codex window must remain
+  untouched during the 20–60 second one-time operation, while still allowing an
+  explicitly opened browser authorization or Pricing page. A long-running command
+  now gets one non-duplicating reminder instead of inviting a second submission.
 - On macOS, switch trusted controlled Codex windows between native dark and light
   through Codex's verified in-app Appearance controls before applying the skin.
   The Helper verifies the setting, native palette, renderer identity, and exact
