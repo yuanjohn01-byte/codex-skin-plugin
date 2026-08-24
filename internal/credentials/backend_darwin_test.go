@@ -27,8 +27,10 @@ func TestDarwinKeychainRoundTrip(t *testing.T) {
 	store := newStore(newDarwinBackend(keychain))
 	first := credentialPayload(t)
 	second := credentialPayload(t)
+	quoted := []byte("printable \"quotes\" \\\\ slash spaces ; $ ` '")
 	defer zeroBytes(first)
 	defer zeroBytes(second)
+	defer zeroBytes(quoted)
 
 	if err := store.Put(context.Background(), testDeviceID, first); err != nil {
 		t.Fatal(err)
@@ -39,6 +41,10 @@ func TestDarwinKeychainRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertStoredSecret(t, store, second)
+	if err := store.Put(context.Background(), testDeviceID, quoted); err != nil {
+		t.Fatal(err)
+	}
+	assertStoredSecret(t, store, quoted)
 	if err := store.Delete(context.Background(), testDeviceID); err != nil {
 		t.Fatal(err)
 	}

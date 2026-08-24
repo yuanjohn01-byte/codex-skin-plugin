@@ -12,13 +12,21 @@ import struct
 import subprocess
 import sys
 import tempfile
+import urllib.parse
 from dataclasses import dataclass
 from pathlib import Path
+
+from release_profiles import (
+    STAGING,
+    profile_names,
+    reject_unprofiled_protected_origin,
+    release_profile,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = "github.com/yuanjohn01-byte/codex-skin-plugin"
-HELPER_VERSION = "0.1.0-s3"
+HELPER_VERSION = STAGING.helper_version
 REQUIRED_GO_VERSION = "go1.26.5"
 DEFAULT_OUTPUT = ROOT / "dist" / "helper"
 
@@ -31,11 +39,15 @@ class Target:
     filename: str
 
 
-TARGETS = (
-    Target("macos-arm64", "darwin", "arm64", f"codex-skin-helper_{HELPER_VERSION}_macos_arm64"),
-    Target("macos-x64", "darwin", "amd64", f"codex-skin-helper_{HELPER_VERSION}_macos_x64"),
-    Target("windows-x64", "windows", "amd64", f"codex-skin-helper_{HELPER_VERSION}_windows_x64.exe"),
-)
+def helper_targets(version: str) -> tuple[Target, ...]:
+    return (
+        Target("macos-arm64", "darwin", "arm64", f"codex-skin-helper_{version}_macos_arm64"),
+        Target("macos-x64", "darwin", "amd64", f"codex-skin-helper_{version}_macos_x64"),
+        Target("windows-x64", "windows", "amd64", f"codex-skin-helper_{version}_windows_x64.exe"),
+    )
+
+
+TARGETS = helper_targets(HELPER_VERSION)
 
 
 def parse_args() -> argparse.Namespace:
@@ -43,6 +55,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--commit")
     parser.add_argument("--built-at")
+    parser.add_argument("--api-base-url")
+    parser.add_argument("--release-profile", choices=profile_names())
     parser.add_argument("--target", action="append", choices=[item.platform for item in TARGETS])
     return parser.parse_args()
 
@@ -107,6 +121,8 @@ def build_target(
     output: Path,
     commit: str,
     built_at: str,
+    api_base_url: str | None,
+    helper_version: str,
 ) -> dict[str, object]:
     output.mkdir(parents=True, exist_ok=True)
     destination = output / target.filename
@@ -119,15 +135,17 @@ def build_target(
             "GOFLAGS": "-mod=readonly",
         }
     )
-    ldflags = " ".join(
-        (
-            "-s",
-            "-w",
-            f"-X {MODULE}/internal/buildinfo.Version={HELPER_VERSION}",
-            f"-X {MODULE}/internal/buildinfo.Commit={commit}",
-            f"-X {MODULE}/internal/buildinfo.BuiltAt={built_at}",
-        )
-    )
+    flags = [
+        "-s",
+        "-w",
+        f"-X {MODULE}/internal/buildinfo.Version={helper_version}",
+        f"-X {MODULE}/internal/buildinfo.HelperReleaseTag=helper-v{helper_version}",
+        f"-X {MODULE}/internal/buildinfo.Commit={commit}",
+        f"-X {MODULE}/internal/buildinfo.BuiltAt={built_at}",
+    ]
+    if api_base_url:
+        flags.append(f"-X {MODULE}/internal/buildinfo.APIBaseURL={api_base_url}")
+    ldflags = " ".join(flags)
     run(
         [
             go,
@@ -144,6 +162,11 @@ def build_target(
     content = destination.read_bytes()
     if str(ROOT).encode() in content:
         raise ValueError(f"{target.filename} embeds the local repository path")
+    required_markers = [helper_version, f"helper-v{helper_version}"]
+    if api_base_url:
+        required_markers.append(api_base_url)
+    if any(marker.encode() not in content for marker in required_markers):
+        raise ValueError(f"{target.filename} does not embed the fixed release identity")
     return {
         "architecture": target.goarch,
         "buildCommit": commit,
@@ -152,7 +175,8 @@ def build_target(
         "filename": target.filename,
         "format": binary_format(content, target),
         "goVersion": REQUIRED_GO_VERSION.removeprefix("go"),
-        "helperVersion": HELPER_VERSION,
+        "helperVersion": helper_version,
+        "helperReleaseTag": f"helper-v{helper_version}",
         "platform": target.platform,
         "sha256": hashlib.sha256(content).hexdigest(),
         "size": len(content),
@@ -173,14 +197,45 @@ def atomic_json(path: Path, payload: object) -> None:
 def main() -> int:
     args = parse_args()
     commit, built_at = resolve_build_metadata(args.commit, args.built_at)
-    selected = set(args.target or [item.platform for item in TARGETS])
+    profile = release_profile(args.release_profile) if args.release_profile else None
+    if profile is not None and args.api_base_url is not None:
+        raise ValueError("a fixed release profile does not allow an API base URL override")
+    api_base_url = profile.api_base_url if profile is not None else args.api_base_url
+    if profile is None:
+        reject_unprofiled_protected_origin(api_base_url)
+    if api_base_url:
+        parsed_api = urllib.parse.urlsplit(api_base_url)
+        if (
+            parsed_api.scheme != "https"
+            or not parsed_api.hostname
+            or parsed_api.username
+            or parsed_api.password
+            or parsed_api.path
+            or parsed_api.query
+            or parsed_api.fragment
+            or api_base_url != f"https://{parsed_api.netloc}"
+        ):
+            raise ValueError("API base URL must be an exact HTTPS origin")
+    helper_version = profile.helper_version if profile is not None else HELPER_VERSION
+    targets = helper_targets(helper_version)
+    selected = set(args.target or [item.platform for item in targets])
     summaries = [
-        build_target(go_binary(), item, args.output.resolve(), commit, built_at)
-        for item in TARGETS
+        build_target(
+            go_binary(),
+            item,
+            args.output.resolve(),
+            commit,
+            built_at,
+            api_base_url,
+            helper_version,
+        )
+        for item in targets
         if item.platform in selected
     ]
     summary = {
         "schemaVersion": 1,
+        "releaseProfile": profile.name if profile is not None else "review",
+        "apiBaseURL": api_base_url or "",
         "artifacts": summaries,
     }
     atomic_json(args.output.resolve() / "build-summary.json", summary)

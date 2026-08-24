@@ -1,0 +1,445 @@
+package engine
+
+import (
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
+)
+
+func TestCurrentTemplateScopesArtworkAndDynamicActivityAwayFromNativeUtilitySurfaces(t *testing.T) {
+	tokens := theme.Tokens{
+		BackgroundOverlay: 0.42,
+		SurfaceOpacity:    0.84,
+		SurfaceBlurPx:     20,
+		TextPrimary:       "#FFF5EC",
+		TextSecondary:     "#D9C0AE",
+		Accent:            "#E78A4E",
+		Border:            "#FFD8BF29",
+		RadiusScale:       1,
+	}
+	style, err := compileTemplateV4("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatalf("compileTemplateV2() error = %v", err)
+	}
+	required := []string{
+		`:has(`,
+		`main[data-codex-skin-main="true"] :is(.composer-surface-chrome, .thread-scroll-container)`,
+		`.thread-scroll-container`,
+		`.bg-gradient-to-t.from-token-main-surface-primary`,
+		`[class*="_markdown"]`,
+		`[data-message-author-role]`,
+		`button.group\/activity-header`,
+		`button[class~="group/activity-header"]`,
+		`--cs-activity-contract: 3`,
+		`--cs-diff-resource-contract: 4`,
+		`[--codex-diffs-header-padding-x:var(--thread-resource-card-row-padding-x)]`,
+		`text-shadow: none !important`,
+		`aside.app-shell-left-panel`,
+	}
+	for _, fragment := range required {
+		if !strings.Contains(style, fragment) {
+			t.Fatalf("Template v2 is missing %q", fragment)
+		}
+	}
+	forbidden := []string{
+		`:root[data-codex-skin="active"] main[data-codex-skin-main="true"],
+:root[data-codex-skin="active"] aside.app-shell-left-panel`,
+		`:root[data-codex-skin="active"] main[data-codex-skin-main="true"] [class~="text-token-text-primary"],
+:root[data-codex-skin="active"] main[data-codex-skin-main="true"] [class~="text-token-foreground"]`,
+		`.thread-scroll-container
+  [class~="text-token-text-secondary"]`,
+		`.thread-scroll-container
+  [class~="text-token-text-tertiary"]`,
+		`button.group\/activity-header
+  * {
+  color: var(--cs-text-secondary)`,
+	}
+	for _, fragment := range forbidden {
+		if strings.Contains(style, fragment) {
+			t.Fatalf("Template v2 contains unsafe global selector %q", fragment)
+		}
+	}
+	for _, block := range strings.Split(style, "}") {
+		selector, _, found := strings.Cut(block, "{")
+		if !found || !strings.Contains(selector, `main[data-codex-skin-main="true"]`) {
+			continue
+		}
+		if !strings.Contains(selector, ":has(") {
+			t.Fatalf("main surface rule is not structurally scoped: %q", strings.TrimSpace(selector))
+		}
+	}
+}
+
+func TestTemplateV2RejectsUnreadableThemeTokens(t *testing.T) {
+	tokens := theme.Tokens{
+		TextPrimary:   "#151921",
+		TextSecondary: "#202630",
+		Accent:        "#242A34",
+	}
+	_, err := compileTemplateV4("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if !errors.Is(err, ErrConfiguration) {
+		t.Fatalf("compileTemplateV2() error = %v, want ErrConfiguration", err)
+	}
+}
+
+func TestCurrentTemplateRejectsReadableButWrongModeText(t *testing.T) {
+	testCases := []struct {
+		name   string
+		mode   string
+		tokens theme.Tokens
+	}{
+		{
+			name: "dark theme uses mid-tone text",
+			mode: "dark",
+			tokens: theme.Tokens{
+				TextPrimary: "#B07E55", TextSecondary: "#B58A68", Accent: "#E78A4E",
+			},
+		},
+		{
+			name: "light theme uses mid-tone text",
+			mode: "light",
+			tokens: theme.Tokens{
+				TextPrimary: "#52606F", TextSecondary: "#5F6B78", Accent: "#2E6F9E",
+			},
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			_, err := compileTemplateV4(testCase.mode, testCase.tokens, "14 18 24", "20 24 32", ".18")
+			if !errors.Is(err, ErrConfiguration) {
+				t.Fatalf("compileTemplateV3() error = %v, want ErrConfiguration", err)
+			}
+		})
+	}
+}
+
+func TestTemplateV2AcceptsGoldenThemeContrast(t *testing.T) {
+	testCases := []struct {
+		name       string
+		mode       string
+		tokens     theme.Tokens
+		sidebarRGB string
+		surfaceRGB string
+	}{
+		{
+			name: "ember dune",
+			mode: "dark",
+			tokens: theme.Tokens{
+				TextPrimary: "#FFF5EC", TextSecondary: "#D9C0AE", Accent: "#E78A4E",
+			},
+			sidebarRGB: "14 18 24", surfaceRGB: "20 24 32",
+		},
+		{
+			name: "polar archive",
+			mode: "light",
+			tokens: theme.Tokens{
+				TextPrimary: "#17202B", TextSecondary: "#536273", Accent: "#2E6F9E",
+			},
+			sidebarRGB: "244 248 252", surfaceRGB: "249 252 255",
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			if _, err := compileTemplateV4(
+				testCase.mode,
+				testCase.tokens,
+				testCase.sidebarRGB,
+				testCase.surfaceRGB,
+				".18",
+			); err != nil {
+				t.Fatalf("compileTemplateV2() error = %v", err)
+			}
+		})
+	}
+}
+
+func TestCurrentTemplateKeepsExactTemplateV4MigrationStyle(t *testing.T) {
+	tokens := theme.Tokens{
+		TextPrimary: "#FFF5EC", TextSecondary: "#D9C0AE", Accent: "#E78A4E",
+	}
+	previous, err := compileTemplateV4("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := compileTemplateV5("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous == current {
+		t.Fatal("current template unexpectedly equals Template v4")
+	}
+	if !strings.Contains(previous, "--cs-activity-contract: 3") ||
+		!strings.Contains(previous, "color: var(--cs-text-primary) !important") {
+		t.Fatal("Template v4 migration style changed unexpectedly")
+	}
+	if !strings.Contains(current, "--cs-diff-resource-contract: 4") ||
+		!strings.Contains(current, "[--codex-diffs-header-padding-x:var(--thread-resource-card-row-padding-x)]") ||
+		!strings.Contains(current, "text-shadow: none !important") {
+		t.Fatal("current diff resource contrast contract is incomplete")
+	}
+}
+
+func TestCurrentTemplateBridgesNativeDropdownTokensForBothAppearances(t *testing.T) {
+	testCases := []struct {
+		mode        string
+		tokens      theme.Tokens
+		sidebarRGB  string
+		surfaceRGB  string
+		colorScheme string
+	}{
+		{
+			mode: "dark",
+			tokens: theme.Tokens{
+				TextPrimary: "#FFF5EC", TextSecondary: "#D9C0AE", Accent: "#E78A4E",
+			},
+			sidebarRGB: "14 18 24", surfaceRGB: "20 24 32", colorScheme: "dark",
+		},
+		{
+			mode: "light",
+			tokens: theme.Tokens{
+				TextPrimary: "#17202B", TextSecondary: "#536273", Accent: "#2E6F9E",
+			},
+			sidebarRGB: "244 248 252", surfaceRGB: "249 252 255", colorScheme: "light",
+		},
+	}
+	for _, testCase := range testCases {
+		t.Run(testCase.mode, func(t *testing.T) {
+			style, err := compileTemplateV5(
+				testCase.mode, testCase.tokens, testCase.sidebarRGB, testCase.surfaceRGB, ".18",
+			)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, fragment := range []string{
+				`--cs-native-token-contract: 5`,
+				`--color-token-dropdown-background: rgb(var(--cs-surface-rgb) / .98)`,
+				`--color-token-foreground: var(--cs-text-primary)`,
+				`--color-token-text-secondary: var(--cs-text-secondary)`,
+				`--color-token-border-default: var(--cs-border)`,
+				`[class~="bg-token-dropdown-background"]`,
+				`color-scheme: ` + testCase.colorScheme,
+			} {
+				if !strings.Contains(style, fragment) {
+					t.Fatalf("Template v5 %s is missing %q", testCase.mode, fragment)
+				}
+			}
+		})
+	}
+}
+
+func TestCurrentTemplateNeutralizesStableAndModuleTopFades(t *testing.T) {
+	tokens := theme.Tokens{
+		TextPrimary: "#FFF5EC", TextSecondary: "#D9C0AE", Accent: "#E78A4E",
+	}
+	previous, err := compileTemplateV5("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := compileTemplateV6("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous == current || strings.Contains(previous, `--cs-top-fade-contract: 6`) {
+		t.Fatal("Template v5 migration style was not preserved")
+	}
+	for _, fragment := range []string{
+		`--cs-top-fade-contract: 6`,
+		`.app-shell-main-content-top-fade`,
+		`[class*="_MainContentTopFade_"]`,
+		`display: none !important`,
+	} {
+		if !strings.Contains(current, fragment) {
+			t.Fatalf("Template v6 is missing %q", fragment)
+		}
+	}
+}
+
+func TestCurrentTemplateUsesStableAndModuleShellEdges(t *testing.T) {
+	tokens := theme.Tokens{
+		TextPrimary: "#FFF5EC", TextSecondary: "#D9C0AE", Accent: "#E78A4E",
+	}
+	previous, err := compileTemplateV6("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := compileTemplateV7("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous == current || strings.Contains(previous, `--cs-shell-edge-contract: 7`) {
+		t.Fatal("Template v6 migration style was not preserved")
+	}
+	for _, fragment := range []string{
+		`--cs-shell-edge-contract: 7`,
+		`[data-app-shell-header-edge-scroll]`,
+		`[class*="_Header_"]`,
+		`[data-app-shell-main-content-top-fade]`,
+		`[class*="_MainContentTopFade_"]`,
+	} {
+		if !strings.Contains(current, fragment) {
+			t.Fatalf("Template v7 is missing %q", fragment)
+		}
+	}
+}
+
+func TestCurrentTemplateKeepsTaskRouteFallbackWithinTheSignedScopeContract(t *testing.T) {
+	tokens := theme.Tokens{
+		TextPrimary: "#FFF5EC", TextSecondary: "#D9C0AE", Accent: "#E78A4E",
+	}
+	previous, err := compileTemplateV8("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := compileTemplateV9("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous == current || strings.Contains(previous, `--cs-scope-contract: 9`) {
+		t.Fatal("Template v8 migration style was not preserved")
+	}
+	for _, fragment := range []string{
+		`--cs-scope-contract: 9`,
+		`non-Home, non-Settings shell as a task route`,
+		`data-codex-skin-scope="home"`,
+		`data-codex-skin-scope="thread"`,
+		`border-inline-start: 0 !important`,
+		`[data-app-shell-main-content-top-fade]`,
+	} {
+		if !strings.Contains(current, fragment) {
+			t.Fatalf("Template v8 is missing %q", fragment)
+		}
+	}
+}
+
+func TestCurrentTemplateRepairsCurrentWorkspaceWithoutLegacyThreadContainer(t *testing.T) {
+	tokens := theme.Tokens{
+		TextPrimary: "#FFF5EC", TextSecondary: "#D9C0AE", Accent: "#E78A4E",
+	}
+	previous, err := compileTemplateV9("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := compileTemplateV10("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous == current || strings.Contains(previous, `--cs-workspace-contract: 10`) {
+		t.Fatal("Template v10 workspace repair was not added")
+	}
+	for _, fragment := range []string{
+		`--cs-workspace-contract: 10`,
+		`--color-background-primary`,
+		`--color-token-main-surface-primary`,
+		`_ComposerLayoutRoot_`,
+		`[class~="text-default"]`,
+		`[class~="text-token-text-primary"]`,
+		`[class*="_MainContentBottomFade_"]`,
+		`.bg-gradient-to-t.from-token-main-surface-primary`,
+	} {
+		if !strings.Contains(current, fragment) {
+			t.Fatalf("Template v10 is missing %q", fragment)
+		}
+	}
+}
+
+func TestCurrentTemplateScopesCurrentTokensAndConversationTextAwayFromNativeUtilities(t *testing.T) {
+	tokens := theme.Tokens{
+		TextPrimary: "#FFF5EC", TextSecondary: "#D9C0AE", Accent: "#E78A4E",
+	}
+	previous, err := compileTemplateV10("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := compileTemplateV11("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous == current || strings.Contains(previous, `--cs-workspace-contract: 11`) {
+		t.Fatal("Template v11 scoped workspace repair was not added")
+	}
+	for _, fragment := range []string{
+		`--cs-scope-contract: 11`,
+		`--cs-workspace-contract: 11`,
+		`Scoped workspace contract v11`,
+		`native utility routes, output side panels and overlays`,
+		`App token names are never reassigned here`,
+		`[contenteditable="true"]`,
+		`caret-color: var(--cs-text-primary) !important`,
+		`data-local-conversation-final-assistant`,
+		`[class~="text-token-conversation-body"]`,
+		`[class*="_ComposerLayoutBody_"]`,
+		`[class*="_ComposerHomeUtilityBar_"]`,
+		`[class*="_RichTextInput_"]`,
+		`.ProseMirror p.is-editor-empty:first-child::before`,
+		`[class*="_MainContentBottomFade_"]`,
+	} {
+		if !strings.Contains(current, fragment) {
+			t.Fatalf("Template v11 is missing %q", fragment)
+		}
+	}
+	for _, forbidden := range []string{
+		`--color-background-primary`,
+		`--color-text-primary`,
+		`--color-token-main-surface-primary`,
+		`:root[data-codex-skin="active"] {\n  color-scheme:`,
+		`[class~="text-default"],\n    [class~="text-token-conversation-body"],`,
+	} {
+		if strings.Contains(current, forbidden) {
+			t.Fatalf("Template v11 still leaks a workspace token into native UI: %q", forbidden)
+		}
+	}
+}
+
+func TestTemplateV12GatesArtworkAndComposerToTheLiveConversationWorkspace(t *testing.T) {
+	tokens := theme.Tokens{
+		TextPrimary: "#FFF5EC", TextSecondary: "#D9C0AE", Accent: "#E78A4E",
+	}
+	previous, err := compileTemplateV11("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	current, err := compileTemplateV12("dark", tokens, "14 18 24", "20 24 32", ".18")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if previous == current || strings.Contains(previous, `--cs-workspace-contract: 12`) {
+		t.Fatal("Template v12 focused conversation repair was not added")
+	}
+	for _, fragment := range []string{
+		`--cs-scope-contract: 12`,
+		`--cs-workspace-contract: 12`,
+		`Focused conversation contract v12`,
+		`Sites, Scheduled`,
+		`main[data-codex-skin-main="true"][data-codex-skin-scope="thread"]`,
+		`data-codex-skin-composer`,
+		`data-codex-skin-composer-boundary`,
+		`[class*="_MainContentBottomFade_"]`,
+		`[class~="from-surface"][class~="via-surface"]`,
+		`#appgen-site-search`,
+		`main[data-codex-skin-main="true"]:not(:has(`,
+		`background-color: var(--color-surface) !important`,
+		`background-image: none !important`,
+	} {
+		if !strings.Contains(current, fragment) {
+			t.Fatalf("Template v12 is missing %q", fragment)
+		}
+	}
+	active := strings.SplitN(current, "/* V11 source is retained", 2)[0]
+	for _, forbidden := range []string{
+		`:root[data-codex-skin="active"] body {`,
+		`--color-background-primary`,
+		`--color-text-primary`,
+		`--color-token-main-surface-primary`,
+		`:root[data-codex-skin="active"]:has(`,
+		`:has(
+      main`,
+		`) main[data-codex-skin-main="true"] {`,
+		`:root[data-codex-skin="active"] .composer-surface-chrome`,
+	} {
+		if strings.Contains(active, forbidden) {
+			t.Fatalf("Template v12 leaks into a native surface: %q", forbidden)
+		}
+	}
+}

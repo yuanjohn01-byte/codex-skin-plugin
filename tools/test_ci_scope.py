@@ -144,6 +144,8 @@ def main() -> int:
         "internal/bootstrap/bootstrap.go",
         "contracts/helper-protocol-v1.schema.json",
         "tools/build_helper.py",
+        "tools/release_profiles.py",
+        "tools/test_release_profiles.py",
     ):
         selection = select_ci([go_path], "pull_request")
         assert selection.ci_profile == "standard"
@@ -182,6 +184,7 @@ def main() -> int:
         "go.mod",
         "go.sum",
         "internal/adapter/live.go",
+        "internal/appearance/config.go",
         "internal/cdp/client.go",
         "internal/codex/identity_windows.go",
         "internal/engine/engine.go",

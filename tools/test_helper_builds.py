@@ -16,7 +16,14 @@ BUILDER = ROOT / "tools" / "build_helper.py"
 
 def build(output: Path) -> dict[str, object]:
     result = subprocess.run(
-        [sys.executable, str(BUILDER), "--output", str(output)],
+        [
+            sys.executable,
+            str(BUILDER),
+            "--output",
+            str(output),
+            "--release-profile",
+            "production",
+        ],
         cwd=ROOT,
         check=False,
         capture_output=True,
@@ -36,6 +43,11 @@ def main() -> int:
             raise AssertionError("repeated Helper builds produced different summaries")
 
         artifacts = first.get("artifacts")
+        if (
+            first.get("releaseProfile") != "production"
+            or first.get("apiBaseURL") != "https://codexskin.ai"
+        ):
+            raise AssertionError("Helper build did not use the fixed Production profile")
         if not isinstance(artifacts, list) or len(artifacts) != 3:
             raise AssertionError("expected exactly three Helper test artifacts")
         platforms = {item.get("platform") for item in artifacts if isinstance(item, dict)}
@@ -43,8 +55,22 @@ def main() -> int:
             raise AssertionError(f"unexpected Helper target set: {platforms}")
         if any(item.get("cgoEnabled") is not False for item in artifacts if isinstance(item, dict)):
             raise AssertionError("Helper test artifacts must use CGO_ENABLED=0")
+        if any(
+            item.get("helperVersion") != "0.1.0-paid-alpha.17"
+            for item in artifacts
+            if isinstance(item, dict)
+        ):
+            raise AssertionError("Helper test artifacts did not use immutable Production version .17")
+        if any(
+            item.get("helperReleaseTag") != "helper-v0.1.0-paid-alpha.17"
+            for item in artifacts
+            if isinstance(item, dict)
+        ):
+            raise AssertionError("Helper test artifacts did not bind the Production release tag")
 
-    print("Helper cross-build tests passed (3 targets, repeatable SHA-256 and validated formats).")
+    print(
+        "Production Helper cross-build tests passed (fixed origin/version; 3 targets; repeatable SHA-256 and formats)."
+    )
     return 0
 
 

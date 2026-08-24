@@ -1,4 +1,5 @@
 # Scripts
 
-Bootstrap and Helper wrapper scripts are added after the runtime, signing and recovery Spikes. Users must not be required to install Node.
+For `theme apply`, the platform wrappers first obtain only the release-tagged Bootstrap launcher whose release profile, non-executable API host provenance, platform filename, and SHA-256 are generated into `bootstrap-pins.sh` / `bootstrap-pins.ps1`. The profile fields must match one fixed Staging or Production version/origin set; they are provenance checks and do not let the wrapper choose a server. The launcher uses the embedded Helper release public key and fixed GitHub Release origin to verify the canonical descriptor, detached Ed25519 signature, platform, size, artifact SHA-256, downgrade rule, and fixed `version` / `doctor` self-tests before installing the Helper outside the replaceable Plugin cache.
 
+After bootstrap, all commands invoke only the verified Helper copy under Codex Skin's fixed recovery engine path. `theme launch` (with `theme continue` retained only as a compatibility alias), `status`, and `theme restore` never download a launcher or Helper; offline Restore remains independent of the Plugin cache. Missing, symlinked, or hash-mismatched launchers and Helpers fail closed. Users do not need Node, Python, or Go.

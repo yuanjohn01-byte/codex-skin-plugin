@@ -30,10 +30,20 @@ FIXTURE_PATHS = {
     "tools/validate_public_repo.py",
 }
 HELPER_TOOL_PATHS = {
+    "tools/attest_installation.py",
+    "tools/build_bootstrap.py",
     "tools/build_helper.py",
     "tools/create_release_descriptor.py",
+    "tools/create_sbom.py",
+    "tools/release_profiles.py",
+    "tools/render_bootstrap_pins.py",
+    "tools/test_bootstrap_builds.py",
+    "tools/test_create_sbom.py",
     "tools/test_helper_builds.py",
+    "tools/test_installation_attestation.py",
+    "tools/test_plugin_bootstrap_entry.py",
     "tools/test_release_descriptor.py",
+    "tools/test_release_profiles.py",
 }
 GUARDIAN_TOOL_PATHS = {
     "tools/build_guardian.py",
@@ -143,6 +153,7 @@ def _component_for_path(path: str) -> set[str] | None:
     if path.startswith(
         (
             "internal/adapter/",
+            "internal/appearance/",
             "internal/cdp/",
             "internal/codex/",
             "internal/engine/",

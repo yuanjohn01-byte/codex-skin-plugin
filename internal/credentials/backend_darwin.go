@@ -7,7 +7,6 @@ import (
 	"context"
 	"errors"
 	"os/exec"
-	"strings"
 )
 
 const securityBinary = "/usr/bin/security"
@@ -25,38 +24,14 @@ func newDarwinBackend(keychain string) backend {
 }
 
 func (backend *darwinBackend) put(ctx context.Context, deviceID string, secret []byte) error {
-	if backend.keychain != "" {
-		return backend.putInExplicitKeychain(ctx, deviceID, secret)
-	}
-	arguments := []string{
-		"add-generic-password",
-		"-a", deviceID,
-		"-s", keychainService,
-		"-U",
-	}
-	arguments = append(arguments, "-w")
-	payload := make([]byte, len(secret)+1)
-	copy(payload, secret)
-	payload[len(payload)-1] = '\n'
-	defer zeroBytes(payload)
-	command := exec.CommandContext(ctx, securityBinary, arguments...)
-	command.Stdin = bytes.NewReader(payload)
-	if err := command.Run(); err != nil {
-		return commandError(ctx, err)
-	}
-	return nil
-}
-
-func (backend *darwinBackend) putInExplicitKeychain(ctx context.Context, deviceID string, secret []byte) error {
-	if strings.ContainsAny(backend.keychain, " \t\r\n\"'\\") {
-		return ErrUnavailable
-	}
 	prefix := []byte("add-generic-password -a " + deviceID + " -s " + keychainService + " -U -w ")
-	payload := make([]byte, 0, len(prefix)+len(secret)+len(backend.keychain)+3)
+	payload := make([]byte, 0, len(prefix)+len(secret)+len(backend.keychain)+8)
 	payload = append(payload, prefix...)
-	payload = append(payload, secret...)
-	payload = append(payload, ' ')
-	payload = append(payload, backend.keychain...)
+	payload = appendSecurityQuoted(payload, secret)
+	if backend.keychain != "" {
+		payload = append(payload, ' ')
+		payload = appendSecurityQuoted(payload, []byte(backend.keychain))
+	}
 	payload = append(payload, '\n')
 	defer zeroBytes(payload)
 	command := exec.CommandContext(ctx, securityBinary, "-i")
@@ -65,6 +40,17 @@ func (backend *darwinBackend) putInExplicitKeychain(ctx context.Context, deviceI
 		return commandError(ctx, err)
 	}
 	return nil
+}
+
+func appendSecurityQuoted(destination, value []byte) []byte {
+	destination = append(destination, '"')
+	for _, character := range value {
+		if character == '\\' || character == '"' {
+			destination = append(destination, '\\')
+		}
+		destination = append(destination, character)
+	}
+	return append(destination, '"')
 }
 
 func (backend *darwinBackend) get(ctx context.Context, deviceID string) ([]byte, error) {

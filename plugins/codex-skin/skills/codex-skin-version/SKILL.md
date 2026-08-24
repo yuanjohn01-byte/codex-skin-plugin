@@ -1,18 +1,17 @@
 ---
 name: codex-skin-version
-description: Report the installed Codex Skin v0.0.2 pre-release Plugin version and verify that its read-only test Skill loaded after installation or upgrade. Use for Codex Skin distribution checks only; this build cannot apply themes.
+description: Report the installed Codex Skin v0.1.0-paid-alpha Plugin candidate and its supported theme-flow commands. Use for Codex Skin installation or upgrade checks.
 ---
 
-# Codex Skin installation check
+# Codex Skin version check
 
 When invoked:
 
-1. After the host loads this `SKILL.md`, do not call any additional tools, execute commands, access the network, or modify files or settings.
+1. After the host loads this `SKILL.md`, do not execute commands, access the network, or modify files or settings.
 2. Return these facts clearly:
-   - Codex Skin test Plugin is installed.
-   - Plugin version: `0.0.2`.
+   - Codex Skin Paid Alpha Plugin candidate is installed.
+   - Plugin version: `0.1.0-paid-alpha`.
    - Skill: `codex-skin-version`.
-   - Build status: pre-release distribution spike.
-   - Upgrade target: replaces the v0.0.1 distribution-spike bundle.
-   - Theme operations are not available in this test build.
-3. If the user asks for installation troubleshooting beyond these facts, explain that clean-profile platform verification is still pending and point them to the Public repository README.
+   - Theme operations: `theme apply`, `theme restore`, and `status`.
+   - Release status: code-stage candidate; not a Production release until the documented signing, Helper Release, API deployment, and dual-platform gates pass.
+3. If the user asks to apply, restore, or inspect status, use the dedicated Codex Skin Skill instead of running an unreviewed command.

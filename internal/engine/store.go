@@ -28,24 +28,60 @@ var (
 	storedThemePublicID = regexp.MustCompile(`^[0-9]{6}$`)
 	storedThemeVersion  = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-[0-9A-Za-z.-]+)?$`)
 	storedDigest        = regexp.MustCompile(`^[0-9a-f]{64}$`)
+	journalStage        = regexp.MustCompile(`^[a-z][a-z0-9_]{2,63}$`)
+	journalStatus       = regexp.MustCompile(`^[a-z][a-z0-9_]{2,63}$`)
+	journalErrorCode    = regexp.MustCompile(`^CS-[A-Z0-9-]{3,72}$`)
 )
+
+const maxJournalTraceEntries = 16
 
 type Store struct {
 	root string
 }
 
 type Journal struct {
-	SchemaVersion int    `json:"schemaVersion"`
-	OperationID   string `json:"operationId"`
-	Kind          string `json:"kind"`
-	Stage         string `json:"stage"`
-	Status        string `json:"status"`
-	ThemePublicID string `json:"themePublicId,omitempty"`
-	ThemeVersion  string `json:"themeVersion,omitempty"`
-	StartedAt     string `json:"startedAt"`
-	UpdatedAt     string `json:"updatedAt"`
-	ErrorCode     string `json:"errorCode,omitempty"`
-	RecoveryID    string `json:"recoveryId,omitempty"`
+	SchemaVersion    int                  `json:"schemaVersion"`
+	OperationID      string               `json:"operationId"`
+	Kind             string               `json:"kind"`
+	Stage            string               `json:"stage"`
+	Status           string               `json:"status"`
+	ThemePublicID    string               `json:"themePublicId,omitempty"`
+	ThemeVersion     string               `json:"themeVersion,omitempty"`
+	StartedAt        string               `json:"startedAt"`
+	UpdatedAt        string               `json:"updatedAt"`
+	ErrorCode        string               `json:"errorCode,omitempty"`
+	InterruptedStage string               `json:"interruptedStage,omitempty"`
+	RecoveryID       string               `json:"recoveryId,omitempty"`
+	Verification     *VerificationSummary `json:"verification,omitempty"`
+	Trace            []JournalTraceEntry  `json:"trace,omitempty"`
+}
+
+// JournalTraceEntry contains only the finite operation state machine values.
+// It deliberately excludes commands, paths, process IDs, renderer data, and
+// user content. This lets a local repair preserve the meaningful failure stage
+// even when a later Restore creates its own restart transaction.
+type JournalTraceEntry struct {
+	At        string `json:"at"`
+	Stage     string `json:"stage"`
+	Status    string `json:"status"`
+	ErrorCode string `json:"errorCode,omitempty"`
+}
+
+// VerificationSummary is the durable, redacted explanation for an apply
+// verification result. It stores only allowlisted contract booleans and region
+// statuses so diagnostics can distinguish a timing failure from a bad package
+// without retaining a user's Codex content or raw renderer data.
+type VerificationSummary struct {
+	Attempts         int                     `json:"attempts"`
+	ReapplyAttempted bool                    `json:"reapplyAttempted"`
+	ProbeCompleted   bool                    `json:"probeCompleted"`
+	Scope            string                  `json:"scope,omitempty"`
+	RuntimeVersion   int                     `json:"runtimeVersion,omitempty"`
+	StyleMarkerCount int                     `json:"styleMarkerCount"`
+	TemplateVersion  int                     `json:"templateVersion"`
+	ThemePublicID    string                  `json:"themePublicId,omitempty"`
+	BackgroundLoaded bool                    `json:"backgroundLoaded"`
+	Regions          map[string]RegionStatus `json:"regions,omitempty"`
 }
 
 type RecoveryPoint struct {
@@ -57,6 +93,7 @@ type RecoveryPoint struct {
 	ThemePublicID      string        `json:"themePublicId,omitempty"`
 	ThemeVersion       string        `json:"themeVersion,omitempty"`
 	TemplateVersion    int           `json:"templateVersion,omitempty"`
+	AppearanceMode     string        `json:"appearanceMode,omitempty"`
 	StyleByteSize      int           `json:"styleByteSize,omitempty"`
 	StyleSHA256        string        `json:"styleSha256,omitempty"`
 	BackgroundByteSize int           `json:"backgroundByteSize,omitempty"`
@@ -155,7 +192,25 @@ func (store *Store) WriteJournal(journal Journal) error {
 	if !safeIdentifier(journal.OperationID, "op_") {
 		return fmt.Errorf("%w: invalid operation id", ErrStateUnsafe)
 	}
-	return writeJSONAtomic(filepath.Join(store.root, "state", "operations", journal.OperationID+".json"), journal)
+	path := filepath.Join(store.root, "state", "operations", journal.OperationID+".json")
+	var previous Journal
+	found, err := readJSON(path, &previous)
+	if err != nil {
+		return err
+	}
+	if found && !validJournal(previous) {
+		return fmt.Errorf("%w: invalid prior operation journal", ErrStateUnsafe)
+	}
+	if found && len(journal.Trace) == 0 {
+		journal.Trace = append([]JournalTraceEntry(nil), previous.Trace...)
+	}
+	journal.Trace = appendJournalTrace(journal.Trace, JournalTraceEntry{
+		At: journal.UpdatedAt, Stage: journal.Stage, Status: journal.Status, ErrorCode: journal.ErrorCode,
+	})
+	if !validJournal(journal) {
+		return fmt.Errorf("%w: invalid operation journal", ErrStateUnsafe)
+	}
+	return writeJSONAtomic(path, journal)
 }
 
 func (store *Store) RunningJournals() ([]Journal, error) {
@@ -175,9 +230,7 @@ func (store *Store) RunningJournals() ([]Journal, error) {
 		if err != nil {
 			return nil, err
 		}
-		if !found || journal.SchemaVersion != StateSchemaVersion ||
-			!safeIdentifier(journal.OperationID, "op_") ||
-			entry.Name() != journal.OperationID+".json" {
+		if !found || !validJournal(journal) || entry.Name() != journal.OperationID+".json" {
 			return nil, fmt.Errorf("%w: operation journal identity", ErrStateUnsafe)
 		}
 		if journal.Status == "running" {
@@ -191,6 +244,42 @@ func (store *Store) RunningJournals() ([]Journal, error) {
 		return journals[left].StartedAt < journals[right].StartedAt
 	})
 	return journals, nil
+}
+
+func appendJournalTrace(trace []JournalTraceEntry, entry JournalTraceEntry) []JournalTraceEntry {
+	if len(trace) > 0 {
+		last := trace[len(trace)-1]
+		if last.Stage == entry.Stage && last.Status == entry.Status && last.ErrorCode == entry.ErrorCode {
+			return trace
+		}
+	}
+	trace = append(trace, entry)
+	if len(trace) > maxJournalTraceEntries {
+		trace = append([]JournalTraceEntry(nil), trace[len(trace)-maxJournalTraceEntries:]...)
+	}
+	return trace
+}
+
+func validJournal(journal Journal) bool {
+	if journal.SchemaVersion != StateSchemaVersion ||
+		!safeIdentifier(journal.OperationID, "op_") ||
+		!journalStage.MatchString(journal.Stage) ||
+		!journalStatus.MatchString(journal.Status) ||
+		(journal.ErrorCode != "" && !journalErrorCode.MatchString(journal.ErrorCode)) ||
+		(journal.InterruptedStage != "" && !journalStage.MatchString(journal.InterruptedStage)) ||
+		(journal.Verification != nil && !validVerificationSummary(*journal.Verification)) ||
+		len(journal.Trace) > maxJournalTraceEntries {
+		return false
+	}
+	for _, entry := range journal.Trace {
+		if _, err := time.Parse(time.RFC3339, entry.At); err != nil ||
+			!journalStage.MatchString(entry.Stage) ||
+			!journalStatus.MatchString(entry.Status) ||
+			(entry.ErrorCode != "" && !journalErrorCode.MatchString(entry.ErrorCode)) {
+			return false
+		}
+	}
+	return true
 }
 
 func (store *Store) WriteRecoveryPoint(point RecoveryPoint, snapshot Snapshot) error {
@@ -223,6 +312,7 @@ func (store *Store) WriteRecoveryPoint(point RecoveryPoint, snapshot Snapshot) e
 		point.ThemePublicID = snapshot.ThemePublicID
 		point.ThemeVersion = snapshot.ThemeVersion
 		point.TemplateVersion = snapshot.TemplateVersion
+		point.AppearanceMode = snapshot.AppearanceMode
 		point.StyleByteSize = len(style)
 		point.StyleSHA256 = digestBytes(style)
 		point.BackgroundByteSize = len(background)
@@ -286,7 +376,7 @@ func (store *Store) ReadRecoveryPoint(recoveryID string) (RecoveryPoint, Snapsho
 	snapshot := Snapshot{
 		StylePresent: true, StyleText: string(style), BackgroundDataURL: string(background),
 		ThemePublicID: point.ThemePublicID, ThemeVersion: point.ThemeVersion,
-		TemplateVersion: point.TemplateVersion,
+		TemplateVersion: point.TemplateVersion, AppearanceMode: point.AppearanceMode,
 	}
 	if !validSnapshot(snapshot) {
 		return RecoveryPoint{}, Snapshot{}, fmt.Errorf("%w: invalid recovery snapshot", ErrStateUnsafe)
@@ -389,15 +479,88 @@ func validDesired(desired DesiredTheme) bool {
 	return storedThemePublicID.MatchString(desired.ThemePublicID) &&
 		storedThemeVersion.MatchString(desired.ThemeVersion) &&
 		storedDigest.MatchString(desired.PackageSHA256) &&
-		desired.TemplateVersion == TemplateVersion &&
+		supportedTemplateVersion(desired.TemplateVersion) &&
 		desired.AppliedAt != ""
+}
+
+var verificationRegionNames = []string{
+	"home", "shellMain", "mainBoundary", "sidebar", "headerTint", "composer",
+	"composerUtilityBar", "topFade", "bottomFade", "templateScope", "themeContrast",
+	"conversationActivity", "conversationDiffResource", "suggestionCards", "projectPicker",
+}
+
+func verificationSummary(result ThemeVerificationResult) *VerificationSummary {
+	if result.Attempts < 1 || result.Attempts > 128 {
+		return nil
+	}
+	summary := &VerificationSummary{
+		Attempts:         result.Attempts,
+		ReapplyAttempted: result.ReapplyAttempted,
+		ProbeCompleted:   result.ProbeCompleted,
+		RuntimeVersion:   result.Report.RuntimeVersion,
+		StyleMarkerCount: result.Report.StyleMarkerCount,
+		TemplateVersion:  result.Report.TemplateVersion,
+		BackgroundLoaded: result.Report.BackgroundLoaded,
+		Regions:          map[string]RegionStatus{},
+	}
+	if result.Report.Scope == "home" || result.Report.Scope == "thread" ||
+		result.Report.Scope == "shell" || result.Report.Scope == "settings" {
+		summary.Scope = result.Report.Scope
+	}
+	if storedThemePublicID.MatchString(result.Report.ThemePublicID) {
+		summary.ThemePublicID = result.Report.ThemePublicID
+	}
+	for _, name := range verificationRegionNames {
+		status := result.Report.Regions[name]
+		if status == RegionPass || status == RegionFail || status == RegionNotPresent {
+			summary.Regions[name] = status
+		}
+	}
+	if len(summary.Regions) == 0 {
+		summary.Regions = nil
+	}
+	if !validVerificationSummary(*summary) {
+		return nil
+	}
+	return summary
+}
+
+func validVerificationSummary(summary VerificationSummary) bool {
+	if summary.Attempts < 1 || summary.Attempts > 128 ||
+		summary.RuntimeVersion < 0 || summary.RuntimeVersion > 64 ||
+		summary.StyleMarkerCount < 0 || summary.StyleMarkerCount > 8 ||
+		summary.TemplateVersion < 0 || summary.TemplateVersion > TemplateVersion ||
+		(summary.ThemePublicID != "" && !storedThemePublicID.MatchString(summary.ThemePublicID)) {
+		return false
+	}
+	if summary.Scope != "" && summary.Scope != "home" && summary.Scope != "thread" &&
+		summary.Scope != "shell" && summary.Scope != "settings" {
+		return false
+	}
+	if len(summary.Regions) > len(verificationRegionNames) {
+		return false
+	}
+	for name, status := range summary.Regions {
+		known := false
+		for _, allowed := range verificationRegionNames {
+			if name == allowed {
+				known = true
+				break
+			}
+		}
+		if !known || (status != RegionPass && status != RegionFail && status != RegionNotPresent) {
+			return false
+		}
+	}
+	return true
 }
 
 func validSnapshot(snapshot Snapshot) bool {
 	return snapshot.StylePresent &&
 		storedThemePublicID.MatchString(snapshot.ThemePublicID) &&
 		storedThemeVersion.MatchString(snapshot.ThemeVersion) &&
-		snapshot.TemplateVersion == TemplateVersion &&
+		supportedTemplateVersion(snapshot.TemplateVersion) &&
+		(snapshot.AppearanceMode == "dark" || snapshot.AppearanceMode == "light") &&
 		len(snapshot.StyleText) > 0 &&
 		len(snapshot.StyleText) <= maxRecoveryStyleBytes &&
 		len(snapshot.BackgroundDataURL) > 0 &&
@@ -405,6 +568,10 @@ func validSnapshot(snapshot Snapshot) bool {
 		(strings.HasPrefix(snapshot.BackgroundDataURL, "data:image/png;base64,") ||
 			strings.HasPrefix(snapshot.BackgroundDataURL, "data:image/jpeg;base64,") ||
 			strings.HasPrefix(snapshot.BackgroundDataURL, "data:image/webp;base64,"))
+}
+
+func supportedTemplateVersion(version int) bool {
+	return version >= MinimumTemplateVersion && version <= TemplateVersion
 }
 
 func digestBytes(content []byte) string {

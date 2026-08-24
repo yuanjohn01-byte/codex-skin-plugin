@@ -14,7 +14,19 @@ import (
 
 var themePublicIDPattern = regexp.MustCompile(`^[0-9]{6}$`)
 
-const rollbackTimeout = 20 * time.Second
+const (
+	rollbackTimeout   = 20 * time.Second
+	operationLockWait = 5 * time.Second
+	operationLockPoll = 25 * time.Millisecond
+
+	// legacyV8VerificationMigrationCode records a narrowly-scoped transition
+	// from the superseded Template v8 verifier. That verifier could leave a
+	// journal in "running/verify" after its bounded checks had already failed.
+	// It is not a live mutation transaction, so a current Helper must not keep
+	// reopening Codex solely to repeat the old rollback path before it can
+	// apply a current template.
+	legacyV8VerificationMigrationCode = "CS-LEGACY-MIGRATED-001"
+)
 
 type Engine struct {
 	store   *Store
@@ -35,7 +47,7 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 		verified.PackageSHA256 == "" {
 		return ApplyResult{}, ErrConfiguration
 	}
-	unlock, err := engine.store.Lock()
+	unlock, err := acquireOperationLock(ctx, engine.store)
 	if err != nil {
 		return ApplyResult{}, err
 	}
@@ -81,42 +93,17 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 	if err != nil {
 		return ApplyResult{}, engine.failJournal(journal, "CS-THEME-COMPILE-001", err)
 	}
-
-	session, err := engine.adapter.OpenVerifiedSession(ctx)
+	previousCompiled, previousDesiredPointer, err := engine.loadDesiredCompiled()
 	if err != nil {
-		return ApplyResult{}, engine.failJournal(journal, "CS-CODEX-IDENTITY-001", err)
-	}
-	defer engine.adapter.Close(ctx, session)
-	if err := engine.primeDesiredSession(ctx, session); err != nil {
 		return ApplyResult{}, engine.failJournal(journal, "CS-CACHE-VERIFY-001", err)
 	}
-	probe, err := engine.adapter.Probe(ctx, session)
-	if err != nil || !capabilitiesAllowApply(probe) {
-		if err == nil {
-			err = ErrCapabilityBlocked
-		}
-		return ApplyResult{}, engine.failJournal(journal, "CS-COMPAT-001", err)
-	}
-
-	journal.Stage = "backup"
-	if err := engine.store.WriteJournal(journal); err != nil {
-		return ApplyResult{}, err
-	}
-	before, err := engine.adapter.Capture(ctx, session)
-	if err != nil {
-		return ApplyResult{}, engine.failJournal(journal, "CS-BACKUP-001", err)
+	before := Snapshot{}
+	if previousCompiled != nil {
+		before = snapshotFromCompiled(*previousCompiled)
 	}
 	recoveryID, err := engine.store.NewRecoveryID()
 	if err != nil {
 		return ApplyResult{}, engine.failJournal(journal, "CS-STATE-001", err)
-	}
-	previousDesired, previousDesiredFound, err := engine.store.ReadDesired()
-	if err != nil {
-		return ApplyResult{}, engine.failJournal(journal, "CS-BACKUP-001", err)
-	}
-	var previousDesiredPointer *DesiredTheme
-	if previousDesiredFound {
-		previousDesiredPointer = &previousDesired
 	}
 	recovery := RecoveryPoint{
 		RecoveryID:      recoveryID,
@@ -131,10 +118,30 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 		return ApplyResult{}, engine.failJournal(journal, "CS-BACKUP-001", err)
 	}
 	journal.RecoveryID = recoveryID
+	journal.Stage = "prepare"
 	if err := engine.store.WriteJournal(journal); err != nil {
 		return ApplyResult{}, err
 	}
 
+	session, err := engine.openThemeSession(ctx, compiled, previousCompiled)
+	if err != nil {
+		// A live adapter returns ErrRestartConsent before it changes the native
+		// appearance, stops Codex, opens a controlled listener, or touches the
+		// renderer. Keeping that pre-consent journal recoverable would make the
+		// continuation launch a throwaway Codex solely to "restore" an interface
+		// that was never mutated, followed by the real apply restart.
+		if errors.Is(err, ErrRestartConsent) {
+			// Restart consent is an expected, pre-mutation pause. It is neither an
+			// identity failure nor a recoverable renderer mutation; restartflow
+			// owns the continuation request that follows.
+			journal.Stage = "restart_confirmation"
+			journal.Status = "pending_confirmation"
+			journal.ErrorCode = ""
+			return ApplyResult{}, errors.Join(err, engine.store.WriteJournal(journal))
+		}
+		return ApplyResult{}, engine.failRecoverableJournal(journal, "CS-CODEX-IDENTITY-001", err)
+	}
+	defer engine.adapter.Close(ctx, session)
 	rollback := func(code string, cause error) error {
 		return engine.failWithRollback(
 			ctx,
@@ -146,10 +153,32 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 			cause,
 		)
 	}
+	if previousCompiled != nil {
+		if err := engine.primeSession(ctx, session, *previousCompiled); err != nil {
+			return ApplyResult{}, rollback("CS-CACHE-VERIFY-001", err)
+		}
+	}
+
+	journal.Stage = "backup"
+	if err := engine.store.WriteJournal(journal); err != nil {
+		return ApplyResult{}, rollback("CS-STATE-001", err)
+	}
+	before, err = engine.adapter.Capture(ctx, session)
+	if err != nil {
+		return ApplyResult{}, rollback("CS-BACKUP-001", err)
+	}
+
+	probe, err := engine.probeCapabilities(ctx, session)
+	if err != nil || !CapabilitiesAllowApply(probe) {
+		if err == nil {
+			err = ErrCapabilityBlocked
+		}
+		return ApplyResult{}, rollback("CS-COMPAT-001", err)
+	}
 
 	journal.Stage = "apply"
 	if err := engine.store.WriteJournal(journal); err != nil {
-		return ApplyResult{}, err
+		return ApplyResult{}, rollback("CS-STATE-001", err)
 	}
 	if err := engine.adapter.Apply(ctx, session, compiled); err != nil {
 		return ApplyResult{}, rollback("CS-APPLY-001", fmt.Errorf("%w: %v", ErrApplyFailed, err))
@@ -159,14 +188,18 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 	if err := engine.store.WriteJournal(journal); err != nil {
 		return ApplyResult{}, rollback("CS-STATE-001", err)
 	}
-	report, err := engine.adapter.Verify(ctx, session, compiled)
+	verification, err := engine.verifyTheme(ctx, session, compiled)
+	journal.Verification = verificationSummary(verification)
+	if writeErr := engine.store.WriteJournal(journal); writeErr != nil {
+		return ApplyResult{}, rollback("CS-STATE-001", writeErr)
+	}
+	report := verification.Report
 	if err != nil || !reportAllowsCommit(report, compiled) {
 		if err == nil {
 			err = ErrVerifyFailed
 		}
 		return ApplyResult{}, rollback("CS-VERIFY-001", err)
 	}
-
 	journal.Stage = "commit"
 	if err := engine.store.WriteJournal(journal); err != nil {
 		return ApplyResult{}, rollback("CS-STATE-001", err)
@@ -200,7 +233,7 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 }
 
 func (engine *Engine) RestoreOfficial(ctx context.Context) (result RestoreResult, returnErr error) {
-	unlock, err := engine.store.Lock()
+	unlock, err := acquireOperationLock(ctx, engine.store)
 	if err != nil {
 		return RestoreResult{}, err
 	}
@@ -215,12 +248,12 @@ func (engine *Engine) RestoreOfficial(ctx context.Context) (result RestoreResult
 	if err := engine.store.WriteJournal(journal); err != nil {
 		return RestoreResult{}, err
 	}
-	session, err := engine.adapter.OpenVerifiedSession(ctx)
+	session, err := engine.openOfficialSession(ctx)
 	if err != nil {
 		return RestoreResult{}, engine.failJournal(journal, "CS-CODEX-IDENTITY-001", err)
 	}
 	defer engine.adapter.Close(ctx, session)
-	probe, err := engine.adapter.Probe(ctx, session)
+	probe, err := engine.probeCapabilities(ctx, session)
 	if err != nil {
 		return RestoreResult{}, engine.failJournal(journal, "CS-COMPAT-001", err)
 	}
@@ -249,10 +282,31 @@ func (engine *Engine) RestoreOfficial(ctx context.Context) (result RestoreResult
 	return RestoreResult{OperationID: operationID, Identity: session.Identity, WasThemed: wasThemed}, nil
 }
 
+func (engine *Engine) openThemeSession(
+	ctx context.Context,
+	compiled CompiledTheme,
+	previous *CompiledTheme,
+) (Session, error) {
+	if opener, supported := engine.adapter.(ThemeTransitionSessionOpener); supported {
+		return opener.OpenVerifiedThemeTransitionSession(ctx, compiled, previous)
+	}
+	if opener, supported := engine.adapter.(ThemeSessionOpener); supported {
+		return opener.OpenVerifiedThemeSession(ctx, compiled)
+	}
+	return engine.adapter.OpenVerifiedSession(ctx)
+}
+
+func (engine *Engine) openOfficialSession(ctx context.Context) (Session, error) {
+	if opener, supported := engine.adapter.(OfficialSessionOpener); supported {
+		return opener.OpenVerifiedOfficialSession(ctx)
+	}
+	return engine.adapter.OpenVerifiedSession(ctx)
+}
+
 // RecoverInterrupted restores the last-known-good snapshot for an apply that
 // was interrupted after renderer mutation became possible.
 func (engine *Engine) RecoverInterrupted(ctx context.Context) (returnErr error) {
-	unlock, err := engine.store.Lock()
+	unlock, err := acquireOperationLock(ctx, engine.store)
 	if err != nil {
 		return err
 	}
@@ -260,6 +314,35 @@ func (engine *Engine) RecoverInterrupted(ctx context.Context) (returnErr error) 
 		returnErr = errors.Join(returnErr, unlock())
 	}()
 	return engine.recoverInterruptedLocked(ctx)
+}
+
+func acquireOperationLock(ctx context.Context, store *Store) (func() error, error) {
+	if store == nil {
+		return nil, ErrConfiguration
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	deadline := time.Now().Add(operationLockWait)
+	for {
+		unlock, err := store.Lock()
+		if err == nil {
+			return unlock, nil
+		}
+		if !errors.Is(err, ErrBusy) {
+			return nil, err
+		}
+		if !time.Now().Before(deadline) {
+			return nil, ErrBusy
+		}
+		timer := time.NewTimer(operationLockPoll)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, errors.Join(ErrBusy, ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func (engine *Engine) recoverInterruptedLocked(ctx context.Context) error {
@@ -274,13 +357,17 @@ func (engine *Engine) recoverInterruptedLocked(ctx context.Context) error {
 		return fmt.Errorf("%w: multiple running operation journals", ErrStateUnsafe)
 	}
 	journal := journals[0]
+	if isRetirableLegacyV8Verification(journal) {
+		return engine.retireLegacyV8Verification(journal)
+	}
 	if journal.Kind != "apply" {
 		journal.Status = "failed"
 		journal.ErrorCode = "CS-INTERRUPTED-001"
 		journal.Stage = "interrupted"
 		return engine.store.WriteJournal(journal)
 	}
-	mutatingStage := journal.Stage == "apply" || journal.Stage == "verify" || journal.Stage == "commit"
+	mutatingStage := journal.Stage == "prepare" || journal.Stage == "backup" ||
+		journal.Stage == "apply" || journal.Stage == "verify" || journal.Stage == "commit"
 	if !mutatingStage {
 		journal.Status = "failed"
 		journal.ErrorCode = "CS-INTERRUPTED-001"
@@ -297,7 +384,16 @@ func (engine *Engine) recoverInterruptedLocked(ctx context.Context) error {
 		}
 		return err
 	}
-	session, err := engine.adapter.OpenVerifiedSession(ctx)
+	var session Session
+	if snapshot.StylePresent {
+		session, err = engine.openThemeSession(
+			ctx,
+			CompiledTheme{AppearanceMode: snapshot.AppearanceMode},
+			nil,
+		)
+	} else {
+		session, err = engine.openOfficialSession(ctx)
+	}
 	if err != nil {
 		return err
 	}
@@ -317,6 +413,12 @@ func (engine *Engine) recoverInterruptedLocked(ctx context.Context) error {
 		}
 	} else if err := engine.adapter.VerifyOfficial(ctx, session); err != nil {
 		return fmt.Errorf("%w: interrupted official restore: %v", ErrRollbackFailed, err)
+	} else if finalizer, supported := engine.adapter.(OfficialRollbackFinalizer); supported {
+		cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), rollbackTimeout)
+		defer cancel()
+		if err := finalizer.FinalizeOfficialRollback(cleanupCtx, session); err != nil {
+			return fmt.Errorf("%w: interrupted official finalize: %v", ErrRollbackFailed, err)
+		}
 	}
 	if point.PreviousDesired == nil {
 		if err := engine.store.ClearDesired(); err != nil {
@@ -331,6 +433,34 @@ func (engine *Engine) recoverInterruptedLocked(ctx context.Context) error {
 	return engine.store.WriteJournal(journal)
 }
 
+// isRetirableLegacyV8Verification identifies only the historical v8 verifier
+// residue produced by the prior Runtime v2 release. It intentionally does not
+// match a current template, another failure code, or any non-verify stage:
+// those states still use the normal fail-closed recovery path.
+func isRetirableLegacyV8Verification(journal Journal) bool {
+	if journal.Kind != "apply" || journal.Status != "running" ||
+		journal.Stage != "verify" || journal.ErrorCode != "CS-VERIFY-001" ||
+		journal.RecoveryID == "" || journal.Verification == nil {
+		return false
+	}
+	verification := journal.Verification
+	return verification.RuntimeVersion == 2 &&
+		verification.TemplateVersion == 8 &&
+		verification.ReapplyAttempted && verification.ProbeCompleted
+}
+
+// retireLegacyV8Verification keeps both the journal and its recovery point on
+// disk for offline Restore and diagnostics. It only marks the obsolete
+// verification residue as terminal, allowing the current Apply flow to create
+// and verify a fresh transaction.
+func (engine *Engine) retireLegacyV8Verification(journal Journal) error {
+	journal.InterruptedStage = journal.Stage
+	journal.Stage = "legacy_migrated"
+	journal.Status = "failed"
+	journal.ErrorCode = legacyV8VerificationMigrationCode
+	return engine.store.WriteJournal(journal)
+}
+
 func (engine *Engine) resolveInterruptedJournals(currentOperationID string) error {
 	journals, err := engine.store.RunningJournals()
 	if err != nil {
@@ -340,6 +470,7 @@ func (engine *Engine) resolveInterruptedJournals(currentOperationID string) erro
 		if interrupted.OperationID == currentOperationID {
 			continue
 		}
+		interrupted.InterruptedStage = interrupted.Stage
 		interrupted.Status = "failed"
 		interrupted.ErrorCode = "CS-INTERRUPTED-RESTORED-001"
 		interrupted.Stage = "official_restored"
@@ -350,48 +481,77 @@ func (engine *Engine) resolveInterruptedJournals(currentOperationID string) erro
 	return nil
 }
 
-func (engine *Engine) primeDesiredSession(ctx context.Context, session Session) error {
-	primer, supported := engine.adapter.(SessionPrimer)
-	if !supported {
-		return nil
+func (engine *Engine) loadDesiredCompiled() (*CompiledTheme, *DesiredTheme, error) {
+	return LoadDesiredCompiled(engine.store)
+}
+
+// LoadDesiredCompiled re-verifies and compiles the cached theme selected by
+// the user. It is intentionally offline: a session controller may only use a
+// package that was already committed by the verified apply transaction.
+func LoadDesiredCompiled(store *Store) (*CompiledTheme, *DesiredTheme, error) {
+	if store == nil {
+		return nil, nil, ErrConfiguration
 	}
-	desired, found, err := engine.store.ReadDesired()
+	desired, found, err := store.ReadDesired()
 	if err != nil || !found {
-		return err
+		return nil, nil, err
 	}
-	cache, err := engine.store.ThemeCachePath(desired)
+	cache, err := store.ThemeCachePath(desired)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	verified, err := theme.VerifyCached(cache)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if verified.Manifest.ThemePublicID != desired.ThemePublicID ||
 		verified.Manifest.ThemeVersion != desired.ThemeVersion ||
 		verified.PackageSHA256 != desired.PackageSHA256 {
-		return fmt.Errorf("%w: cached desired theme mismatch", ErrStateUnsafe)
+		return nil, nil, fmt.Errorf("%w: cached desired theme mismatch", ErrStateUnsafe)
 	}
-	temporary, err := os.MkdirTemp(filepath.Join(engine.store.Root(), "tmp"), ".prime-")
+	temporary, err := os.MkdirTemp(filepath.Join(store.Root(), "tmp"), ".prime-")
 	if err != nil {
-		return fmt.Errorf("%w: create cache verification staging: %v", ErrStateUnsafe, err)
+		return nil, nil, fmt.Errorf("%w: create cache verification staging: %v", ErrStateUnsafe, err)
 	}
 	if err := os.Remove(temporary); err != nil {
-		return fmt.Errorf("%w: prepare cache verification staging: %v", ErrStateUnsafe, err)
+		return nil, nil, fmt.Errorf("%w: prepare cache verification staging: %v", ErrStateUnsafe, err)
 	}
 	defer os.RemoveAll(temporary)
 	if err := theme.Extract(verified, temporary); err != nil {
-		return err
+		return nil, nil, err
 	}
 	compiled, err := CompileTheme(verified, temporary)
 	if err != nil {
-		return err
+		return nil, nil, err
+	}
+	return &compiled, &desired, nil
+}
+
+func (engine *Engine) primeSession(ctx context.Context, session Session, compiled CompiledTheme) error {
+	primer, supported := engine.adapter.(SessionPrimer)
+	if !supported {
+		return nil
 	}
 	return primer.Prime(ctx, session, compiled)
 }
 
+func snapshotFromCompiled(compiled CompiledTheme) Snapshot {
+	return Snapshot{
+		StylePresent: true, StyleText: compiled.StyleText,
+		BackgroundDataURL: compiled.BackgroundDataURL,
+		ThemePublicID:     compiled.ThemePublicID, ThemeVersion: compiled.ThemeVersion,
+		TemplateVersion: compiled.TemplateVersion, AppearanceMode: compiled.AppearanceMode,
+	}
+}
+
 func (engine *Engine) failJournal(journal Journal, code string, cause error) error {
 	journal.Status = "failed"
+	journal.ErrorCode = code
+	return errors.Join(cause, engine.store.WriteJournal(journal))
+}
+
+func (engine *Engine) failRecoverableJournal(journal Journal, code string, cause error) error {
+	journal.Status = "running"
 	journal.ErrorCode = code
 	return errors.Join(cause, engine.store.WriteJournal(journal))
 }
@@ -417,8 +577,12 @@ func (engine *Engine) failWithRollback(
 			if captureErr != nil || captured != snapshot {
 				restoreErr = errors.Join(ErrRollbackFailed, captureErr)
 			}
-		} else if verifyErr := engine.adapter.VerifyOfficial(rollbackCtx, session); verifyErr != nil {
-			restoreErr = verifyErr
+		} else {
+			if verifyErr := engine.adapter.VerifyOfficial(rollbackCtx, session); verifyErr != nil {
+				restoreErr = verifyErr
+			} else if finalizer, supported := engine.adapter.(OfficialRollbackFinalizer); supported {
+				restoreErr = finalizer.FinalizeOfficialRollback(rollbackCtx, session)
+			}
 		}
 	}
 
@@ -446,7 +610,30 @@ func (engine *Engine) failWithRollback(
 	return engine.failJournal(journal, code, cause)
 }
 
-func capabilitiesAllowApply(report RegionReport) bool {
+func (engine *Engine) probeCapabilities(ctx context.Context, session Session) (RegionReport, error) {
+	if waiter, supported := engine.adapter.(CapabilityWaiter); supported {
+		return waiter.WaitForCapabilities(ctx, session)
+	}
+	return engine.adapter.Probe(ctx, session)
+}
+
+func (engine *Engine) verifyTheme(
+	ctx context.Context,
+	session Session,
+	compiled CompiledTheme,
+) (ThemeVerificationResult, error) {
+	if waiter, supported := engine.adapter.(ThemeVerificationWaiter); supported {
+		return waiter.WaitForThemeVerification(ctx, session, compiled)
+	}
+	report, err := engine.adapter.Verify(ctx, session, compiled)
+	return ThemeVerificationResult{
+		Report:         report,
+		Attempts:       1,
+		ProbeCompleted: err == nil,
+	}, err
+}
+
+func CapabilitiesAllowApply(report RegionReport) bool {
 	if report.StyleMarkerCount < 0 || report.StyleMarkerCount > 1 {
 		return false
 	}
@@ -454,17 +641,44 @@ func capabilitiesAllowApply(report RegionReport) bool {
 		return false
 	}
 	if report.StyleMarkerCount == 1 &&
-		(report.TemplateVersion != TemplateVersion || !themePublicIDPattern.MatchString(report.ThemePublicID)) {
+		(!supportedTemplateVersion(report.TemplateVersion) ||
+			!themePublicIDPattern.MatchString(report.ThemePublicID)) {
 		return false
 	}
-	required := []string{"home", "mainBoundary", "sidebar", "composer", "composerUtilityBar", "topFade"}
+	if report.RuntimeVersion != 0 && report.RuntimeVersion != 2 {
+		return false
+	}
+	// Codex can replace the complete shell while Settings is open. The v2
+	// renderer commits an L0 root runtime there and activates L1 when the normal
+	// shell returns; missing shell nodes in Settings are not a global failure.
+	if report.Scope == "settings" {
+		return report.StyleMarkerCount <= 1
+	}
+	required := []string{"home", "mainBoundary", "sidebar", "composer", "topFade", "bottomFade", "templateScope", "themeContrast"}
+	if _, v2 := report.Regions["shellMain"]; v2 {
+		required = []string{"shellMain", "sidebar", "headerTint", "templateScope", "themeContrast"}
+	}
 	for _, name := range required {
 		if report.Regions[name] != RegionPass {
 			return false
 		}
 	}
-	for _, name := range []string{"suggestionCards", "projectPicker"} {
-		if report.Regions[name] != RegionPass && report.Regions[name] != RegionNotPresent {
+	optional := []string{"composerUtilityBar",
+		"conversationActivity",
+		"conversationDiffResource",
+		"suggestionCards",
+		"projectPicker",
+	}
+	if _, v2 := report.Regions["shellMain"]; v2 {
+		optional = append(optional, "home", "mainBoundary", "composer", "topFade", "bottomFade")
+	}
+	for _, name := range optional {
+		// L2 refinements are diagnostic-only. A present L2 node can change
+		// between Codex renderer releases, but a verified shell, scoped main,
+		// marker, artwork, and contrast still prove a safe theme transaction.
+		// Keep malformed statuses fail-closed rather than treating them as a
+		// future compatibility success.
+		if status := report.Regions[name]; status != RegionPass && status != RegionNotPresent && status != RegionFail {
 			return false
 		}
 	}
@@ -476,5 +690,12 @@ func reportAllowsCommit(report RegionReport, compiled CompiledTheme) bool {
 		report.TemplateVersion == compiled.TemplateVersion &&
 		report.ThemePublicID == compiled.ThemePublicID &&
 		report.BackgroundLoaded &&
-		capabilitiesAllowApply(report)
+		CapabilitiesAllowApply(report)
+}
+
+// ReportAllowsTheme reports whether a renderer verification proves that the
+// exact compiled theme is present. Session controllers use the same commit
+// predicate as the original apply transaction.
+func ReportAllowsTheme(report RegionReport, compiled CompiledTheme) bool {
+	return reportAllowsCommit(report, compiled)
 }

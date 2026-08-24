@@ -1,5 +1,111 @@
 # Changelog
 
+## 0.1.0-paid-alpha - Code-stage candidate
+
+- Prepare a fail-closed, unpublished Production release profile with fixed
+  `https://codexskin.ai` origin, new immutable Helper `.17` / Bootstrap `.16`
+  versions, a separate protected workflow environment, channel-specific SBOM
+  and pins, and mixed Staging/Production input rejection. The existing Staging
+  `.16/.15` profile remains available and no Release is published by this work.
+- Keep restart transactions alive for up to four minutes and reduce repeated
+  macOS Gatekeeper work by using full identity verification before and after a
+  bounded immutable-file probe window. Windows retains its complete package
+  identity check for every stable probe.
+- Describe the installed runtime as bounded one-shot Helper transactions, and
+  align README signing guidance with the approved Paid Alpha exception: macOS
+  and Windows remain supported while commercial OS signing is a post-launch
+  priority rather than a standalone launch gate.
+- Warn before every skin Apply/Switch that the current Codex window must remain
+  untouched during the 20–60 second one-time operation, while still allowing an
+  explicitly opened browser authorization or Pricing page. A long-running command
+  now gets one non-duplicating reminder instead of inviting a second submission.
+- On macOS, switch trusted controlled Codex windows between native dark and light
+  through Codex's verified in-app Appearance controls before applying the skin.
+  The Helper verifies the setting, native palette, renderer identity, and exact
+  recovery point without restarting; an unavailable UI contract safely falls back
+  to the existing confirmed restart path. Windows keeps that restart path pending
+  separate native GUI evidence.
+- Release the immutable Staging-only candidate: Helper `.16` and Bootstrap `.15`.
+  Plugin launchers now pin the protected-workflow prerelease and exact per-platform
+  Bootstrap SHA-256 values; full remote CI remains deferred until Founder manual
+  testing, and this is not a stable/latest or Production channel.
+- Correct the native-appearance contract: dark skins pin Codex to native dark and
+  light skins pin it to native light; the first Apply preserves the exact original
+  `system`/`light`/`dark` choice for offline Restore. Same-mode switches do not
+  rewrite configuration or restart; a mode change uses at most one confirmed
+  controlled reload. The current-document route classifier also clears stale chat
+  scope when Codex reuses a main container for a native utility page.
+- Prepare the next immutable Staging-only candidate: Helper `.15` and Bootstrap `.14`.
+  Existing Plugin launcher pins remain on the verified `.14/.13` closure until the
+  new signed release assets and their exact platform SHA-256 values are available.
+- Release the immutable Staging-only candidate: Helper `.15` and Bootstrap `.14`.
+  Plugin launchers now pin the protected-workflow prerelease and exact per-platform
+  Bootstrap SHA-256 values; full cross-platform CI remains deferred until Founder
+  manual testing, and this is not a stable/latest or Production channel.
+- Release the immutable Staging-only candidate: Helper `.14` and Bootstrap `.13`.
+  Plugin launchers now pin the protected-workflow prerelease and exact per-platform
+  Bootstrap SHA-256 values; it is not a stable/latest or Production channel.
+- Finalize the V11 visual repair as Template v12, scoping theme colors to the verified Home/conversation workspace and
+  its current ComposerLayoutRoot surfaces. Native Sites, Scheduled, Plugins, and
+  right-side utility/output pages keep Codex's official paired light/dark surfaces,
+  while task composers, result cards, output cards, and bottom fades remain readable
+  without white bands in both dark and light skins.
+- Release the immutable Staging-only candidate: Helper `.13` and Bootstrap `.12`.
+  Plugin launchers now pin the signed prerelease and exact per-platform Bootstrap
+  SHA-256 values; it is not a stable/latest or Production channel.
+- Prepare the next immutable Staging-only candidate: Helper `.13` and Bootstrap `.12`.
+  Existing Plugin launcher pins remain on the verified `.12/.11` closure until the
+  new signed release assets and their exact platform SHA-256 values are available.
+- Add Template v10's current-workspace visual bridge for the current Codex
+  ComposerLayoutRoot and background/foreground token family. It keeps the
+  direct Apply/Switch/Restore runtime while removing native light surfaces,
+  lower fade bands, and unreadable task-page text after a theme is applied.
+- Release the immutable Staging-only candidate: Helper `.12` and Bootstrap `.11`.
+  Plugin launcher pins now bind to its signed prerelease and exact per-platform
+  Bootstrap SHA-256 values; it is not a stable/latest or Production channel.
+- Release the immutable Staging-only candidate: Helper `.11` and Bootstrap `.10`.
+  Plugin launcher pins now bind to its signed prerelease and exact per-platform
+  Bootstrap SHA-256 values; it is not a stable/latest or Production channel.
+- Bind the Plugin's Bootstrap `.9` installer to the signed Staging Helper `.10`
+  release at the exact `b580e24617077502fe799562fa193bab1162564f` build closure.
+- Prepare immutable Staging Helper `.10` and Bootstrap `.9` artifacts. The
+  installed Plugin pins remain on the previous immutable artifacts until the
+  signed candidate's three platform hashes are available; a follow-up pin-only
+  commit will bind the installer to that exact closure.
+- Stop pinning Codex's native light/dark preference during ordinary skin applies. A verified loopback-controlled renderer can now replace any theme, including dark-to-light or light-to-dark, directly; a retained legacy appearance backup is restored once during migration only.
+- Let a newly verified user selection replace an unconfirmed restart request, while an approved or running single-use restart remains non-preemptible and reports a stable wait action.
+- Replace the restart-worker-to-keeper handoff and all session controller state with one bounded on-demand Helper transaction for apply, direct switch, and Restore.
+- Add `theme launch` as the primary restart-confirmation command while retaining `theme continue` only as a compatibility alias.
+- Report success only after the exact theme is visibly verified; the Helper then exits and status never reports `runtimeStatus` or `sessionStatus`.
+- Add a versioned renderer selector contract pinned to the MIT-licensed Codex Dream Skin v1.5.11 mechanisms, with L1/L2 compatibility tiers and stable data/CSS-module fallbacks.
+- Add Template v7 for current Codex header and top-fade data/module selectors, preserving Template v6 as the exact migration/rollback style.
+- Add Template v8 route-scoped Home/thread activation: current Home no longer depends on the legacy Composer or thread element before artwork, header, main-boundary, and top-fade rules can apply.
+- Add Template v9's conservative task-route fallback: after positively excluding Home and Settings on a verified Codex shell, a page that no longer exposes the legacy thread container is treated as a task/conversation route instead of an unstyled unknown surface. This preserves the existing fail-closed identity, shell, marker, artwork, and contrast checks.
+- Treat L2 renderer refinements as reported compatibility diagnostics rather than rolling back a visibly verified L1 shell/theme transaction; retain fail-closed checks for identity, shell anchors, exact style marker, route scope, artwork and contrast.
+- Record restart confirmation as a normal pre-mutation pause instead of an `CS-CODEX-IDENTITY-001` failure, and accept a controlled-window shutdown race during rollback only after a stable ordinary Codex process is positively confirmed.
+- Replace the persistent Page bootstrap, MutationObserver, route repair, periodic health checks, and controller heartbeat with a current-document-only injector to remove typing-path work and session-lifetime failures.
+- Permit direct theme replacement after any historical session/runtime failure; only the current operation's unconfirmed rollback can require Offline Restore.
+- Preserve a bounded, redacted terminal-restart history and interrupted engine stage, so a later Restore cannot erase the useful cause of an earlier apply failure. Terminal restart and Restore paths clear stale pending-theme state.
+- Require Skills to read current wrapper status rather than infer a failure from a host-restarting launch conversation.
+- Recover from macOS LaunchServices dropping Chromium arguments by stopping only the exact verified ordinary process it created, rediscovering the stable signed app, and retrying with the verified executable.
+- Make restart consent terminal before renderer mutation so one approved apply performs only the required controlled Codex restart instead of first reopening a throwaway recovery process.
+- Exclude real-current-Codex macOS probes from ordinary `go test`; they require both the `realcodex` build tag and their existing explicit environment opt-in.
+- Preserve the validated minimal Windows user-profile environment for detached restart Helpers so current-profile appearance recovery does not depend on an accidentally inherited shell.
+- Export the authoritative device-authorization start and theme release/download v1 contracts from Private.
+- Add strict same-origin device authorization start, PKCE proof generation, replay handling, native credential rotation, and one-command continuation.
+- Add authenticated theme metadata and bounded binary download clients that reject redirects, cross-origin purchase links, unknown JSON, truncation, oversize, and unexpected content types.
+- Continue a six-digit theme request through authorization and an optional bounded Pro purchase wait without asking the user to repeat the request.
+- Pass the downloaded package, canonical descriptor, and detached signature to the existing Gate B verifier and transactional engine before apply.
+- Persist only a device reference and pending six-digit theme ID outside the Plugin cache; credentials remain in Keychain or Credential Manager and Access Tokens remain memory-only.
+- Expose `theme apply`, offline `theme restore`, and local-only `status` Helper commands through dedicated Paid Alpha Skills and fixed platform wrappers.
+- Keep the wrapper fail closed until the signed Helper bootstrap has installed its fixed out-of-cache recovery-engine copy.
+- Replace the selector-only theme repair with Template v5: exact native appearance backup/pinning, the Codex dropdown token bridge, an engine-owned self-healing renderer controller, Appearance-settings pause/resume, and cleanup on switch/Restore.
+- Add Template v6 compatibility for Codex 26.727's CSS-module main-content top fade and fail verification when either the stable or module fade remains visible.
+- Reject absent late-rendered activity and diff fixtures as `not_present` instead of passing them, and require computed contrast when those fixtures exist.
+- Carry the MIT-licensed lifecycle and native-token mechanisms adapted from Codex Dream Skin v1.5.9 while excluding its artwork and other non-software assets.
+
+This candidate is not a Public or Production release. The API origin, signed Helper Release, Production deployment order, and final macOS/Windows distribution gates remain required before merge/release.
+
 ## 0.0.2 - Unreleased
 
 - Bump the read-only distribution spike from v0.0.1 to v0.0.2.
