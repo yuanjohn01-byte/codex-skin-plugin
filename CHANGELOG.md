@@ -2,6 +2,19 @@
 
 ## 0.1.0-paid-alpha - Code-stage candidate
 
+- Prepare a fail-closed, unpublished Production release profile with fixed
+  `https://codexskin.ai` origin, new immutable Helper `.17` / Bootstrap `.16`
+  versions, a separate protected workflow environment, channel-specific SBOM
+  and pins, and mixed Staging/Production input rejection. The existing Staging
+  `.16/.15` profile remains available and no Release is published by this work.
+- Keep restart transactions alive for up to four minutes and reduce repeated
+  macOS Gatekeeper work by using full identity verification before and after a
+  bounded immutable-file probe window. Windows retains its complete package
+  identity check for every stable probe.
+- Describe the installed runtime as bounded one-shot Helper transactions, and
+  align README signing guidance with the approved Paid Alpha exception: macOS
+  and Windows remain supported while commercial OS signing is a post-launch
+  priority rather than a standalone launch gate.
 - Warn before every skin Apply/Switch that the current Codex window must remain
   untouched during the 20–60 second one-time operation, while still allowing an
   explicitly opened browser authorization or Pricing page. A long-running command

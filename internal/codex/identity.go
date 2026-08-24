@@ -61,14 +61,17 @@ type CurrentInstance struct {
 }
 
 // DiscoverStableInstallation rediscovers the official Codex installation at
-// the launch boundary and requires the complete verified identity to remain
-// unchanged across several probes. Codex may replace its bundle/package while
-// an older process is still running; a stop-and-relaunch flow must never reuse
-// the pre-update executable hash after that replacement.
+// the launch boundary and requires a fully verified identity before and after
+// a series of cheap immutable-file probes. confirmations counts both fully
+// verified endpoints, so the normal five-observation sequence is:
+// full -> probe -> probe -> probe -> full. Codex may replace its bundle/package
+// while an older process is still running; a stop-and-relaunch flow must never
+// reuse the pre-update executable hash after that replacement.
 func DiscoverStableInstallation(ctx context.Context) (Installation, error) {
 	return discoverStableInstallation(
 		ctx,
 		DiscoverInstallation,
+		probeStableInstallation,
 		stableInstallationPollInterval,
 		stableInstallationConfirmations,
 	)
@@ -77,29 +80,42 @@ func DiscoverStableInstallation(ctx context.Context) (Installation, error) {
 func discoverStableInstallation(
 	ctx context.Context,
 	discover func(context.Context) (Installation, error),
+	probe func(context.Context, Installation) (Installation, error),
 	interval time.Duration,
 	confirmations int,
 ) (Installation, error) {
-	if ctx == nil || discover == nil || interval <= 0 || confirmations < 2 {
+	if ctx == nil || discover == nil || probe == nil || interval <= 0 || confirmations < 3 {
 		return Installation{}, ErrIdentityUntrusted
 	}
-	var candidate Installation
-	consecutive := 0
 	for {
-		current, err := discover(ctx)
+		candidate, err := discover(ctx)
 		if err == nil {
-			if consecutive > 0 && sameInstallation(candidate, current) {
-				consecutive++
-			} else {
-				candidate = current
-				consecutive = 1
+			stable := true
+			// Reserve the final observation for a full platform verification.
+			// This preserves the original five-observation policy on platforms
+			// whose probes are full checks, while avoiding repeated expensive
+			// codesign/spctl work on macOS during the restart race.
+			for confirmation := 1; confirmation < confirmations-1; confirmation++ {
+				select {
+				case <-ctx.Done():
+					return Installation{}, errors.Join(ErrIdentityUntrusted, ctx.Err())
+				case <-time.After(interval):
+				}
+				current, probeErr := probe(ctx, candidate)
+				if probeErr != nil || !sameInstallation(candidate, current) {
+					stable = false
+					break
+				}
 			}
-			if consecutive >= confirmations {
-				return candidate, nil
+			if stable {
+				// A stable hash is not a substitute for the official signature and
+				// Gatekeeper/package verification. Repeat the complete check at the
+				// exact launch boundary before returning this installation.
+				fresh, finalErr := discover(ctx)
+				if finalErr == nil && sameInstallation(candidate, fresh) {
+					return fresh, nil
+				}
 			}
-		} else {
-			candidate = Installation{}
-			consecutive = 0
 		}
 		select {
 		case <-ctx.Done():

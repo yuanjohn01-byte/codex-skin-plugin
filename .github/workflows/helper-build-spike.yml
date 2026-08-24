@@ -4,13 +4,18 @@ on:
   workflow_dispatch:
     inputs:
       run_profile:
-        description: "full runs all cross-platform CI; signed-staging-only creates only the protected signed candidate"
+        description: "full runs CI; signed profiles create one protected, unpublished channel-specific candidate"
         required: true
         default: full
         type: choice
         options:
           - full
           - signed-staging-only
+          - signed-production-only
+      production_confirmation:
+        description: "For signed-production-only, type: RELEASE https://codexskin.ai HELPER .17 BOOTSTRAP .16"
+        required: false
+        type: string
   workflow_call:
 
 concurrency:
@@ -22,7 +27,7 @@ permissions:
 
 jobs:
   signed-staging-candidate:
-    if: github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch' && inputs.run_profile == 'signed-staging-only'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     environment: paid-alpha-release
@@ -41,17 +46,27 @@ jobs:
           test "$candidate_sha" = "${{ github.sha }}"
           echo "candidate_sha=$candidate_sha" >> "$GITHUB_OUTPUT"
           echo "helper_built_at=$(git show -s --format=%cI "$candidate_sha")" >> "$GITHUB_OUTPUT"
-      - name: Build deterministic Staging Helper and Bootstrap candidate
+      - name: Build deterministic fixed-profile Staging Helper and Bootstrap candidate
         run: |
           python3 tools/build_helper.py \
             --commit "${{ steps.inputs.outputs.candidate_sha }}" \
             --built-at "${{ steps.inputs.outputs.helper_built_at }}" \
-            --api-base-url https://codex-skin-staging.yuanjohn01.workers.dev
+            --release-profile staging
           python3 tools/build_bootstrap.py \
             --commit "${{ steps.inputs.outputs.candidate_sha }}" \
-            --built-at "${{ steps.inputs.outputs.helper_built_at }}"
-          python3 tools/create_sbom.py --summary dist/helper/build-summary.json
-          python3 tools/create_release_descriptor.py --key-id helper-alpha-2026-08
+            --built-at "${{ steps.inputs.outputs.helper_built_at }}" \
+            --release-profile staging
+          python3 tools/create_sbom.py \
+            --summary dist/helper/build-summary.json \
+            --release-profile staging
+          python3 tools/create_release_descriptor.py \
+            --key-id helper-alpha-2026-08 \
+            --release-profile staging
+          python3 tools/render_bootstrap_pins.py \
+            --summary dist/bootstrap/build-summary.json \
+            --release-profile staging \
+            --shell-output dist/bootstrap/pins/bootstrap-pins.sh \
+            --powershell-output dist/bootstrap/pins/bootstrap-pins.ps1
       - name: Sign and verify canonical Helper release descriptor
         env:
           CODEX_SKIN_HELPER_RELEASE_PRIVATE_KEY_PEM_B64: ${{ secrets.CODEX_SKIN_HELPER_RELEASE_PRIVATE_KEY_PEM_B64 }}
@@ -64,7 +79,75 @@ jobs:
       - name: Upload signed candidate without publishing a Release
         uses: actions/upload-artifact@v4
         with:
-          name: signed-helper-candidate-${{ steps.inputs.outputs.candidate_sha }}-staging
+          name: signed-helper-0.1.0-paid-alpha.16-bootstrap-0.1.0-paid-alpha.15-${{ steps.inputs.outputs.candidate_sha }}-staging
+          path: |
+            dist/helper
+            dist/bootstrap
+          if-no-files-found: error
+          retention-days: 7
+
+  signed-production-candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_profile == 'signed-production-only'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: paid-alpha-production-release
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.5"
+          cache: true
+      - name: Confirm and freeze the exact Production candidate
+        id: inputs
+        env:
+          PRODUCTION_CONFIRMATION: ${{ inputs.production_confirmation }}
+        run: |
+          test "$PRODUCTION_CONFIRMATION" = "RELEASE https://codexskin.ai HELPER .17 BOOTSTRAP .16"
+          candidate_sha=$(git rev-parse HEAD)
+          test "$candidate_sha" = "${{ github.sha }}"
+          if git show-ref --verify --quiet refs/tags/helper-v0.1.0-paid-alpha.17; then
+            echo "Production Helper version 0.1.0-paid-alpha.17 is already immutable." >&2
+            exit 1
+          fi
+          echo "candidate_sha=$candidate_sha" >> "$GITHUB_OUTPUT"
+          echo "helper_built_at=$(git show -s --format=%cI "$candidate_sha")" >> "$GITHUB_OUTPUT"
+      - name: Build deterministic fixed-profile Production Helper and Bootstrap candidate
+        run: |
+          python3 tools/build_helper.py \
+            --commit "${{ steps.inputs.outputs.candidate_sha }}" \
+            --built-at "${{ steps.inputs.outputs.helper_built_at }}" \
+            --release-profile production
+          python3 tools/build_bootstrap.py \
+            --commit "${{ steps.inputs.outputs.candidate_sha }}" \
+            --built-at "${{ steps.inputs.outputs.helper_built_at }}" \
+            --release-profile production
+          python3 tools/create_sbom.py \
+            --summary dist/helper/build-summary.json \
+            --release-profile production
+          python3 tools/create_release_descriptor.py \
+            --key-id helper-alpha-2026-08 \
+            --release-profile production
+          python3 tools/render_bootstrap_pins.py \
+            --summary dist/bootstrap/build-summary.json \
+            --release-profile production \
+            --shell-output dist/bootstrap/pins/bootstrap-pins.sh \
+            --powershell-output dist/bootstrap/pins/bootstrap-pins.ps1
+      - name: Sign and verify canonical Production Helper release descriptor
+        env:
+          CODEX_SKIN_HELPER_RELEASE_PRIVATE_KEY_PEM_B64: ${{ secrets.CODEX_SKIN_HELPER_RELEASE_PRIVATE_KEY_PEM_B64 }}
+        run: |
+          go run ./cmd/codex-skin-sign-helper-release \
+            --descriptor dist/helper/helper-release-descriptor.json \
+            --signature dist/helper/helper-release-descriptor.sig
+          test "$(wc -c < dist/helper/helper-release-descriptor.sig)" -eq 64
+          python3 tools/test_release_profiles.py
+          go test ./internal/release ./internal/releasesigning ./internal/bootstrap ./internal/bootstrapcli
+      - name: Upload signed Production candidate without publishing a Release
+        uses: actions/upload-artifact@v4
+        with:
+          name: signed-helper-0.1.0-paid-alpha.17-bootstrap-0.1.0-paid-alpha.16-${{ steps.inputs.outputs.candidate_sha }}-production
           path: |
             dist/helper
             dist/bootstrap
@@ -89,6 +172,8 @@ jobs:
         run: python3 tools/test_release_descriptor.py
       - name: Test deterministic Helper release SBOM
         run: python3 tools/test_create_sbom.py
+      - name: Test fixed Staging and Production release profiles
+        run: python3 tools/test_release_profiles.py
       - name: Build review artifacts
         run: python3 tools/build_helper.py
       - name: Build Bootstrap review artifacts
@@ -121,29 +206,29 @@ jobs:
           cache: true
       - name: Build the native Windows x64 Helper
         shell: pwsh
-        run: python tools/build_helper.py --target windows-x64
+        run: python tools/build_helper.py --target windows-x64 --release-profile production
       - name: Build the native Windows x64 Bootstrap launcher
         shell: pwsh
-        run: python tools/build_bootstrap.py --target windows-x64
+        run: python tools/build_bootstrap.py --target windows-x64 --release-profile production
       - name: Test Windows identity, theme transaction, offline restore, bootstrap, and credentials
         shell: pwsh
         run: |
-          $env:CODEX_SKIN_TEST_HELPER = (Resolve-Path 'dist/helper/codex-skin-helper_0.1.0-paid-alpha.16_windows_x64.exe').Path
+          $env:CODEX_SKIN_TEST_HELPER = (Resolve-Path 'dist/helper/codex-skin-helper_0.1.0-paid-alpha.17_windows_x64.exe').Path
           go test ./cmd/codex-skin ./internal/adapter ./internal/appearance ./internal/bootstrap ./internal/browseropen ./internal/buildinfo ./internal/cdp ./internal/cli ./internal/codex ./internal/credentials ./internal/deviceauth ./internal/engine ./internal/flowstate ./internal/protocol ./internal/release ./internal/restartflow ./internal/theme ./internal/themeapi ./internal/userflow
           go test -count=1 ./tools/windows_plugin_entry_test
       - name: Execute without Node, Python, or Go on PATH
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          $helper = Resolve-Path 'dist/helper/codex-skin-helper_0.1.0-paid-alpha.16_windows_x64.exe'
-          $bootstrap = Resolve-Path 'dist/bootstrap/codex-skin-bootstrap_0.1.0-paid-alpha.15_windows_x64.exe'
+          $helper = Resolve-Path 'dist/helper/codex-skin-helper_0.1.0-paid-alpha.17_windows_x64.exe'
+          $bootstrap = Resolve-Path 'dist/bootstrap/codex-skin-bootstrap_0.1.0-paid-alpha.16_windows_x64.exe'
           $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
           if (Get-Command node -ErrorAction SilentlyContinue) { throw 'Node remained on the smoke-test PATH' }
           if (Get-Command python -ErrorAction SilentlyContinue) { throw 'Python remained on the smoke-test PATH' }
           if (Get-Command go -ErrorAction SilentlyContinue) { throw 'Go remained on the smoke-test PATH' }
 
           $version = (& $helper version --json) | ConvertFrom-Json
-          if (-not $version.ok -or $version.data.helperVersion -ne '0.1.0-paid-alpha.16') {
+          if (-not $version.ok -or $version.data.helperVersion -ne '0.1.0-paid-alpha.17' -or $version.data.helperReleaseTag -ne 'helper-v0.1.0-paid-alpha.17' -or $version.data.apiOrigin -ne 'https://codexskin.ai') {
             throw 'Windows Helper version contract failed'
           }
           $doctor = (& $helper doctor --json) | ConvertFrom-Json
@@ -151,7 +236,7 @@ jobs:
             throw 'Windows Helper doctor contract failed'
           }
           $bootstrapVersion = (& $bootstrap version --json) | ConvertFrom-Json
-          if (-not $bootstrapVersion.ok -or $bootstrapVersion.data.bootstrapVersion -ne '0.1.0-paid-alpha.15') {
+          if (-not $bootstrapVersion.ok -or $bootstrapVersion.data.bootstrapVersion -ne '0.1.0-paid-alpha.16' -or $bootstrapVersion.data.releaseTag -ne 'helper-v0.1.0-paid-alpha.17') {
             throw 'Windows Bootstrap version contract failed'
           }
 
@@ -177,10 +262,10 @@ jobs:
             target="macos-x64"
             suffix="macos_x64"
           fi
-          python3 tools/build_helper.py --target "$target"
-          echo "helper=dist/helper/codex-skin-helper_0.1.0-paid-alpha.16_$suffix" >> "$GITHUB_OUTPUT"
-          python3 tools/build_bootstrap.py --target "$target"
-          echo "bootstrap=dist/bootstrap/codex-skin-bootstrap_0.1.0-paid-alpha.15_$suffix" >> "$GITHUB_OUTPUT"
+          python3 tools/build_helper.py --target "$target" --release-profile production
+          echo "helper=dist/helper/codex-skin-helper_0.1.0-paid-alpha.17_$suffix" >> "$GITHUB_OUTPUT"
+          python3 tools/build_bootstrap.py --target "$target" --release-profile production
+          echo "bootstrap=dist/bootstrap/codex-skin-bootstrap_0.1.0-paid-alpha.16_$suffix" >> "$GITHUB_OUTPUT"
       - name: Execute without Node or Go on PATH
         env:
           HELPER_PATH: ${{ steps.native.outputs.helper }}
@@ -194,8 +279,11 @@ jobs:
             echo "Go remained on the smoke-test PATH" >&2
             exit 1
           fi
-          "$HELPER_PATH" version --json | grep -F '"helperVersion":"0.1.0-paid-alpha.16"'
+          "$HELPER_PATH" version --json | grep -F '"helperVersion":"0.1.0-paid-alpha.17"'
+          "$HELPER_PATH" version --json | grep -F '"helperReleaseTag":"helper-v0.1.0-paid-alpha.17"'
+          "$HELPER_PATH" version --json | grep -F '"apiOrigin":"https://codexskin.ai"'
           "$HELPER_PATH" doctor --json | grep -F '"nodeRequired":false'
-          "${{ steps.native.outputs.bootstrap }}" version --json | grep -F '"bootstrapVersion":"0.1.0-paid-alpha.15"'
+          "${{ steps.native.outputs.bootstrap }}" version --json | grep -F '"bootstrapVersion":"0.1.0-paid-alpha.16"'
+          "${{ steps.native.outputs.bootstrap }}" version --json | grep -F '"releaseTag":"helper-v0.1.0-paid-alpha.17"'
       - name: Exercise the Plugin to Bootstrap to external Helper entry
         run: python3 tools/test_plugin_bootstrap_entry.py

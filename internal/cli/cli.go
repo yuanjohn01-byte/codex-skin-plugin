@@ -37,6 +37,7 @@ const (
 	exitRestart     = 44
 	exitLocalUnsafe = 50
 	exitInternal    = 80
+	restartTimeout  = 4 * time.Minute
 )
 
 type ApplyFlow interface {
@@ -500,7 +501,7 @@ func runRestartWorker(requestID string, environment Runtime) int {
 	ctx := environment.Context
 	if ctx == nil {
 		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(context.Background(), 2*time.Minute)
+		ctx, cancel = context.WithTimeout(context.Background(), restartTimeout)
 		defer cancel()
 	}
 	runtimeAdapter := environment.Adapter

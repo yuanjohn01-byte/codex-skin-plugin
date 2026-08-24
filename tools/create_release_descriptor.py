@@ -12,6 +12,8 @@ import tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 
+from release_profiles import PROFILES, profile_names, release_profile
+
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SUMMARY = ROOT / "dist" / "helper" / "build-summary.json"
@@ -33,6 +35,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--summary", type=Path, default=DEFAULT_SUMMARY)
     parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--key-id", required=True)
+    parser.add_argument("--release-profile", choices=profile_names())
     return parser.parse_args()
 
 
@@ -55,11 +58,23 @@ def utc_timestamp(value: object) -> str:
     return normalized.isoformat().replace("+00:00", "Z")
 
 
-def descriptor_from_summary(summary: object, key_id: str) -> dict[str, object]:
+def descriptor_from_summary(
+    summary: object,
+    key_id: str,
+    profile_name: str | None = None,
+) -> dict[str, object]:
     if not KEY_ID.fullmatch(key_id):
         raise ValueError("key id must match the public lowercase identifier contract")
     if not isinstance(summary, dict) or summary.get("schemaVersion") != 1:
         raise ValueError("build summary must use schemaVersion 1")
+    profile = release_profile(profile_name) if profile_name is not None else None
+    if profile is None and summary.get("releaseProfile") in PROFILES:
+        raise ValueError("a protected build summary requires an explicit release profile")
+    if profile is not None and (
+        summary.get("releaseProfile") != profile.name
+        or summary.get("apiBaseURL") != profile.api_base_url
+    ):
+        raise ValueError("build summary does not match the fixed release profile")
     artifacts = summary.get("artifacts")
     if not isinstance(artifacts, list) or len(artifacts) != len(PLATFORMS):
         raise ValueError("build summary must contain exactly three artifacts")
@@ -76,6 +91,10 @@ def descriptor_from_summary(summary: object, key_id: str) -> dict[str, object]:
         item_version = item.get("helperVersion")
         if not isinstance(item_version, str) or STRICT_SEMVER.fullmatch(item_version) is None:
             raise ValueError("build artifact helperVersion must be strict SemVer without metadata")
+        if profile is not None and item_version != profile.helper_version:
+            raise ValueError("build artifact version does not match the fixed release profile")
+        if profile is not None and item.get("helperReleaseTag") != profile.helper_release_tag:
+            raise ValueError("build artifact tag does not match the fixed release profile")
         if version is None:
             version = item_version
         elif version != item_version:
@@ -132,7 +151,7 @@ def atomic_write(path: Path, content: bytes) -> None:
 def main() -> int:
     args = parse_args()
     summary = json.loads(args.summary.read_text(encoding="utf-8"))
-    descriptor = descriptor_from_summary(summary, args.key_id)
+    descriptor = descriptor_from_summary(summary, args.key_id, args.release_profile)
     atomic_write(args.output, canonical_bytes(descriptor))
     print(json.dumps(descriptor, sort_keys=True))
     return 0

@@ -1,7 +1,7 @@
 {
   "name": "codex-skin",
   "version": "0.1.0-paid-alpha",
-  "description": "Apply verified Codex Desktop themes through one external session runtime with offline restore.",
+  "description": "Apply verified Codex Desktop themes through bounded, on-demand Helper transactions with offline restore.",
   "author": {
     "name": "Codex Skin",
     "url": "https://github.com/yuanjohn01-byte/codex-skin-plugin"
@@ -14,17 +14,17 @@
   "interface": {
     "displayName": "Codex Skin",
     "shortDescription": "Apply verified themes to Codex Desktop",
-    "longDescription": "Codex Skin keeps the Plugin as the user entry while one external session runtime owns verified launch, apply, switch, keep-alive, and offline restore.",
+    "longDescription": "Codex Skin keeps the Plugin as the user entry while one bounded external Helper transaction applies, switches, verifies, or restores a theme, then exits.",
     "developerName": "Codex Skin",
     "category": "Developer Tools",
     "capabilities": [
       "Verified theme apply",
-      "Single session Runtime Supervisor",
+      "Verified one-shot Helper transactions",
       "Offline official-interface restore"
     ],
     "websiteURL": "https://github.com/yuanjohn01-byte/codex-skin-plugin",
     "defaultPrompt": [
-      "Apply Codex Skin theme 100001.",
+      "Apply Codex Skin theme 100002.",
       "Show Codex Skin status.",
       "Restore the official Codex appearance."
     ]
