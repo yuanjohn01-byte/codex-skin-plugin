@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/runtimebudget"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 )
 
@@ -24,10 +25,12 @@ const (
 	schemaVersion = 1
 	requestTTL    = 30 * time.Minute
 	// RestartWorkerTimeout is the execution budget used by the detached Helper.
-	// RestartRunningLease additionally protects the continuation while startup,
-	// rollback, completion, and cleanup finish.
-	RestartWorkerTimeout = 4 * time.Minute
-	RestartRunningLease  = RestartWorkerTimeout + 30*time.Second
+	// RestartRunningLease additionally covers the default startup delay, the
+	// longest detached engine rollback and adapter cleanup, and terminal-state
+	// persistence. Both are aliases of the shared runtime budget so the lease
+	// cannot silently drift below the work it protects.
+	RestartWorkerTimeout = runtimebudget.RestartWorkerTimeout
+	RestartRunningLease  = runtimebudget.RestartRunningLease
 	maxRequestBytes      = 8 * 1024
 	maxDescriptor        = 64 * 1024
 	packageFilename      = "theme.cskin"

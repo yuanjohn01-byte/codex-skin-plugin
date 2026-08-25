@@ -23,11 +23,12 @@ import (
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/codex"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/renderer"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/runtimebudget"
 )
 
 const (
 	defaultLaunchWait   = 25 * time.Second
-	openRollbackTimeout = 45 * time.Second
+	openRollbackTimeout = runtimebudget.AdapterCleanupTimeout
 	// Codex can still be attaching its first shell and Blob background after a
 	// controlled launch, so one on-demand apply uses a bounded verification
 	// window rather than a single immediate snapshot.

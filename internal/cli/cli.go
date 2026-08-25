@@ -22,6 +22,7 @@ import (
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/flowstate"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/protocol"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/restartflow"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/runtimebudget"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/themeapi"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/userflow"
@@ -493,7 +494,7 @@ func runRestartWorker(requestID string, environment Runtime) int {
 	}
 	delay := environment.RestartDelay
 	if delay == 0 {
-		delay = 2 * time.Second
+		delay = runtimebudget.RestartStartupDelay
 	}
 	if delay > 0 {
 		time.Sleep(delay)

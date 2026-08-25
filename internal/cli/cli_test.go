@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/flowstate"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/restartflow"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/runtimebudget"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/userflow"
 )
@@ -826,11 +826,15 @@ func TestRestartWorkerDefaultTimeoutLeavesRoomForVerifiedRelaunch(t *testing.T) 
 			restartflow.RestartWorkerTimeout,
 		)
 	}
-	if restartflow.RestartRunningLease <= restartTimeout+2*time.Second {
+	minimumSafetyBoundary := restartTimeout +
+		runtimebudget.RestartStartupDelay +
+		runtimebudget.EngineRollbackTimeout +
+		runtimebudget.AdapterCleanupTimeout
+	if restartflow.RestartRunningLease <= minimumSafetyBoundary {
 		t.Fatalf(
-			"running lease = %s, want more than worker timeout %s plus startup delay",
+			"running lease = %s, want more than latest cleanup boundary %s",
 			restartflow.RestartRunningLease,
-			restartTimeout,
+			minimumSafetyBoundary,
 		)
 	}
 }

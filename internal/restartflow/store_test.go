@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/runtimebudget"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 )
 
@@ -320,9 +321,13 @@ func TestBeginRenewsContinuationForEntireWorkerLease(t *testing.T) {
 
 	// A restore cannot replace the continuation while the worker can still be
 	// applying, verifying, rolling back, or committing its terminal status.
-	now = now.Add(RestartWorkerTimeout + 2*time.Second)
+	latestSafetyCleanup := RestartWorkerTimeout +
+		runtimebudget.RestartStartupDelay +
+		runtimebudget.EngineRollbackTimeout +
+		runtimebudget.AdapterCleanupTimeout
+	now = now.Add(latestSafetyCleanup)
 	if _, err := store.StageRestore(); !errors.Is(err, ErrBusy) {
-		t.Fatalf("replacement during worker lease error = %v", err)
+		t.Fatalf("replacement during final cleanup allowance error = %v", err)
 	}
 
 	now = expiresAt.Add(time.Second)
