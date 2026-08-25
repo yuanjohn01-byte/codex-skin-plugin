@@ -164,7 +164,6 @@ func TestDiscoverStableInstallationHonorsCanceledContext(t *testing.T) {
 		t.Fatalf("canceled stable discovery error = %v", err)
 	}
 }
-
 func testInstallation(version, digest string) Installation {
 	return Installation{
 		Platform: "macos", AppIdentifier: "com.openai.codex", Publisher: "2DC432GLL2",
@@ -190,7 +189,6 @@ func TestIdentityFileReadersRejectSymlink(t *testing.T) {
 		t.Fatalf("symlink read error = %v", err)
 	}
 }
-
 func TestControlledFlagsRequireExactLoopbackProfileAndSinglePort(t *testing.T) {
 	profile := filepath.Join(string(filepath.Separator), "Users", "test", "Application Support", "Codex")
 	valid := fmt.Sprintf(

@@ -171,6 +171,14 @@ def main() -> int:
     for marker in (
         "windows-no-node-smoke:",
         "macos-no-node-smoke:",
+        "signed-production-only",
+        "signed-production-candidate:",
+        "environment: paid-alpha-production-release",
+        "PRODUCTION_CONFIRMATION: ${{ inputs.production_confirmation }}",
+        "RELEASE https://codexskin.ai HELPER .17 BOOTSTRAP .16",
+        "--release-profile production",
+        "0.1.0-paid-alpha.17",
+        "0.1.0-paid-alpha.16-${{ steps.inputs.outputs.candidate_sha }}-production",
         "Test native Keychain storage and token rotation client",
         "Execute without Node or Go on PATH",
         "./internal/restartflow",
@@ -179,6 +187,71 @@ def main() -> int:
     ):
         if marker not in helper_workflow:
             raise AssertionError(f"Helper workflow lost Paid Alpha platform check: {marker}")
+    staging_job = job_block(helper_workflow, "signed-staging-candidate")
+    production_job = job_block(helper_workflow, "signed-production-candidate")
+    if "inputs.run_profile == 'signed-staging-only'" not in staging_job:
+        raise AssertionError("signed Staging candidate is not isolated to its exact manual profile")
+    if "inputs.run_profile == 'signed-production-only'" not in production_job:
+        raise AssertionError("signed Production candidate is not isolated to its exact manual profile")
+    if "codex-skin-staging.yuanjohn01.workers.dev" in production_job:
+        raise AssertionError("Production candidate workflow contains the Staging API origin")
+    if "https://codexskin.ai" not in production_job:
+        raise AssertionError("Production candidate workflow lost the fixed Production API origin")
+    if "--api-base-url" in production_job:
+        raise AssertionError("Production candidate workflow allows an API origin override")
+    for job_name, block, required_key, forbidden_key in (
+        (
+            "signed-staging-candidate",
+            staging_job,
+            "--key-id helper-alpha-2026-08",
+            "--key-id helper-production-2026-08",
+        ),
+        (
+            "signed-production-candidate",
+            production_job,
+            "--key-id helper-production-2026-08",
+            "--key-id helper-alpha-2026-08",
+        ),
+    ):
+        if required_key not in block:
+            raise AssertionError(f"{job_name} lost its channel-specific signing key")
+        if forbidden_key in block:
+            raise AssertionError(f"{job_name} contains the other channel's signing key")
+    for job_name, required, forbidden in (
+        (
+            "windows-no-node-smoke",
+            (
+                "codex-skin-helper_0.1.0-paid-alpha.17_windows_x64.exe",
+                "codex-skin-bootstrap_0.1.0-paid-alpha.16_windows_x64.exe",
+                "helper-v0.1.0-paid-alpha.17",
+                "https://codexskin.ai",
+            ),
+            (
+                "codex-skin-helper_0.1.0-paid-alpha.16_windows_x64.exe",
+                "codex-skin-bootstrap_0.1.0-paid-alpha.15_windows_x64.exe",
+            ),
+        ),
+        (
+            "macos-no-node-smoke",
+            (
+                "codex-skin-helper_0.1.0-paid-alpha.17_$suffix",
+                "codex-skin-bootstrap_0.1.0-paid-alpha.16_$suffix",
+                "helper-v0.1.0-paid-alpha.17",
+                "https://codexskin.ai",
+            ),
+            (
+                "codex-skin-helper_0.1.0-paid-alpha.16_$suffix",
+                "codex-skin-bootstrap_0.1.0-paid-alpha.15_$suffix",
+            ),
+        ),
+    ):
+        block = job_block(helper_workflow, job_name)
+        for marker in required:
+            if marker not in block:
+                raise AssertionError(f"{job_name} lost Production RC marker: {marker}")
+        for marker in forbidden:
+            if marker in block:
+                raise AssertionError(f"{job_name} still executes a Staging binary: {marker}")
     if "go test ./..." in helper_workflow:
         raise AssertionError("Helper workflow still runs deferred Guardian packages")
 

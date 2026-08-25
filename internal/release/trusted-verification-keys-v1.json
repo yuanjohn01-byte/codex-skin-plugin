@@ -9,6 +9,15 @@
       "notBefore": "2026-08-03T00:00:00Z",
       "notAfter": "2028-08-03T00:00:00Z",
       "status": "active"
+    },
+    {
+      "keyId": "helper-production-2026-08",
+      "algorithm": "Ed25519",
+      "usage": "helper-release",
+      "publicKeyBase64": "xe282h8Al1hCDaRpBT2uQXdOFjuiZ6uu5FqIC+ddotU=",
+      "notBefore": "2026-08-25T00:00:00Z",
+      "notAfter": "2028-08-25T00:00:00Z",
+      "status": "active"
     }
   ]
 }

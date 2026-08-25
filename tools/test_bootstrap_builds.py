@@ -16,7 +16,14 @@ BUILDER = ROOT / "tools" / "build_bootstrap.py"
 
 def build(output: Path) -> dict[str, object]:
     result = subprocess.run(
-        [sys.executable, str(BUILDER), "--output", str(output)],
+        [
+            sys.executable,
+            str(BUILDER),
+            "--output",
+            str(output),
+            "--release-profile",
+            "production",
+        ],
         cwd=ROOT,
         check=False,
         capture_output=True,
@@ -35,6 +42,11 @@ def main() -> int:
         if first != second:
             raise AssertionError("repeated Bootstrap builds produced different summaries")
         artifacts = first.get("artifacts")
+        if (
+            first.get("releaseProfile") != "production"
+            or first.get("helperAPIBaseURL") != "https://codexskin.ai"
+        ):
+            raise AssertionError("Bootstrap build did not use the fixed Production profile")
         if not isinstance(artifacts, list) or len(artifacts) != 3:
             raise AssertionError("expected exactly three Bootstrap artifacts")
         platforms = {item.get("platform") for item in artifacts if isinstance(item, dict)}
@@ -43,12 +55,20 @@ def main() -> int:
         if any(item.get("cgoEnabled") is not False for item in artifacts if isinstance(item, dict)):
             raise AssertionError("Bootstrap artifacts must use CGO_ENABLED=0")
         if any(
-            item.get("helperReleaseTag") != "helper-v0.1.0-paid-alpha.16"
+            item.get("helperReleaseTag") != "helper-v0.1.0-paid-alpha.17"
             for item in artifacts
             if isinstance(item, dict)
         ):
-            raise AssertionError("Bootstrap artifacts do not pin the Paid Alpha Helper release")
-    print("Bootstrap cross-build tests passed (3 targets, repeatable SHA-256 and fixed Helper tag).")
+            raise AssertionError("Bootstrap artifacts do not pin the Production Helper release")
+        if any(
+            item.get("bootstrapVersion") != "0.1.0-paid-alpha.16"
+            for item in artifacts
+            if isinstance(item, dict)
+        ):
+            raise AssertionError("Bootstrap artifacts did not use immutable Production version .16")
+    print(
+        "Production Bootstrap cross-build tests passed (fixed profile; 3 targets; repeatable SHA-256 and Helper tag)."
+    )
     return 0
 
 
