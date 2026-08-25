@@ -199,6 +199,24 @@ def main() -> int:
         raise AssertionError("Production candidate workflow lost the fixed Production API origin")
     if "--api-base-url" in production_job:
         raise AssertionError("Production candidate workflow allows an API origin override")
+    for job_name, block, required_key, forbidden_key in (
+        (
+            "signed-staging-candidate",
+            staging_job,
+            "--key-id helper-alpha-2026-08",
+            "--key-id helper-production-2026-08",
+        ),
+        (
+            "signed-production-candidate",
+            production_job,
+            "--key-id helper-production-2026-08",
+            "--key-id helper-alpha-2026-08",
+        ),
+    ):
+        if required_key not in block:
+            raise AssertionError(f"{job_name} lost its channel-specific signing key")
+        if forbidden_key in block:
+            raise AssertionError(f"{job_name} contains the other channel's signing key")
     for job_name, required, forbidden in (
         (
             "windows-no-node-smoke",

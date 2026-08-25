@@ -52,7 +52,7 @@
     },
     {
       "destination": "contracts/helper-release-verification-keys-v1.json",
-      "sha256": "3f64328d5f73804aeef2f37cb1bbc0a83ac6e80d2d49bc29edbd1d5aa19e845b",
+      "sha256": "b59a9292bf4d83d8a5a02a440842cdf0770c02a53686e5fc97f633f04eed491d",
       "source": "codex-skin/contracts/public/helper-release-verification-keys-v1.json"
     },
     {
@@ -62,7 +62,7 @@
     },
     {
       "destination": "internal/release/trusted-verification-keys-v1.json",
-      "sha256": "3f64328d5f73804aeef2f37cb1bbc0a83ac6e80d2d49bc29edbd1d5aa19e845b",
+      "sha256": "b59a9292bf4d83d8a5a02a440842cdf0770c02a53686e5fc97f633f04eed491d",
       "source": "codex-skin/contracts/public/helper-release-verification-keys-v1.json"
     },
     {

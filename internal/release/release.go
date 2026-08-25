@@ -40,6 +40,14 @@ var (
 
 var supportedPlatforms = []string{"macos-arm64", "macos-x64", "windows-x64"}
 
+// protectedHelperSigningKeys prevents the Staging and Production trust roots from
+// being used across release channels even while both public keys remain embedded
+// for channel-specific Bootstrap verification.
+var protectedHelperSigningKeys = map[string]string{
+	"0.1.0-paid-alpha.16": "helper-alpha-2026-08",
+	"0.1.0-paid-alpha.17": "helper-production-2026-08",
+}
+
 type Artifact struct {
 	Platform string `json:"platform"`
 	Filename string `json:"filename"`
@@ -291,6 +299,9 @@ func validateDescriptor(descriptor Descriptor) error {
 	}
 	if !keyIDPattern.MatchString(descriptor.SigningKeyID) {
 		return fmt.Errorf("%w: signing key id", ErrDescriptorInvalid)
+	}
+	if requiredKeyID, protected := protectedHelperSigningKeys[descriptor.HelperVersion]; protected && descriptor.SigningKeyID != requiredKeyID {
+		return fmt.Errorf("%w: signing key does not match protected helper version", ErrDescriptorInvalid)
 	}
 	if len(descriptor.Artifacts) != len(supportedPlatforms) {
 		return fmt.Errorf("%w: artifact count", ErrDescriptorInvalid)

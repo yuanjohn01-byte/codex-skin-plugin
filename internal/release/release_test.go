@@ -136,6 +136,38 @@ func TestVerifyArtifact(t *testing.T) {
 	}
 }
 
+func TestProtectedHelperVersionsRejectCrossChannelSigningKeys(t *testing.T) {
+	tests := []struct {
+		name          string
+		helperVersion string
+		signingKeyID  string
+	}{
+		{name: "production version with staging key", helperVersion: "0.1.0-paid-alpha.17", signingKeyID: "helper-alpha-2026-08"},
+		{name: "staging version with production key", helperVersion: "0.1.0-paid-alpha.16", signingKeyID: "helper-production-2026-08"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			payload := []byte("verified helper artifact")
+			digest := sha256.Sum256(payload)
+			descriptor := Descriptor{
+				SchemaVersion: 1,
+				HelperVersion: test.helperVersion,
+				ReleaseTag:    "helper-v" + test.helperVersion,
+				PublishedAt:   "2026-08-25T00:00:00Z",
+				SigningKeyID:  test.signingKeyID,
+				Artifacts: []Artifact{
+					{Platform: "macos-arm64", Filename: expectedFilename(test.helperVersion, "macos-arm64"), SHA256: hex.EncodeToString(digest[:]), Size: int64(len(payload))},
+					{Platform: "macos-x64", Filename: expectedFilename(test.helperVersion, "macos-x64"), SHA256: hex.EncodeToString(digest[:]), Size: int64(len(payload))},
+					{Platform: "windows-x64", Filename: expectedFilename(test.helperVersion, "windows-x64"), SHA256: hex.EncodeToString(digest[:]), Size: int64(len(payload))},
+				},
+			}
+			if _, err := CanonicalBytes(descriptor); !errors.Is(err, ErrDescriptorInvalid) {
+				t.Fatalf("cross-channel signing key was accepted: %v", err)
+			}
+		})
+	}
+}
+
 func TestSemverPrecedenceAndUnsupportedRuntime(t *testing.T) {
 	tests := []struct {
 		current string

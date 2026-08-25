@@ -127,7 +127,7 @@ jobs:
             --summary dist/helper/build-summary.json \
             --release-profile production
           python3 tools/create_release_descriptor.py \
-            --key-id helper-alpha-2026-08 \
+            --key-id helper-production-2026-08 \
             --release-profile production
           python3 tools/render_bootstrap_pins.py \
             --summary dist/bootstrap/build-summary.json \
