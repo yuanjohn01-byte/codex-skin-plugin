@@ -1,12 +1,18 @@
 # Changelog
 
-## 0.1.0-paid-alpha - Code-stage candidate
+## 0.1.0-paid-alpha - Production Paid Alpha
 
-- Prepare a fail-closed, unpublished Production release profile with fixed
-  `https://codexskin.ai` origin, new immutable Helper `.17` / Bootstrap `.16`
-  versions, a separate protected workflow environment, channel-specific SBOM
-  and pins, and mixed Staging/Production input rejection. The existing Staging
-  `.16/.15` profile remains available and no Release is published by this work.
+- Publish the signed Production Paid Alpha Helper `.17` / Bootstrap `.16` release
+  from exact source commit `e4682ad92ac63ddc1e0c169aed28bd5803c8a21a`,
+  fixed to `https://codexskin.ai`, with channel-specific SBOM, descriptor,
+  detached signature, and exact per-platform Plugin pins. The existing Staging
+  `.16/.15` profile remains available, and Production cannot relabel Staging bytes.
+- Pass the exact-main macOS, Windows, marketplace, signing-feasibility,
+  reproducible-build, Helper, Bootstrap, and Gate B checks. Real Codex Desktop
+  validation on Windows remains the separate Gate C follow-up for Paid Alpha.
+- Keep the Helper transaction lock through the shared startup, worker, engine
+  rollback, adapter cleanup, and state-write budget so verified cleanup cannot
+  outlive the single-use operation lease.
 - Keep restart transactions alive for up to four minutes and reduce repeated
   macOS Gatekeeper work by using full identity verification before and after a
   bounded immutable-file probe window. Windows retains its complete package
@@ -104,7 +110,7 @@
 - Reject absent late-rendered activity and diff fixtures as `not_present` instead of passing them, and require computed contrast when those fixtures exist.
 - Carry the MIT-licensed lifecycle and native-token mechanisms adapted from Codex Dream Skin v1.5.9 while excluding its artwork and other non-software assets.
 
-This candidate is not a Public or Production release. The API origin, signed Helper Release, Production deployment order, and final macOS/Windows distribution gates remain required before merge/release.
+This is the Public Production Paid Alpha release, distributed as a GitHub prerelease rather than stable/latest. Automated macOS and Windows gates pass; real Codex Desktop validation on Windows remains the separate Gate C follow-up.
 
 ## 0.0.2 - Unreleased
 

@@ -182,7 +182,7 @@ REQUIRED_SKILLS = {
     VERSION_SKILL_RELATIVE: (
         "name: codex-skin-version\n",
         "Plugin version: `0.1.0-paid-alpha`.",
-        "Release status: code-stage candidate",
+        "Release status: Production Paid Alpha",
     ),
     PLUGIN_ROOT / "skills/codex-skin-install-theme/SKILL.md": (
         "name: codex-skin-install-theme\n",
