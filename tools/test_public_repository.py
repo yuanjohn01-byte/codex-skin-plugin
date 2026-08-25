@@ -97,7 +97,7 @@ description: Report Codex Skin Paid Alpha.
 
 Plugin version: `0.1.0-paid-alpha`.
 Skill: `codex-skin-version`.
-Release status: code-stage candidate.
+Release status: Production Paid Alpha.
 """
 INSTALL_SKILL = """---
 name: codex-skin-install-theme

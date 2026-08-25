@@ -77,7 +77,7 @@ func TestVerifyRejectsSignaturePackageAndKeyFailures(t *testing.T) {
 	release := makeTestRelease(t, nil)
 
 	tamperedSignature := append([]byte(nil), release.signature...)
-	tamperedSignature[0] = 'A'
+	tamperedSignature[0] ^= 0x01
 	if _, err := verifyWithKeyset(release.packagePath, release.descriptor, tamperedSignature, release.keyset); !errors.Is(err, ErrSignatureInvalid) {
 		t.Fatalf("tampered signature error = %v", err)
 	}
