@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/flowstate"
@@ -814,5 +815,22 @@ func TestRestartApplyFailureCodePreservesVerificationAndRollbackOutcomes(t *test
 	}
 	if got := restartApplyFailureCode(errors.New("other failure")); got != "CS-FLOW-RESTART-006" {
 		t.Fatalf("fallback failure code = %q", got)
+	}
+}
+
+func TestRestartWorkerDefaultTimeoutLeavesRoomForVerifiedRelaunch(t *testing.T) {
+	if restartTimeout != restartflow.RestartWorkerTimeout {
+		t.Fatalf(
+			"restart timeout = %s, continuation contract = %s",
+			restartTimeout,
+			restartflow.RestartWorkerTimeout,
+		)
+	}
+	if restartflow.RestartRunningLease <= restartTimeout+2*time.Second {
+		t.Fatalf(
+			"running lease = %s, want more than worker timeout %s plus startup delay",
+			restartflow.RestartRunningLease,
+			restartTimeout,
+		)
 	}
 }

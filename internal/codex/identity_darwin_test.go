@@ -139,6 +139,16 @@ func TestControlledDarwinPIDsPreservesAmbiguity(t *testing.T) {
 	}
 }
 
+func TestPlistValueReadsProvidedSnapshot(t *testing.T) {
+	plist := []byte(`<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>com.openai.codex</string></dict></plist>`)
+	got, err := plistValue(context.Background(), plist, "CFBundleIdentifier")
+	if err != nil || got != officialBundleID {
+		t.Fatalf("plist value = %q, err=%v", got, err)
+	}
+}
+
 func TestCurrentOfficialCodexIdentity(t *testing.T) {
 	if os.Getenv("CODEX_SKIN_REAL_CODEX") != "1" {
 		t.Skip("set CODEX_SKIN_REAL_CODEX=1 for the local Gate B identity probe")

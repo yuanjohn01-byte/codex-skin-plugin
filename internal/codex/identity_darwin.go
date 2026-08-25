@@ -21,6 +21,7 @@ import (
 const (
 	officialBundleID = "com.openai.codex"
 	officialTeamID   = "2DC432GLL2"
+	maxInfoPlistSize = 1024 * 1024
 )
 
 func DiscoverInstallation(ctx context.Context) (Installation, error) {
@@ -567,15 +568,19 @@ func verifyDarwinBundle(ctx context.Context, bundle string) (Installation, error
 		return Installation{}, ErrIdentityUntrusted
 	}
 	infoPlist := filepath.Join(bundle, "Contents", "Info.plist")
-	bundleID, err := plistValue(ctx, infoPlist, "CFBundleIdentifier")
+	plist, err := readBoundedOrdinaryFile(infoPlist, maxInfoPlistSize)
+	if err != nil {
+		return Installation{}, ErrIdentityUntrusted
+	}
+	bundleID, err := plistValue(ctx, plist, "CFBundleIdentifier")
 	if err != nil || bundleID != officialBundleID {
 		return Installation{}, ErrIdentityUntrusted
 	}
-	executableName, err := plistValue(ctx, infoPlist, "CFBundleExecutable")
+	executableName, err := plistValue(ctx, plist, "CFBundleExecutable")
 	if err != nil || executableName == "" || filepath.Base(executableName) != executableName {
 		return Installation{}, ErrIdentityUntrusted
 	}
-	version, err := plistValue(ctx, infoPlist, "CFBundleShortVersionString")
+	version, err := plistValue(ctx, plist, "CFBundleShortVersionString")
 	if err != nil || version == "" {
 		return Installation{}, ErrIdentityUntrusted
 	}
@@ -704,11 +709,66 @@ func verifyInstallationFresh(ctx context.Context, expected Installation) error {
 	return nil
 }
 
-func plistValue(ctx context.Context, plistPath, key string) (string, error) {
+// probeStableInstallation compares the mutable portions of an installation
+// against a full official verification already completed in this transaction.
+// It deliberately does not replace the full verification performed before and
+// after the stable-probe window in DiscoverStableInstallation.
+func probeStableInstallation(ctx context.Context, expected Installation) (Installation, error) {
+	current, err := inspectDarwinBundleFingerprint(ctx, expected.Root)
+	if err != nil || !sameInstallation(current, expected) {
+		return Installation{}, ErrIdentityUntrusted
+	}
+	return current, nil
+}
+
+func inspectDarwinBundleFingerprint(ctx context.Context, bundle string) (Installation, error) {
+	info, err := os.Lstat(bundle)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || filepath.Ext(bundle) != ".app" {
+		return Installation{}, ErrIdentityUntrusted
+	}
+	contents := filepath.Join(bundle, "Contents")
+	contentsInfo, err := os.Lstat(contents)
+	if err != nil || !contentsInfo.IsDir() || contentsInfo.Mode()&os.ModeSymlink != 0 {
+		return Installation{}, ErrIdentityUntrusted
+	}
+	infoPlist := filepath.Join(contents, "Info.plist")
+	plist, err := readBoundedOrdinaryFile(infoPlist, maxInfoPlistSize)
+	if err != nil {
+		return Installation{}, ErrIdentityUntrusted
+	}
+	bundleID, err := plistValue(ctx, plist, "CFBundleIdentifier")
+	if err != nil || bundleID != officialBundleID {
+		return Installation{}, ErrIdentityUntrusted
+	}
+	executableName, err := plistValue(ctx, plist, "CFBundleExecutable")
+	if err != nil || executableName == "" || filepath.Base(executableName) != executableName {
+		return Installation{}, ErrIdentityUntrusted
+	}
+	version, err := plistValue(ctx, plist, "CFBundleShortVersionString")
+	if err != nil || version == "" {
+		return Installation{}, ErrIdentityUntrusted
+	}
+	macOSDirectory := filepath.Join(contents, "MacOS")
+	macOSInfo, err := os.Lstat(macOSDirectory)
+	if err != nil || !macOSInfo.IsDir() || macOSInfo.Mode()&os.ModeSymlink != 0 {
+		return Installation{}, ErrIdentityUntrusted
+	}
+	executable := filepath.Join(macOSDirectory, executableName)
+	digest, err := hashOrdinaryFile(executable)
+	if err != nil {
+		return Installation{}, err
+	}
+	return Installation{
+		Platform: "macos", AppIdentifier: officialBundleID, Publisher: officialTeamID,
+		Version: version, Root: bundle, Executable: executable, ExecutableSHA256: digest,
+	}, nil
+}
+
+func plistValue(ctx context.Context, plist []byte, key string) (string, error) {
 	if key == "" || strings.ContainsAny(key, " \t\r\n") {
 		return "", ErrIdentityUntrusted
 	}
-	output, err := exec.CommandContext(
+	command := exec.CommandContext(
 		ctx,
 		"/usr/bin/plutil",
 		"-extract",
@@ -716,8 +776,10 @@ func plistValue(ctx context.Context, plistPath, key string) (string, error) {
 		"raw",
 		"-o",
 		"-",
-		plistPath,
-	).Output()
+		"-",
+	)
+	command.Stdin = bytes.NewReader(plist)
+	output, err := command.Output()
 	if err != nil {
 		return "", ErrIdentityUntrusted
 	}

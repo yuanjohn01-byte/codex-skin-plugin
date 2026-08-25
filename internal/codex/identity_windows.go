@@ -442,6 +442,16 @@ func verifyInstallationFresh(ctx context.Context, expected Installation) error {
 	return nil
 }
 
+// Windows package discovery is already the platform's complete identity check.
+// Keep the existing behavior for its stable probes rather than weakening the
+// Store package validation while the shared launch flow is optimized on macOS.
+func probeStableInstallation(ctx context.Context, expected Installation) (Installation, error) {
+	if err := verifyInstallationFresh(ctx, expected); err != nil {
+		return Installation{}, err
+	}
+	return expected, nil
+}
+
 func runPowerShellJSON(ctx context.Context, script string, args []string, target any) error {
 	commandArgs := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "RemoteSigned", "-Command", script}
 	commandArgs = append(commandArgs, args...)

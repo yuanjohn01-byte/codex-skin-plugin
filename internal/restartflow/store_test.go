@@ -284,6 +284,54 @@ func TestRestoreContinuationExpiresAndCompletesWithoutPayload(t *testing.T) {
 	}
 }
 
+func TestBeginRenewsContinuationForEntireWorkerLease(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "CodexSkin")
+	if _, err := engine.OpenStore(root, ""); err != nil {
+		t.Fatal(err)
+	}
+	store, err := New(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Date(2026, 8, 25, 10, 0, 0, 0, time.UTC)
+	store.now = func() time.Time { return now }
+	request, err := store.StageRestore()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Begin at the very end of the user confirmation window.
+	now = now.Add(requestTTL - time.Second)
+	request, err = store.Approve(request.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err = store.Begin(request.RequestID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiresAt, err := time.Parse(time.RFC3339, request.ExpiresAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := now.Add(RestartRunningLease); !expiresAt.Equal(want) {
+		t.Fatalf("running expiry = %s, want %s", expiresAt, want)
+	}
+
+	// A restore cannot replace the continuation while the worker can still be
+	// applying, verifying, rolling back, or committing its terminal status.
+	now = now.Add(RestartWorkerTimeout + 2*time.Second)
+	if _, err := store.StageRestore(); !errors.Is(err, ErrBusy) {
+		t.Fatalf("replacement during worker lease error = %v", err)
+	}
+
+	now = expiresAt.Add(time.Second)
+	replacement, err := store.StageRestore()
+	if err != nil || replacement.RequestID == request.RequestID {
+		t.Fatalf("replacement after worker lease = %#v, %v", replacement, err)
+	}
+}
+
 func TestContinuationLockIsProcessScoped(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "CodexSkin")
 	if _, err := engine.OpenStore(root, ""); err != nil {

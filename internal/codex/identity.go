@@ -61,14 +61,17 @@ type CurrentInstance struct {
 }
 
 // DiscoverStableInstallation rediscovers the official Codex installation at
-// the launch boundary and requires the complete verified identity to remain
-// unchanged across several probes. Codex may replace its bundle/package while
-// an older process is still running; a stop-and-relaunch flow must never reuse
-// the pre-update executable hash after that replacement.
+// the launch boundary and requires a fully verified identity before and after
+// a series of cheap immutable-file probes. confirmations counts both fully
+// verified endpoints, so the normal five-observation sequence is:
+// full -> probe -> probe -> probe -> full. Codex may replace its bundle/package
+// while an older process is still running; a stop-and-relaunch flow must never
+// reuse the pre-update executable hash after that replacement.
 func DiscoverStableInstallation(ctx context.Context) (Installation, error) {
 	return discoverStableInstallation(
 		ctx,
 		DiscoverInstallation,
+		probeStableInstallation,
 		stableInstallationPollInterval,
 		stableInstallationConfirmations,
 	)
@@ -77,29 +80,42 @@ func DiscoverStableInstallation(ctx context.Context) (Installation, error) {
 func discoverStableInstallation(
 	ctx context.Context,
 	discover func(context.Context) (Installation, error),
+	probe func(context.Context, Installation) (Installation, error),
 	interval time.Duration,
 	confirmations int,
 ) (Installation, error) {
-	if ctx == nil || discover == nil || interval <= 0 || confirmations < 2 {
+	if ctx == nil || discover == nil || probe == nil || interval <= 0 || confirmations < 3 {
 		return Installation{}, ErrIdentityUntrusted
 	}
-	var candidate Installation
-	consecutive := 0
 	for {
-		current, err := discover(ctx)
+		candidate, err := discover(ctx)
 		if err == nil {
-			if consecutive > 0 && sameInstallation(candidate, current) {
-				consecutive++
-			} else {
-				candidate = current
-				consecutive = 1
+			stable := true
+			// Reserve the final observation for a full platform verification.
+			// This preserves the original five-observation policy on platforms
+			// whose probes are full checks, while avoiding repeated expensive
+			// codesign/spctl work on macOS during the restart race.
+			for confirmation := 1; confirmation < confirmations-1; confirmation++ {
+				select {
+				case <-ctx.Done():
+					return Installation{}, errors.Join(ErrIdentityUntrusted, ctx.Err())
+				case <-time.After(interval):
+				}
+				current, probeErr := probe(ctx, candidate)
+				if probeErr != nil || !sameInstallation(candidate, current) {
+					stable = false
+					break
+				}
 			}
-			if consecutive >= confirmations {
-				return candidate, nil
+			if stable {
+				// A stable hash is not a substitute for the official signature and
+				// Gatekeeper/package verification. Repeat the complete check at the
+				// exact launch boundary before returning this installation.
+				fresh, finalErr := discover(ctx)
+				if finalErr == nil && sameInstallation(candidate, fresh) {
+					return fresh, nil
+				}
 			}
-		} else {
-			candidate = Installation{}
-			consecutive = 0
 		}
 		select {
 		case <-ctx.Done():
@@ -182,20 +198,76 @@ func sameCurrentInstance(left, right CurrentInstance) bool {
 }
 
 func hashOrdinaryFile(path string) (string, error) {
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("%w: executable file", ErrIdentityUntrusted)
-	}
-	file, err := os.Open(path)
+	file, identity, err := openOrdinaryFile(path)
 	if err != nil {
-		return "", fmt.Errorf("%w: executable open", ErrIdentityUntrusted)
+		return "", err
 	}
 	defer file.Close()
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, file); err != nil {
 		return "", fmt.Errorf("%w: executable hash", ErrIdentityUntrusted)
 	}
+	if err := verifyOpenOrdinaryFile(path, file, identity); err != nil {
+		return "", err
+	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func readBoundedOrdinaryFile(path string, limit int64) ([]byte, error) {
+	if limit < 1 {
+		return nil, ErrIdentityUntrusted
+	}
+	file, identity, err := openOrdinaryFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	if identity.Size() < 1 || identity.Size() > limit {
+		return nil, fmt.Errorf("%w: ordinary file size", ErrIdentityUntrusted)
+	}
+	content, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil || int64(len(content)) != identity.Size() {
+		return nil, fmt.Errorf("%w: ordinary file read", ErrIdentityUntrusted)
+	}
+	if err := verifyOpenOrdinaryFile(path, file, identity); err != nil {
+		return nil, err
+	}
+	return content, nil
+}
+
+func openOrdinaryFile(path string) (*os.File, os.FileInfo, error) {
+	before, err := os.Lstat(path)
+	if err != nil || !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 {
+		return nil, nil, fmt.Errorf("%w: ordinary file", ErrIdentityUntrusted)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: ordinary file open", ErrIdentityUntrusted)
+	}
+	opened, openedErr := file.Stat()
+	after, afterErr := os.Lstat(path)
+	if openedErr != nil || afterErr != nil ||
+		!opened.Mode().IsRegular() || !after.Mode().IsRegular() ||
+		after.Mode()&os.ModeSymlink != 0 ||
+		!os.SameFile(before, opened) || !os.SameFile(opened, after) {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("%w: ordinary file changed before open", ErrIdentityUntrusted)
+	}
+	return file, opened, nil
+}
+
+func verifyOpenOrdinaryFile(path string, file *os.File, identity os.FileInfo) error {
+	opened, openedErr := file.Stat()
+	current, currentErr := os.Lstat(path)
+	if openedErr != nil || currentErr != nil ||
+		!opened.Mode().IsRegular() || !current.Mode().IsRegular() ||
+		current.Mode()&os.ModeSymlink != 0 ||
+		!os.SameFile(identity, opened) || !os.SameFile(opened, current) ||
+		opened.Size() != identity.Size() ||
+		!opened.ModTime().Equal(identity.ModTime()) {
+		return fmt.Errorf("%w: ordinary file changed during read", ErrIdentityUntrusted)
+	}
+	return nil
 }
 
 func validateLaunchInputs(installation Installation, profile string, port int) (string, error) {

@@ -8,6 +8,10 @@ func DiscoverInstallation(context.Context) (Installation, error) {
 	return Installation{}, ErrIdentityUntrusted
 }
 
+func probeStableInstallation(context.Context, Installation) (Installation, error) {
+	return Installation{}, ErrIdentityUntrusted
+}
+
 func LaunchControlled(context.Context, Installation, string, int) (int, error) {
 	return 0, ErrLaunchFailed
 }
