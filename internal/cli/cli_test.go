@@ -9,11 +9,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/flowstate"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/restartflow"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/runtimebudget"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/userflow"
 )
@@ -819,7 +819,22 @@ func TestRestartApplyFailureCodePreservesVerificationAndRollbackOutcomes(t *test
 }
 
 func TestRestartWorkerDefaultTimeoutLeavesRoomForVerifiedRelaunch(t *testing.T) {
-	if restartTimeout < 4*time.Minute {
-		t.Fatalf("restart timeout = %s, want at least 4m", restartTimeout)
+	if restartTimeout != restartflow.RestartWorkerTimeout {
+		t.Fatalf(
+			"restart timeout = %s, continuation contract = %s",
+			restartTimeout,
+			restartflow.RestartWorkerTimeout,
+		)
+	}
+	minimumSafetyBoundary := restartTimeout +
+		runtimebudget.RestartStartupDelay +
+		runtimebudget.EngineRollbackTimeout +
+		runtimebudget.AdapterCleanupTimeout
+	if restartflow.RestartRunningLease <= minimumSafetyBoundary {
+		t.Fatalf(
+			"running lease = %s, want more than latest cleanup boundary %s",
+			restartflow.RestartRunningLease,
+			minimumSafetyBoundary,
+		)
 	}
 }

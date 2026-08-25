@@ -21,6 +21,7 @@ import (
 const (
 	officialBundleID = "com.openai.codex"
 	officialTeamID   = "2DC432GLL2"
+	maxInfoPlistSize = 1024 * 1024
 )
 
 func DiscoverInstallation(ctx context.Context) (Installation, error) {
@@ -567,15 +568,19 @@ func verifyDarwinBundle(ctx context.Context, bundle string) (Installation, error
 		return Installation{}, ErrIdentityUntrusted
 	}
 	infoPlist := filepath.Join(bundle, "Contents", "Info.plist")
-	bundleID, err := plistValue(ctx, infoPlist, "CFBundleIdentifier")
+	plist, err := readBoundedOrdinaryFile(infoPlist, maxInfoPlistSize)
+	if err != nil {
+		return Installation{}, ErrIdentityUntrusted
+	}
+	bundleID, err := plistValue(ctx, plist, "CFBundleIdentifier")
 	if err != nil || bundleID != officialBundleID {
 		return Installation{}, ErrIdentityUntrusted
 	}
-	executableName, err := plistValue(ctx, infoPlist, "CFBundleExecutable")
+	executableName, err := plistValue(ctx, plist, "CFBundleExecutable")
 	if err != nil || executableName == "" || filepath.Base(executableName) != executableName {
 		return Installation{}, ErrIdentityUntrusted
 	}
-	version, err := plistValue(ctx, infoPlist, "CFBundleShortVersionString")
+	version, err := plistValue(ctx, plist, "CFBundleShortVersionString")
 	if err != nil || version == "" {
 		return Installation{}, ErrIdentityUntrusted
 	}
@@ -727,19 +732,19 @@ func inspectDarwinBundleFingerprint(ctx context.Context, bundle string) (Install
 		return Installation{}, ErrIdentityUntrusted
 	}
 	infoPlist := filepath.Join(contents, "Info.plist")
-	plistInfo, err := os.Lstat(infoPlist)
-	if err != nil || !plistInfo.Mode().IsRegular() || plistInfo.Mode()&os.ModeSymlink != 0 {
+	plist, err := readBoundedOrdinaryFile(infoPlist, maxInfoPlistSize)
+	if err != nil {
 		return Installation{}, ErrIdentityUntrusted
 	}
-	bundleID, err := plistValue(ctx, infoPlist, "CFBundleIdentifier")
+	bundleID, err := plistValue(ctx, plist, "CFBundleIdentifier")
 	if err != nil || bundleID != officialBundleID {
 		return Installation{}, ErrIdentityUntrusted
 	}
-	executableName, err := plistValue(ctx, infoPlist, "CFBundleExecutable")
+	executableName, err := plistValue(ctx, plist, "CFBundleExecutable")
 	if err != nil || executableName == "" || filepath.Base(executableName) != executableName {
 		return Installation{}, ErrIdentityUntrusted
 	}
-	version, err := plistValue(ctx, infoPlist, "CFBundleShortVersionString")
+	version, err := plistValue(ctx, plist, "CFBundleShortVersionString")
 	if err != nil || version == "" {
 		return Installation{}, ErrIdentityUntrusted
 	}
@@ -759,11 +764,11 @@ func inspectDarwinBundleFingerprint(ctx context.Context, bundle string) (Install
 	}, nil
 }
 
-func plistValue(ctx context.Context, plistPath, key string) (string, error) {
+func plistValue(ctx context.Context, plist []byte, key string) (string, error) {
 	if key == "" || strings.ContainsAny(key, " \t\r\n") {
 		return "", ErrIdentityUntrusted
 	}
-	output, err := exec.CommandContext(
+	command := exec.CommandContext(
 		ctx,
 		"/usr/bin/plutil",
 		"-extract",
@@ -771,8 +776,10 @@ func plistValue(ctx context.Context, plistPath, key string) (string, error) {
 		"raw",
 		"-o",
 		"-",
-		plistPath,
-	).Output()
+		"-",
+	)
+	command.Stdin = bytes.NewReader(plist)
+	output, err := command.Output()
 	if err != nil {
 		return "", ErrIdentityUntrusted
 	}

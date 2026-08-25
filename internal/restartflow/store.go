@@ -17,23 +17,31 @@ import (
 	"strings"
 	"time"
 
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/runtimebudget"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 )
 
 const (
-	schemaVersion    = 1
-	requestTTL       = 30 * time.Minute
-	maxRequestBytes  = 8 * 1024
-	maxDescriptor    = 64 * 1024
-	packageFilename  = "theme.cskin"
-	descriptorName   = "release-descriptor.json"
-	signatureName    = "release-descriptor.sig"
-	currentFilename  = "current.json"
-	requestsDirname  = "requests"
-	historyDirname   = "history"
-	maxHistory       = 8
-	operationApply   = "apply"
-	operationRestore = "restore"
+	schemaVersion = 1
+	requestTTL    = 30 * time.Minute
+	// RestartWorkerTimeout is the execution budget used by the detached Helper.
+	// RestartRunningLease additionally covers the default startup delay, the
+	// longest detached engine rollback and adapter cleanup, and terminal-state
+	// persistence. Both are aliases of the shared runtime budget so the lease
+	// cannot silently drift below the work it protects.
+	RestartWorkerTimeout = runtimebudget.RestartWorkerTimeout
+	RestartRunningLease  = runtimebudget.RestartRunningLease
+	maxRequestBytes      = 8 * 1024
+	maxDescriptor        = 64 * 1024
+	packageFilename      = "theme.cskin"
+	descriptorName       = "release-descriptor.json"
+	signatureName        = "release-descriptor.sig"
+	currentFilename      = "current.json"
+	requestsDirname      = "requests"
+	historyDirname       = "history"
+	maxHistory           = 8
+	operationApply       = "apply"
+	operationRestore     = "restore"
 )
 
 var (
@@ -276,12 +284,14 @@ func (store *Store) Approve(requestID string) (Request, error) {
 
 func (store *Store) Begin(requestID string) (Request, error) {
 	return store.transition(requestID, []Status{StatusApproved}, func(request *Request) error {
+		now := store.now().UTC()
 		expiry, err := time.Parse(time.RFC3339, request.ExpiresAt)
-		if err != nil || !store.now().Before(expiry) {
+		if err != nil || !now.Before(expiry) {
 			return ErrExpired
 		}
 		request.Status = StatusRunning
 		request.RestartStarted = true
+		request.ExpiresAt = now.Add(RestartRunningLease).Format(time.RFC3339)
 		return nil
 	})
 }
@@ -687,9 +697,6 @@ func active(request Request, now time.Time) bool {
 	expiry, err := time.Parse(time.RFC3339, request.ExpiresAt)
 	if err != nil {
 		return true
-	}
-	if request.Status == StatusRunning {
-		return now.Before(expiry.Add(2 * time.Minute))
 	}
 	return now.Before(expiry)
 }

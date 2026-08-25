@@ -198,20 +198,76 @@ func sameCurrentInstance(left, right CurrentInstance) bool {
 }
 
 func hashOrdinaryFile(path string) (string, error) {
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-		return "", fmt.Errorf("%w: executable file", ErrIdentityUntrusted)
-	}
-	file, err := os.Open(path)
+	file, identity, err := openOrdinaryFile(path)
 	if err != nil {
-		return "", fmt.Errorf("%w: executable open", ErrIdentityUntrusted)
+		return "", err
 	}
 	defer file.Close()
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, file); err != nil {
 		return "", fmt.Errorf("%w: executable hash", ErrIdentityUntrusted)
 	}
+	if err := verifyOpenOrdinaryFile(path, file, identity); err != nil {
+		return "", err
+	}
 	return hex.EncodeToString(hasher.Sum(nil)), nil
+}
+
+func readBoundedOrdinaryFile(path string, limit int64) ([]byte, error) {
+	if limit < 1 {
+		return nil, ErrIdentityUntrusted
+	}
+	file, identity, err := openOrdinaryFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	if identity.Size() < 1 || identity.Size() > limit {
+		return nil, fmt.Errorf("%w: ordinary file size", ErrIdentityUntrusted)
+	}
+	content, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil || int64(len(content)) != identity.Size() {
+		return nil, fmt.Errorf("%w: ordinary file read", ErrIdentityUntrusted)
+	}
+	if err := verifyOpenOrdinaryFile(path, file, identity); err != nil {
+		return nil, err
+	}
+	return content, nil
+}
+
+func openOrdinaryFile(path string) (*os.File, os.FileInfo, error) {
+	before, err := os.Lstat(path)
+	if err != nil || !before.Mode().IsRegular() || before.Mode()&os.ModeSymlink != 0 {
+		return nil, nil, fmt.Errorf("%w: ordinary file", ErrIdentityUntrusted)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, nil, fmt.Errorf("%w: ordinary file open", ErrIdentityUntrusted)
+	}
+	opened, openedErr := file.Stat()
+	after, afterErr := os.Lstat(path)
+	if openedErr != nil || afterErr != nil ||
+		!opened.Mode().IsRegular() || !after.Mode().IsRegular() ||
+		after.Mode()&os.ModeSymlink != 0 ||
+		!os.SameFile(before, opened) || !os.SameFile(opened, after) {
+		_ = file.Close()
+		return nil, nil, fmt.Errorf("%w: ordinary file changed before open", ErrIdentityUntrusted)
+	}
+	return file, opened, nil
+}
+
+func verifyOpenOrdinaryFile(path string, file *os.File, identity os.FileInfo) error {
+	opened, openedErr := file.Stat()
+	current, currentErr := os.Lstat(path)
+	if openedErr != nil || currentErr != nil ||
+		!opened.Mode().IsRegular() || !current.Mode().IsRegular() ||
+		current.Mode()&os.ModeSymlink != 0 ||
+		!os.SameFile(identity, opened) || !os.SameFile(opened, current) ||
+		opened.Size() != identity.Size() ||
+		!opened.ModTime().Equal(identity.ModTime()) {
+		return fmt.Errorf("%w: ordinary file changed during read", ErrIdentityUntrusted)
+	}
+	return nil
 }
 
 func validateLaunchInputs(installation Installation, profile string, port int) (string, error) {

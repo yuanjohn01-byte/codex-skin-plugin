@@ -9,13 +9,14 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/runtimebudget"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 )
 
 var themePublicIDPattern = regexp.MustCompile(`^[0-9]{6}$`)
 
 const (
-	rollbackTimeout   = 20 * time.Second
+	rollbackTimeout   = runtimebudget.EngineRollbackTimeout
 	operationLockWait = 5 * time.Second
 	operationLockPoll = 25 * time.Millisecond
 
