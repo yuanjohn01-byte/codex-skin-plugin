@@ -13,6 +13,7 @@ class ReleaseProfile:
     helper_version: str
     bootstrap_version: str
     api_base_url: str
+    signing_key_id: str
 
     @property
     def helper_release_tag(self) -> str:
@@ -28,12 +29,14 @@ STAGING = ReleaseProfile(
     helper_version="0.1.0-paid-alpha.16",
     bootstrap_version="0.1.0-paid-alpha.15",
     api_base_url="https://codex-skin-staging.yuanjohn01.workers.dev",
+    signing_key_id="helper-alpha-2026-08",
 )
 PRODUCTION = ReleaseProfile(
     name="production",
     helper_version="0.1.0-paid-alpha.17",
     bootstrap_version="0.1.0-paid-alpha.16",
     api_base_url="https://codexskin.ai",
+    signing_key_id="helper-production-2026-08",
 )
 PROFILES = {profile.name: profile for profile in (STAGING, PRODUCTION)}
 

@@ -10,7 +10,9 @@ func TestTrustedVerificationKeyset(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(keyset.Keys) != 1 || keyset.Keys[0].KeyID != "helper-alpha-2026-08" || keyset.Keys[0].Status != "active" {
+	if len(keyset.Keys) != 2 ||
+		keyset.Keys[0].KeyID != "helper-alpha-2026-08" || keyset.Keys[0].Status != "active" ||
+		keyset.Keys[1].KeyID != "helper-production-2026-08" || keyset.Keys[1].Status != "active" {
 		t.Fatal("embedded Helper release verification keyset differs from the Paid Alpha contract")
 	}
 }
@@ -25,7 +27,11 @@ func TestVerificationKeysetRejectsInvalidState(t *testing.T) {
 		mutate func(*VerificationKeyset)
 	}{
 		{name: "duplicate", mutate: func(value *VerificationKeyset) { value.Keys = append(value.Keys, value.Keys[0]) }},
-		{name: "revoked only", mutate: func(value *VerificationKeyset) { value.Keys[0].Status = "revoked" }},
+		{name: "revoked only", mutate: func(value *VerificationKeyset) {
+			for index := range value.Keys {
+				value.Keys[index].Status = "revoked"
+			}
+		}},
 		{name: "wrong usage", mutate: func(value *VerificationKeyset) { value.Keys[0].Usage = "theme-release" }},
 		{name: "bad public key", mutate: func(value *VerificationKeyset) { value.Keys[0].PublicKeyBase64 = "AAAA" }},
 		{name: "backwards validity", mutate: func(value *VerificationKeyset) { value.Keys[0].NotAfter = value.Keys[0].NotBefore }},

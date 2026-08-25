@@ -70,6 +70,8 @@ def descriptor_from_summary(
     profile = release_profile(profile_name) if profile_name is not None else None
     if profile is None and summary.get("releaseProfile") in PROFILES:
         raise ValueError("a protected build summary requires an explicit release profile")
+    if profile is not None and key_id != profile.signing_key_id:
+        raise ValueError("signing key does not match the fixed release profile")
     if profile is not None and (
         summary.get("releaseProfile") != profile.name
         or summary.get("apiBaseURL") != profile.api_base_url

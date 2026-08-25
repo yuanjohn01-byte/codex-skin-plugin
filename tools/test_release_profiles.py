@@ -83,6 +83,8 @@ def main() -> int:
         or STAGING.bootstrap_version != "0.1.0-paid-alpha.15"
         or PRODUCTION.helper_version != "0.1.0-paid-alpha.17"
         or PRODUCTION.bootstrap_version != "0.1.0-paid-alpha.16"
+        or STAGING.signing_key_id != "helper-alpha-2026-08"
+        or PRODUCTION.signing_key_id != "helper-production-2026-08"
         or PRODUCTION.api_base_url != "https://codexskin.ai"
         or STAGING.api_base_url == PRODUCTION.api_base_url
     ):
@@ -97,7 +99,7 @@ def main() -> int:
             raise AssertionError(f"{profile.name} Bootstrap filename lost its immutable version")
         descriptor = descriptor_from_summary(
             helper_summary(profile),
-            "helper-alpha-2026-08",
+            profile.signing_key_id,
             profile.name,
         )
         if (
@@ -109,7 +111,7 @@ def main() -> int:
     try:
         descriptor_from_summary(
             helper_summary(STAGING),
-            "helper-alpha-2026-08",
+            STAGING.signing_key_id,
             PRODUCTION.name,
         )
     except ValueError:
@@ -120,12 +122,28 @@ def main() -> int:
     try:
         descriptor_from_summary(
             helper_summary(PRODUCTION),
-            "helper-alpha-2026-08",
+            PRODUCTION.signing_key_id,
         )
     except ValueError:
         pass
     else:
         raise AssertionError("Production descriptor accepted a missing release-profile assertion")
+
+    for profile, foreign_key_id in (
+        (STAGING, PRODUCTION.signing_key_id),
+        (PRODUCTION, STAGING.signing_key_id),
+    ):
+        try:
+            descriptor_from_summary(
+                helper_summary(profile),
+                foreign_key_id,
+                profile.name,
+            )
+        except ValueError as exc:
+            if "signing key does not match" not in str(exc):
+                raise
+        else:
+            raise AssertionError(f"{profile.name} descriptor accepted the other channel's signing key")
 
     with tempfile.TemporaryDirectory(prefix="codex-skin-release-profiles-") as directory:
         root = Path(directory)
@@ -221,7 +239,7 @@ def main() -> int:
                 )
 
     print(
-        "Release profile tests passed (fixed versions/origins; descriptor, SBOM, pins isolation; mixed inputs rejected)."
+        "Release profile tests passed (fixed versions/origins/keys; descriptor, SBOM, pins isolation; mixed inputs rejected)."
     )
     return 0
 
