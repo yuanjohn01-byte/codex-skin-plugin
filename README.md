@@ -1,88 +1,50 @@
-# Codex Skin Plugin
+<div align="center">
 
-This is the standalone Public Plugin repository for Codex Skin. The installable Plugin root is `plugins/codex-skin/`; the repository root contains the Git-backed Marketplace metadata and release documentation.
+[English](README.md) · [简体中文](docs/README.zh-CN.md)
 
-Current status: `main` contains the Production Paid Alpha `0.1.0-paid-alpha` Plugin line. The Plugin remains the user entry; every apply, direct switch, or Restore uses one bounded external Helper transaction, verifies the visible result, then exits. The signed Production Helper `.17` and Bootstrap `.16` are published as a GitHub prerelease and are pinned to `https://codexskin.ai`. This is a Paid Alpha channel, not a stable/latest release; real Codex Desktop validation on Windows remains a separate Gate C follow-up.
+# Codex Skin
 
-The Production Paid Alpha Plugin consumes only allowlisted contracts exported from Private. One six-digit theme request can continue through same-origin device authorization, an optional bounded Pro purchase wait, verified package download, the existing Gate B signature/package checks, and transactional apply. Refresh credentials remain in macOS Keychain or Windows Credential Manager; Access Tokens remain memory-only. Offline Restore continues to work from the fixed out-of-cache recovery engine without login, active access, network, Node, or the Plugin cache.
+**Apply Codex Desktop themes from inside Codex, through a plugin.**
 
-The v0.0.1-to-v0.0.2 upgrade spike has passed macOS and Windows Desktop/CLI checks against the reviewed feature refs. The Windows distribution workflow also performs the equivalent CLI/cache upgrade on a clean GitHub-hosted runner. Every release still requires a post-merge two-platform check of the exact `main` form before its commands are published.
+Choose a theme on the Codex Skin website, copy its six-digit ID, and ask Codex to apply it from a normal task. The Plugin is free and open source.
 
-The repository uses the MIT license. Its tracked-file allowlist, secret/Private-path checks and negative fixtures must pass before every remote push. Founder approval to create the Public repository has been recorded.
+[Website](https://codexskin.ai/) · [Browse themes](https://codexskin.ai/themes) · [How it works](https://codexskin.ai/how-it-works)
 
-## Current structure
+</div>
 
-```text
-codex-skin-plugin/
-  AGENTS.md
-  LICENSE
-  .agents/
-    plugins/
-      marketplace.json
-  plugins/
-    codex-skin/
-      .codex-plugin/plugin.json
-      skills/
-        codex-skin-version/SKILL.md
-        codex-skin-install-theme/SKILL.md
-        codex-skin-restore-theme/SKILL.md
-        codex-skin-status/SKILL.md
-      scripts/
-      assets/
-  cmd/codex-skin/              # self-contained Helper entrypoint
-  cmd/codex-skin-guardian/     # fixed-surface internal Guardian spike
-  internal/                    # Helper, theme engine, adapter, auth, and Guardian packages
-  contracts/                   # generated public contracts only
-  tools/
-    validate_public_repo.py
-    test_public_repository.py
-```
+> [!NOTE]
+> Codex Skin is currently distributed as a GitHub prerelease, not a stable release. It targets Codex Desktop on macOS (Apple silicon and Intel) and Windows x64. Final real-app validation on Windows is still in progress. Codex Skin is an independent third-party project and is not affiliated with or endorsed by OpenAI.
 
-The Plugin Skills expose version, apply, local status, and offline restore. On the first `theme apply`, their wrappers may download only the release-tagged Bootstrap launcher whose platform filename and SHA-256 are pinned in the Plugin. That launcher verifies the signed Helper release and installs it under the per-user Codex Skin recovery path. All Helper commands then invoke only that fixed external copy; they never select a binary from the replaceable Plugin cache. `status`, `theme launch` (and its temporary `theme continue` compatibility alias), and Restore never bootstrap or use the network and fail closed when the verified external Helper is absent.
+![Two Codex Skin themes applied inside Codex Desktop](https://codexskin.ai/assets/product/plugin-applied-switch.webp)
 
-The Helper's API origin is a build-time value and is intentionally empty in ordinary source builds. This prevents an installed Plugin from accepting an arbitrary server URL or depending on an undeployed endpoint. Staging/Production artifacts must pin the approved HTTPS origin during their release build and pass the corresponding environment gate.
+<p align="center"><sub>A real switch from theme 100017 to 100007 inside Codex. The screenshot contains no workspace content.</sub></p>
 
-The immutable `.5` and `.6` Staging artifacts are historical session-runtime candidates and are not valid inputs for this on-demand path. The retained Staging release profile is fixed to Helper `.16`, Bootstrap `.15`, and the Staging API origin. The published Production Paid Alpha release is fixed to Helper `.17`, Bootstrap `.16`, and `https://codexskin.ai`; the Plugin launchers pin that exact tag and each platform Bootstrap SHA-256. Protected origins cannot be supplied through a free-form build override, and Production cannot relabel Staging bytes. The signed descriptor binds the `.17` binaries, while the SBOM, build summaries, generated pins, protected workflow environment, and artifact name also identify the Production profile. The Plugin version remains `0.1.0-paid-alpha` during the Alpha line.
+## See a few themes applied
 
-## Helper development
+There are currently 23 published themes: 6 Free and 17 Pro. Here are three Free themes running in Codex Desktop.
 
-Go 1.26.5 is pinned in `go.mod`. The minimal contract checks are:
+| [Ember Dune · 100002](https://codexskin.ai/themes/100002) | [Midnight Canopy · 100003](https://codexskin.ai/themes/100003) | [Polar Archive · 100004](https://codexskin.ai/themes/100004) |
+| --- | --- | --- |
+| <img src="https://codexskin.ai/previews/themes/100002/1.0.0/presentation/1/applied-full-e3d7e3fd6ec62325438c765c657d9db0cff05d51cc0cdeeff1b5dc6a90ef3e2f.webp" alt="Ember Dune applied in Codex Desktop" width="520"> | <img src="https://codexskin.ai/previews/themes/100003/1.0.0/presentation/1/applied-full-451b388beb30ea68f189f0d722edcee310506239593fea4d3d045411fc828310.webp" alt="Midnight Canopy applied in Codex Desktop" width="520"> | <img src="https://codexskin.ai/previews/themes/100004/1.0.0/presentation/1/applied-full-2bd88ff2cbb1d20539d39461dd1e6eb7bbe10cd81d8da1a8bb6b8346fa2a4901.webp" alt="Polar Archive applied in Codex Desktop" width="520"> |
 
-```bash
-go test ./...
-go vet ./...
-go run ./cmd/codex-skin version --json
-go run ./cmd/codex-skin doctor --json
-go run ./cmd/codex-skin status --json
-go run ./cmd/codex-skin theme restore --json
-python3 tools/test_helper_builds.py
-python3 tools/test_release_descriptor.py
-python3 tools/test_guardian_builds.py
-```
+[Browse the full gallery →](https://codexskin.ai/themes)
 
-The canonical Helper protocol, release descriptor, device-authorization, and theme-download Schemas live in the Private repository allowlist and are generated into `contracts/`. Direct edits to a Public Schema or its digest manifest fail the repository boundary check.
+## Why a Codex plugin?
 
-The credential backend uses the fixed `/usr/bin/security` binary on macOS and sends the secret only through stdin; it calls the current user's native `CredWriteW`/`CredReadW`/`CredDeleteW` APIs directly on Windows and frees the returned credential buffer. It never uses a shell, `cmdkey`, argv, environment variables, or an ordinary state file for credential contents. Native tests use an isolated temporary Keychain on macOS and a synthetic, cleanup-guarded Generic Credential on the Windows hosted runner.
+Codex is already where you work, so it is also where you control the theme. You do not need to keep a separate theme studio, tray app, or background daemon running. Each request starts a short-lived Helper. It handles that one job, checks the result, and exits.
 
-The build test produces unsigned internal artifacts for `macos-arm64`, `macos-x64`, and `windows-x64` under ignored `dist/helper/`, validates Mach-O/PE architecture headers, and compares two clean builds byte-for-byte. Release assets are not committed to Git. Windows CI executes the native x64 Helper after removing Node, Python, and Go from `PATH`.
+This is a different workflow from [Codex Dream Skin](https://github.com/Fei-Away/Codex-Dream-Skin), which uses a standalone app. Codex Skin starts from a regular Codex task, with the Plugin as the control point. A small part of the renderer compatibility code is adapted from that project's MIT-licensed implementation; the exact attribution is in [NOTICE](NOTICE). We did not reuse its artwork, themes, installer, or product identity.
 
-`tools/create_release_descriptor.py` converts that trusted build summary into one canonical, fixed-order descriptor with the exact version, tag, UTC timestamp, platform filenames, sizes, and SHA-256 values. `tools/create_sbom.py` emits a deterministic SPDX 2.3 SBOM for the same three release binaries and their Go module graph; protected Staging and Production summaries require an explicit matching profile. `tools/render_bootstrap_pins.py` likewise refuses mixed profile/version/origin inputs and writes the selected profile plus non-executable API host provenance into the generated pins. The Go release package rejects noncanonical JSON, unknown fields or signing key IDs, invalid detached Ed25519 signatures, missing/duplicate/mismatched platforms, unsupported runtimes, and downloaded bytes with the wrong size or digest. Tests generate ephemeral signing keys at runtime; this repository contains no release private key or Production trust-root claim. Workflow artifacts remain unpublished candidates until the later release gates are complete.
+## How it works
 
-The bootstrap library uses the fixed Public GitHub Releases origin, accepts only `helper-release-descriptor.json`, its raw detached Ed25519 signature, and strict Helper filenames, and allows HTTPS redirects only to GitHub release-asset hosts. The verification keyset is generated from the canonical Private allowlist and embedded into the launcher. After signature/platform/size/SHA-256 verification it writes a per-version executable in `~/Library/Application Support/CodexSkin/bin/` on macOS or `%LOCALAPPDATA%\CodexSkin\bin\` on Windows, runs only the fixed `version --json` and `doctor --json` self-tests with a minimal environment, updates the cache-independent recovery engine transactionally, and only then atomically replaces `current.json`. The install result reports the exact Helper and recovery SHA-256 values. Descriptor/signature tampering, wrong artifact bytes, declared-length truncation, reader interruption, downgrade, self-test failure, and current activation failure all stop safely; the latter also restores the prior recovery engine. Untrusted candidates never reach the executable self-test, and the previous pointer and Helper remain reusable without staging debris. The application root must not overlap or resolve through the Plugin cache; tests replace that cache and confirm the Helper plus `state/` and `recovery/` sentinels remain. Paid Alpha remains a GitHub prerelease: only the signed, pinned Production artifacts are authorized for user installation.
+1. Browse the [theme gallery](https://codexskin.ai/themes) and copy the exact six-digit theme ID.
+2. Install the Plugin once.
+3. In a normal Codex task, ask it to apply that ID.
+4. If a browser approval page opens, approve the device request. Codex Skin then downloads, verifies, applies, and checks the visible result.
 
-The Gate B engine accepts only versioned manifest fields and declared local PNG/JPEG/WebP assets; theme packages cannot provide CSS, JavaScript, shell commands, selectors, or remote execution URLs. The engine transaction follows `validate → stage → backup → apply → verify → commit`; restart consent is terminal before mutation. Before the first Apply it records the user's exact native appearance setting (`system`, `light`, or `dark`) and related code-theme setting outside the Plugin cache. A dark skin pins native Codex to `dark`; a light skin pins it to `light`; Restore restores the exact saved setting. If the native value already matches the requested mode, the Helper neither rewrites it nor restarts, and a trusted controlled window can switch directly within that mode. On macOS, a dark/light mode change first uses the signed Helper's fixed semantic contract for Codex's in-app Appearance controls. It verifies the live host setting, native palette, on-disk recovery point, renderer, exact process identity, profile, and loopback listener before applying the skin, then returns to the original app route without restarting. If that internal UI contract is absent or ambiguous before mutation, the operation safely falls back to the existing one-confirmation controlled reload; any uncertain post-click result must restore the original mode or fail closed. Windows keeps the controlled-reload path until separate native GUI evidence exists. After confirmation, the detached Helper stops only the exact verified official Codex instance, rediscovers a stable signed installation, launches the same user profile on loopback CDP, waits for a real renderer, writes the fixed current-document style, verifies the exact theme, commits, and exits. A new request may replace only an unconfirmed restart request; an approved or running one remains non-preemptible. Status records only the last visibly verified operation plus a current restart request; neither downloaded nor desired state alone is success. A bounded redacted terminal-restart history preserves the stable failure code if a later Restore replaces `current.json`.
+The Plugin itself is free. Free themes do not require payment.
 
-The renderer compatibility layer pins the MIT-licensed selector lessons from Codex Dream Skin v1.5.11 in one Helper-owned contract. L1 shell anchors use stable data attributes, semantic roles, stable classes, and bounded CSS-module prefixes; missing L2 refinements degrade without rolling back the whole skin. The current-document injector classifies Home/thread versus native utility routes before applying its fixed artwork/header/top-fade rules, and uses a narrowly scoped MutationObserver only to reclassify a replaced main container or route marker. It does not monitor messages, run a heartbeat, install a Page bootstrap, or create a tray app, service, login item, daemon, or auto-launch behavior. The chat skin owns only its verified Home/conversation/composer area; Sites, Scheduled, Plugins, settings, and native right-side utility surfaces retain Codex's matching native palette. Closing Codex, restarting the computer, or a later renderer reload ends the visual guarantee, and the user applies again next time. Restore removes the fixed theme marker and background, then restores the exact saved native appearance without network, login, access entitlement, Node, or Plugin cache access. If apply, verify, switch, or Restore fails, rollback uses a bounded context detached from request cancellation and preserves a recoverable journal. Production Paid Alpha uses the signed `.17/.16` path; exact current-window verification and rollback remain the success boundary.
-
-The [macOS signing feasibility note](docs/macos-signing-feasibility.md) and its CI workflow test ad-hoc signing, strict verification, and post-signing tamper rejection without using secrets. Ad-hoc signatures are explicitly not Developer ID signatures or notarization. The current Paid Alpha exception permits release without commercial OS signing, provided the exact download path is tested on a real supported Mac, any Gatekeeper warning is explained without asking users to disable protection, and a system block still fails that platform's RC. Developer ID signing and notarization remain post-launch priorities.
-
-The [Windows signing feasibility note](docs/windows-signing-feasibility.md) uses a one-run, non-exportable self-signed certificate only inside the current-user CI stores to test Authenticode signing, local-policy verification, signed Helper execution, PE tamper rejection, and certificate cleanup. It uploads only a non-secret JSON summary. Self-signing does not provide public trust or SmartScreen reputation. The current Paid Alpha exception permits release without commercial OS signing, provided the exact download channel is tested on a clean supported Windows machine, any SmartScreen warning is explained without asking users to disable protection, and a system block still fails that platform's RC. Public code signing and timestamping remain post-launch priorities.
-
-The [per-user Guardian lifecycle note](docs/guardian-lifecycle-feasibility.md) describes the internal fixed-surface Guardian and its versioned install, signature gate, per-user registration, side-by-side upgrade, explicit rollback, and registration-first uninstall tests. Native macOS LaunchAgent and Windows Limited/Interactive Scheduled Task jobs create, run, inspect, and remove temporary registrations without adding a service, network listener, or general command surface. The trigger remains a packaging-only Spike; actual lifecycle reconciliation is a later numbered task, and formal Guardian distribution remains blocked on the same platform signing gates.
-
-## Release installation contract
-
-The following is the single installation flow for the Production Paid Alpha release on `main`. Its documented release gates have passed; users do not need to open or fill in the Marketplace form, edit Codex configuration, or delete cache files.
+## Install
 
 Run these commands in a terminal:
 
@@ -92,13 +54,60 @@ codex plugin add codex-skin@codex-skin
 codex plugin list --json
 ```
 
-The final command must show exactly one installed `codex-skin@codex-skin` entry with `installed: true` and `enabled: true`. Completely quit Codex, reopen it, start a new task, and ask Codex to run `$codex-skin-version`. For the Paid Alpha release, the Skill must report `0.1.0-paid-alpha`; apply/restore/status are accepted only after the signed Helper and exact API origin are also verified.
+The final command must show exactly one installed `codex-skin@codex-skin` entry with `installed: true` and `enabled: true`.
 
-The command shape has passed macOS and Windows Desktop/CLI tests against the reviewed feature refs. For every release, publishing the `main` form also requires a post-merge two-platform check.
+Completely quit Codex, reopen it, and start a new task. Then ask:
 
-## Upgrade
+```text
+Run $codex-skin-version
+```
 
-Refresh the existing Git-backed Marketplace snapshot, reinstall the same Plugin ID, and verify the result:
+The version check should confirm the installed Plugin, the signed Helper, and the fixed API origin `https://codexskin.ai`.
+
+## Apply, switch, check, and restore
+
+Use ordinary language in a Codex task:
+
+```text
+Apply Codex Skin theme 100002
+Switch to Codex Skin theme 100005
+Show my Codex Skin status
+Restore the official Codex appearance
+```
+
+Apply or switch usually takes 20–60 seconds. While it is running, do not click, type, navigate, or close Codex. If a restart is required, the Plugin asks for explicit confirmation before changing anything.
+
+Themes are session-based, not permanent. Closing Codex, restarting the computer, or a later interface reload can end the visual effect. Apply the theme again in a new task when you return.
+
+## Restore the original appearance
+
+The easiest route is to ask the Plugin:
+
+```text
+Restore the official Codex appearance
+```
+
+Restore does not need a theme ID, an active subscription, or a network connection. The installer also keeps a recovery command outside the replaceable Plugin cache:
+
+- macOS: `~/Library/Application Support/CodexSkin/recovery/restore.command`
+- Windows: `%LOCALAPPDATA%\CodexSkin\recovery\restore.cmd`
+
+![Codex restored to its original appearance](https://codexskin.ai/assets/product/restore-official.png)
+
+## Safety and current scope
+
+- Theme packages contain structured data and local images. They cannot include arbitrary CSS, JavaScript, Shell, PowerShell, selectors, or remote execution URLs.
+- The Helper checks the official Codex process and uses loopback-only browser control. It verifies each change and rolls it back when it cannot confirm success.
+- Codex Skin does not modify the official application bundle. The Plugin and Helper do not read or upload prompts, conversations, project files, source code, tokens, cookies, screenshots, or absolute local paths.
+- It styles only the Codex view in the desktop app. It does not style Chat, Work, the web app, Codex CLI, or IDE extensions.
+
+The service keeps limited account, device, theme-delivery, and application-result records needed to provide the product. See the [Privacy Policy](https://codexskin.ai/privacy) for details.
+
+Do not disable Gatekeeper, SmartScreen, antivirus software, or other system protections to install Codex Skin. If your system blocks a release asset, stop and report the error.
+
+## Upgrade and troubleshooting
+
+Refresh the Marketplace snapshot, reinstall the same Plugin ID, and verify it:
 
 ```bash
 codex plugin marketplace upgrade codex-skin
@@ -106,11 +115,9 @@ codex plugin add codex-skin@codex-skin
 codex plugin list --json
 ```
 
-Then completely quit Codex, reopen it, and run `$codex-skin-version` in a new task. A stale version subtitle in the Plugin details view is not enough to diagnose a failed upgrade: compare the JSON result and the new-task Skill result first.
+Completely quit Codex, reopen it, and run `$codex-skin-version` in a new task.
 
-## Failure fallback
-
-If Marketplace add/upgrade or Plugin add fails, stop before making manual changes. Keep an already installed Plugin in place, and save the failing command plus its original error. Collect only these shareable diagnostics:
+If add or upgrade fails, keep the original error and collect only these shareable diagnostics:
 
 ```bash
 codex --version
@@ -118,9 +125,9 @@ codex plugin marketplace list
 codex plugin list --json
 ```
 
-Do not share tokens, cookies, account data, prompts, source code, or absolute user paths. Do not edit Codex configuration or delete Marketplace/Plugin cache directories.
+Do not edit Codex configuration or delete Marketplace/Plugin cache directories.
 
-If the `codex-skin` Marketplace snapshot alone is missing or stale, refresh it with the reversible fallback below; this does not remove an installed Plugin:
+If only the `codex-skin` Marketplace snapshot is missing or stale, use this reversible refresh:
 
 ```bash
 codex plugin marketplace remove codex-skin
@@ -129,8 +136,24 @@ codex plugin add codex-skin@codex-skin
 codex plugin list --json
 ```
 
-If an existing Plugin still works but the upgrade does not, leave it installed and report the diagnostics instead of uninstalling it. Do not invoke an unsigned internal Helper build as a product release.
+If upgrade fails but the installed Plugin still works, leave it installed. Open a [GitHub issue](https://github.com/yuanjohn01-byte/codex-skin-plugin/issues) with the command, original error, and redacted diagnostics. Do not share tokens, cookies, prompts, source code, account data, screenshots, or absolute local paths.
 
-## License
+## Development
 
-Codex Skin Plugin is available under the [MIT License](LICENSE). Third-party components and assets remain subject to their own applicable licenses and notices.
+The installable Plugin lives in `plugins/codex-skin/`. This repository also contains the self-contained Go Helper, Bootstrap and recovery code, generated public contracts, synthetic fixtures, and release checks. It does not contain the private website, customer data, unreleased theme packages, source artwork, or signing keys.
+
+Useful checks for a local contribution:
+
+```bash
+go test ./...
+go vet ./...
+python3 tools/validate_public_repo.py
+python3 tools/test_public_repository.py
+python3 tools/test_release_descriptor.py
+```
+
+Passing the automated checks does not publish a release. Before anything ships, we still run the required post-merge two-platform check against the exact version on `main`.
+
+## License and notices
+
+Codex Skin Plugin is available under the [MIT License](LICENSE). Third-party attributions are listed in [NOTICE](NOTICE).
