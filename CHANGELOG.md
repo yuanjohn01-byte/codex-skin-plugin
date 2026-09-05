@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Propagate every Windows CI test exit code, exercise failure masking with
+  native command fixtures, and reject probe timeouts as test failures rather
+  than successful JSON rejection. Native installation fixtures follow the
+  tested binary's actual version without weakening protected signing checks;
+  bounded startup probes distinguish shell, environment, and transport failures.
 - Support first-use appearance pinning when `config.toml` has no desktop table.
   Save minimal, versioned absence metadata before appending only the required
   settings; offline Restore removes an empty added table and returns an

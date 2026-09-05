@@ -210,12 +210,22 @@ jobs:
       - name: Build the native Windows x64 Bootstrap launcher
         shell: pwsh
         run: python tools/build_bootstrap.py --target windows-x64 --release-profile production
+      - name: Verify Windows CI native failure propagation
+        shell: pwsh
+        run: python tools/test_windows_ci_exit.py
+      - name: Check bounded Windows PowerShell startup paths
+        shell: pwsh
+        run: |
+          go test -count=1 -timeout=2m -v ./internal/codex -run '^TestWindowsPowerShellStartupMatrix$'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test Windows identity, theme transaction, offline restore, bootstrap, and credentials
         shell: pwsh
         run: |
           $env:CODEX_SKIN_TEST_HELPER = (Resolve-Path 'dist/helper/codex-skin-helper_0.1.0-paid-alpha.17_windows_x64.exe').Path
-          go test ./cmd/codex-skin ./internal/adapter ./internal/appearance ./internal/bootstrap ./internal/browseropen ./internal/buildinfo ./internal/cdp ./internal/cli ./internal/codex ./internal/credentials ./internal/deviceauth ./internal/engine ./internal/flowstate ./internal/protocol ./internal/release ./internal/restartflow ./internal/theme ./internal/themeapi ./internal/userflow
+          go test -count=1 -failfast -timeout=4m ./cmd/codex-skin ./internal/adapter ./internal/appearance ./internal/bootstrap ./internal/browseropen ./internal/buildinfo ./internal/cdp ./internal/cli ./internal/codex ./internal/credentials ./internal/deviceauth ./internal/engine ./internal/flowstate ./internal/protocol ./internal/release ./internal/restartflow ./internal/theme ./internal/themeapi ./internal/userflow
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go test -count=1 ./tools/windows_plugin_entry_test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Execute without Node, Python, or Go on PATH
         shell: pwsh
         run: |

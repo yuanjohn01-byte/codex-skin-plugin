@@ -4,12 +4,72 @@ package codex
 
 import (
 	"context"
+	"encoding/json"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 )
 
 func init() {
 	nativePowerShellJSONForTest = runPowerShellJSON
+}
+
+// These probes execute only a fixed synthetic JSON response, never app
+// discovery/activation. Log stage/timing only, not process paths or environment.
+func TestWindowsPowerShellStartupMatrix(t *testing.T) {
+	root := os.Getenv("SystemRoot")
+	directory := filepath.Join(root, "System32", "WindowsPowerShell", "v1.0")
+	executable := filepath.Join(directory, "powershell.exe")
+	minimal := []string{
+		"SystemRoot=" + root, "WINDIR=" + root,
+		"PATH=" + directory + ";" + filepath.Join(root, "System32"),
+		"TEMP=" + os.TempDir(), "TMP=" + os.TempDir(),
+	}
+	for _, test := range []struct {
+		name    string
+		encoded bool
+		minimal bool
+	}{
+		{"plain_inherited", false, false},
+		{"plain_minimal", false, true},
+		{"transport_inherited", true, false},
+		{"transport_production", true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			started := time.Now()
+			var result struct {
+				OK bool `json:"ok"`
+			}
+			environment := os.Environ()
+			if test.minimal {
+				environment = minimal
+			}
+			const script = `[Console]::Out.Write('{"ok":true}')`
+			var err error
+			if test.encoded && test.minimal {
+				err = runPowerShellJSON(ctx, script, nil, &result)
+			} else if test.encoded {
+				err = runPowerShellCommandJSON(ctx, executable, environment, script, nil, &result)
+			} else {
+				command := exec.CommandContext(ctx, executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
+				command.Env = environment
+				command.WaitDelay = time.Second
+				var output []byte
+				output, err = command.Output()
+				if err == nil {
+					err = json.Unmarshal(output, &result)
+				}
+			}
+			t.Logf("startup elapsed=%s deadline=%t command_error=%t", time.Since(started).Round(time.Millisecond), ctx.Err() != nil, err != nil)
+			if ctx.Err() != nil || err != nil || !result.OK {
+				t.Fatal("fixed-response PowerShell startup probe failed")
+			}
+		})
+	}
 }
 
 func TestWindowsPowerShellSystemRunner(t *testing.T) {

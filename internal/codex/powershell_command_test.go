@@ -106,10 +106,18 @@ func runTestPowerShellJSON(t *testing.T, script string, args []string, target an
 		if nativePowerShellJSONForTest == nil {
 			t.Fatal("native Windows test runner is not bound to production")
 		}
-		return nativePowerShellJSONForTest(ctx, script, args, target)
+		err := nativePowerShellJSONForTest(ctx, script, args, target)
+		if ctx.Err() != nil {
+			t.Fatal("PowerShell probe deadline exceeded; not an expected JSON rejection")
+		}
+		return err
 	}
 	executable, environment := testPowerShell(t)
-	return runPowerShellCommandJSON(ctx, executable, environment, script, args, target)
+	err := runPowerShellCommandJSON(ctx, executable, environment, script, args, target)
+	if ctx.Err() != nil {
+		t.Fatal("PowerShell probe deadline exceeded; not an expected JSON rejection")
+	}
+	return err
 }
 
 func TestWindowsPowerShellArgumentRoundTrip(t *testing.T) {

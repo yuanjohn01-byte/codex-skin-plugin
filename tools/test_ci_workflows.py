@@ -168,6 +168,14 @@ def main() -> int:
             raise AssertionError(f"{path.name} reusable concurrency is not component-scoped")
 
     helper_workflow = (WORKFLOWS / "helper-build-spike.yml").read_text()
+    windows_job = job_block(helper_workflow, "windows-no-node-smoke")
+    if "python tools/test_windows_ci_exit.py" not in windows_job:
+        raise AssertionError("Windows CI lost its native failure propagation regression")
+    lines = windows_job.splitlines()
+    for index, line in enumerate(lines):
+        if line.strip().startswith("go test "):
+            if lines[index + 1].strip() != "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }":
+                raise AssertionError("Windows native test failure can be masked by a later command")
     for marker in (
         "windows-no-node-smoke:",
         "macos-no-node-smoke:",
