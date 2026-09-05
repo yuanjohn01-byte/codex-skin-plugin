@@ -38,6 +38,7 @@ HELPER_TOOL_PATHS = {
     "tools/release_profiles.py",
     "tools/windows_test_candidate.py",
     "tools/test_windows_test_candidate.py",
+    "tools/verify_windows_test_run.py",
     "tools/render_bootstrap_pins.py",
     "tools/test_bootstrap_builds.py",
     "tools/test_create_sbom.py",

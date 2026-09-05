@@ -42,15 +42,23 @@ Windows x64, not a new macOS release or expanded platform support.
 ## Protected signing and distribution
 
 The `signed-windows-test-only` profile additionally requires
-`windows_test_confirmation=SIGN WINDOWS TEST FULL_40_CHARACTER_SHA` and protected
-environment approval for that exact workflow SHA. It signs only after its build and
-platform checks pass. The signing job checks out a fixed trusted signer commit, has no
+`windows_test_confirmation=SIGN WINDOWS TEST FULL_40_CHARACTER_SHA`, `build_run_id`
+from the successful unsigned run, and protected environment approval for that exact
+workflow SHA. It verifies that run's repository, workflow, branch, SHA, completed checks
+and immutable artifact ID, then reuses the artifact without rebuilding or retesting.
+Failed, skipped, incomplete, expired, foreign or different-SHA evidence is rejected.
+Use a new manual run instead of a rerun attempt. The signing job checks out a fixed trusted signer commit, has no
 candidate source execution or build cache, and receives the secret only for signing.
 
 The Production environment remains approval-protected. A repository owner must
 explicitly approve adding the exact test branch to its branch policy; never allow
 arbitrary branches or remove reviewers. Remove that one branch policy to close the
 channel. Removing permission does not revoke previously issued signed assets.
+
+The test Helper `.17.windows.1` sorts after the released `.17` but before the next
+official `.18`; Bootstrap similarly uses `.16.windows.1`. Reinstalling the old official
+Plugin does not downgrade an already installed newer Helper. Appearance Restore restores
+Codex appearance, not the Helper version. A later official upgrade must sort higher.
 
 Neither profile creates a tag or GitHub Release. After a separately authorized signing
 run, verify the candidate SHA, ZIP hash, six binary hashes, detached signature and exact

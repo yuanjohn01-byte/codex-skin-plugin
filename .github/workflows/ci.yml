@@ -156,6 +156,7 @@ jobs:
     uses: ./.github/workflows/helper-build-spike.yml
     permissions:
       contents: read
+      actions: read
 
   full-guardian-lifecycle:
     needs: repository-boundary

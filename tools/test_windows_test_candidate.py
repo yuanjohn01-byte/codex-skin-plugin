@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hashlib
+import copy
 import json
 import tempfile
 import unittest
@@ -12,6 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import windows_test_candidate as candidate
+import verify_windows_test_run as evidence
 from create_release_descriptor import canonical_bytes, descriptor_from_summary
 from test_ci_workflows import job_block
 from test_release_profiles import bootstrap_summary, helper_summary
@@ -42,8 +44,8 @@ class CandidateTests(unittest.TestCase):
         from release_profiles import PRODUCTION, STAGING
         self.assertEqual(PRODUCTION.helper_version, "0.1.0-paid-alpha.17")
         self.assertEqual(STAGING.helper_version, "0.1.0-paid-alpha.16")
-        self.assertEqual(candidate.PROFILE.helper_version, "0.1.0-paid-alpha.18.windows.1")
-        self.assertEqual(candidate.PROFILE.bootstrap_version, "0.1.0-paid-alpha.17.windows.1")
+        self.assertEqual(candidate.PROFILE.helper_version, "0.1.0-paid-alpha.17.windows.1")
+        self.assertEqual(candidate.PROFILE.bootstrap_version, "0.1.0-paid-alpha.16.windows.1")
         self.assertEqual(candidate.PROFILE.signing_key_id, PRODUCTION.signing_key_id)
 
     def test_freeze_rejects_non_sha_dirty_tree_and_existing_tag(self):
@@ -99,6 +101,10 @@ class CandidateTests(unittest.TestCase):
                     self.assertIn(".agents/plugins/marketplace.json", names)
                     self.assertTrue(all(name.startswith(("plugins/codex-skin/", ".agents/plugins/")) or name in {"LICENSE", "NOTICE"} for name in names))
                     self.assertIn(candidate.PROFILE.helper_release_tag.encode(), archive.read("plugins/codex-skin/scripts/bootstrap-pins.ps1"))
+                    skill = archive.read("plugins/codex-skin/skills/codex-skin-version/SKILL.md").decode()
+                    for value in (sha, version, candidate.PROFILE.helper_version, candidate.PROFILE.bootstrap_version, "not proof that the Helper"):
+                        self.assertIn(value, skill)
+                    self.assertNotIn("Production Paid Alpha Plugin is installed", skill)
         self.assertEqual(archives[0], archives[1])
         self.assertEqual(before, source.read_bytes())
 
@@ -112,10 +118,12 @@ class CandidateTests(unittest.TestCase):
         block = job_block(workflow, "windows-test-sign")
         for marker in (
             f"ref: {candidate.SIGNER_COMMIT}", "persist-credentials: false", "cache: false",
-            "needs: [windows-test-build, windows-test-native, macos-no-node-smoke]",
+            "needs: windows-test-evidence",
+            "artifact-ids: ${{ needs.windows-test-evidence.outputs.artifact_id }}",
+            "run-id: ${{ inputs.build_run_id }}",
             "environment: paid-alpha-production-release", 'SIGN WINDOWS TEST $CANDIDATE_SHA',
             candidate.PROFILE.helper_version, candidate.PROFILE.signing_key_id,
-            "sha256sum -c -", "--descriptor candidate/helper/helper-release-descriptor.json",
+            "candidate['descriptorSHA256'] == hashlib.sha256", "--descriptor candidate/helper/helper-release-descriptor.json",
         ):
             self.assertIn(marker, block)
         for forbidden in ("python3 tools/", "go test", "contents: write", "gh release", "run: candidate/", "cache: true"):
@@ -125,6 +133,44 @@ class CandidateTests(unittest.TestCase):
         for index, line in enumerate(native):
             if line.strip().startswith(("go test ", "python tools/")):
                 self.assertEqual(native[index + 1].strip(), "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }")
+        for name in ("windows-test-build", "windows-test-native", "macos-no-node-smoke"):
+            self.assertNotIn("signed-windows-test-only", job_block(workflow, name))
+
+    def test_reused_evidence_is_exact_successful_and_complete(self):
+        run = {"id": 123, "head_sha": SHA, "repository": {"full_name": evidence.REPOSITORY},
+               "head_repository": {"full_name": evidence.REPOSITORY}, "head_branch": evidence.BRANCH,
+               "path": evidence.WORKFLOW, "event": "workflow_dispatch", "status": "completed",
+               "conclusion": "success", "run_attempt": 1}
+        jobs = {"total_count": 3, "jobs": [{"name": name, "status": "completed", "conclusion": "success",
+                 "head_sha": SHA, "run_id": 123} for name in sorted(evidence.REQUIRED_JOBS)]}
+        artifacts = {"total_count": 1, "artifacts": [{"name": f"windows-test-unsigned-{SHA}", "id": 456,
+                     "expired": False, "workflow_run": {"id": 123, "head_sha": SHA}}]}
+        self.assertEqual(evidence.select_artifact(run, jobs, artifacts, SHA, "123"), 456)
+        for field, value in (("head_sha", "b" * 40), ("head_branch", "main"), ("conclusion", "failure"),
+                             ("status", "in_progress"), ("event", "pull_request"), ("run_attempt", 2),
+                             ("repository", {"full_name": "foreign/repo"}), ("path", "other.yml")):
+            bad = copy.deepcopy(run)
+            bad[field] = value
+            with self.assertRaises(ValueError):
+                evidence.select_artifact(bad, jobs, artifacts, SHA, "123")
+        for mutation in ("skipped", "missing", "expired", "duplicate", "wrong-artifact-sha", "partial-jobs"):
+            bad_jobs, bad_artifacts = copy.deepcopy(jobs), copy.deepcopy(artifacts)
+            if mutation == "skipped":
+                bad_jobs["jobs"][0]["conclusion"] = "skipped"
+            elif mutation == "missing":
+                bad_jobs["jobs"].pop()
+                bad_jobs["total_count"] = 2
+            elif mutation == "partial-jobs":
+                bad_jobs["total_count"] = 101
+            elif mutation == "expired":
+                bad_artifacts["artifacts"][0]["expired"] = True
+            elif mutation == "duplicate":
+                bad_artifacts["artifacts"] *= 2
+                bad_artifacts["total_count"] = 2
+            else:
+                bad_artifacts["artifacts"][0]["workflow_run"]["head_sha"] = "b" * 40
+            with self.assertRaises(ValueError):
+                evidence.select_artifact(run, bad_jobs, bad_artifacts, SHA, "123")
 
 
 if __name__ == "__main__":

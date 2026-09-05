@@ -18,6 +18,10 @@ on:
         description: "Windows test profiles require the exact 40-character SHA on codex/win-002-test-channel"
         required: false
         type: string
+      build_run_id:
+        description: "Signing only: successful windows-test-build-only run ID for the same candidate SHA"
+        required: false
+        type: string
       windows_test_confirmation:
         description: "Signing only: SIGN WINDOWS TEST followed by the exact candidate SHA"
         required: false
@@ -37,11 +41,9 @@ permissions:
 
 jobs:
   windows-test-build:
-    if: github.event_name == 'workflow_dispatch' && (inputs.run_profile == 'windows-test-build-only' || inputs.run_profile == 'signed-windows-test-only')
+    if: github.event_name == 'workflow_dispatch' && inputs.run_profile == 'windows-test-build-only'
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    outputs:
-      descriptor_sha256: ${{ steps.freeze.outputs.descriptor_sha256 }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -61,7 +63,6 @@ jobs:
           python3 tools/test_windows_test_candidate.py
           python3 tools/test_release_profiles.py
           python3 tools/windows_test_candidate.py --candidate-sha "$CANDIDATE_SHA"
-          echo "descriptor_sha256=$(sha256sum dist/windows-test/helper/helper-release-descriptor.json | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
           name: windows-test-unsigned-${{ github.sha }}
@@ -70,7 +71,7 @@ jobs:
           retention-days: 14
 
   windows-test-native:
-    if: github.event_name == 'workflow_dispatch' && (inputs.run_profile == 'windows-test-build-only' || inputs.run_profile == 'signed-windows-test-only')
+    if: github.event_name == 'workflow_dispatch' && inputs.run_profile == 'windows-test-build-only'
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
@@ -91,23 +92,54 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/build_bootstrap.py --target windows-x64 --release-profile windows-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $env:CODEX_SKIN_TEST_HELPER = (Resolve-Path 'dist/helper/codex-skin-helper_0.1.0-paid-alpha.18.windows.1_windows_x64.exe').Path
+          $env:CODEX_SKIN_TEST_HELPER = (Resolve-Path 'dist/helper/codex-skin-helper_0.1.0-paid-alpha.17.windows.1_windows_x64.exe').Path
           go test -count=1 -failfast -timeout=4m ./internal/bootstrap ./internal/bootstrapcli ./internal/release ./internal/releasesigning ./internal/codex ./internal/appearance ./internal/engine ./internal/restartflow ./internal/userflow ./tools/windows_plugin_entry_test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $bootstrap = (Resolve-Path 'dist/bootstrap/codex-skin-bootstrap_0.1.0-paid-alpha.17.windows.1_windows_x64.exe').Path
+          $bootstrap = (Resolve-Path 'dist/bootstrap/codex-skin-bootstrap_0.1.0-paid-alpha.16.windows.1_windows_x64.exe').Path
           $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
           foreach ($tool in @('node', 'python', 'go')) { if (Get-Command $tool -ErrorAction SilentlyContinue) { throw 'Developer tool remained on PATH' } }
           $version = (& $env:CODEX_SKIN_TEST_HELPER version --json) | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or -not $version.ok -or $version.data.helperVersion -ne '0.1.0-paid-alpha.18.windows.1' -or $version.data.apiOrigin -ne 'https://codexskin.ai' -or $version.data.buildCommit -ne $env:CANDIDATE_SHA) { throw 'Candidate Helper identity mismatch' }
+          if ($LASTEXITCODE -ne 0 -or -not $version.ok -or $version.data.helperVersion -ne '0.1.0-paid-alpha.17.windows.1' -or $version.data.apiOrigin -ne 'https://codexskin.ai' -or $version.data.buildCommit -ne $env:CANDIDATE_SHA) { throw 'Candidate Helper identity mismatch' }
           $version = (& $bootstrap version --json) | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or -not $version.ok -or $version.data.bootstrapVersion -ne '0.1.0-paid-alpha.17.windows.1' -or $version.data.releaseTag -ne 'helper-v0.1.0-paid-alpha.18.windows.1') { throw 'Candidate Bootstrap identity mismatch' }
+          if ($LASTEXITCODE -ne 0 -or -not $version.ok -or $version.data.bootstrapVersion -ne '0.1.0-paid-alpha.16.windows.1' -or $version.data.releaseTag -ne 'helper-v0.1.0-paid-alpha.17.windows.1') { throw 'Candidate Bootstrap identity mismatch' }
+
+  windows-test-evidence:
+    if: github.event_name == 'workflow_dispatch' && inputs.run_profile == 'signed-windows-test-only'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      artifact_id: ${{ steps.evidence.outputs.artifact_id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Reuse successful exact-SHA build and platform evidence
+        id: evidence
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+          BUILD_RUN_ID: ${{ inputs.build_run_id }}
+        run: |
+          test "$GITHUB_REF" = "refs/heads/codex/win-002-test-channel"
+          test "$GITHUB_SHA" = "$CANDIDATE_SHA"
+          [[ "$BUILD_RUN_ID" =~ ^[1-9][0-9]*$ ]]
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID" > build-run.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID/jobs?per_page=100" > build-jobs.json
+          gh api "repos/$GITHUB_REPOSITORY/actions/runs/$BUILD_RUN_ID/artifacts?per_page=100" > build-artifacts.json
+          python3 tools/verify_windows_test_run.py "$CANDIDATE_SHA" "$BUILD_RUN_ID" >> "$GITHUB_OUTPUT"
 
   windows-test-sign:
     if: github.event_name == 'workflow_dispatch' && inputs.run_profile == 'signed-windows-test-only'
-    needs: [windows-test-build, windows-test-native, macos-no-node-smoke]
+    needs: windows-test-evidence
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: paid-alpha-production-release
+    permissions:
+      contents: read
+      actions: read
     steps:
       # Candidate source never runs in the signing job. The environment reviewer
       # must approve this workflow's exact SHA, not just its branch name.
@@ -121,28 +153,30 @@ jobs:
           cache: false
       - uses: actions/download-artifact@v4
         with:
-          name: windows-test-unsigned-${{ github.sha }}
+          artifact-ids: ${{ needs.windows-test-evidence.outputs.artifact_id }}
+          github-token: ${{ github.token }}
+          run-id: ${{ inputs.build_run_id }}
           path: candidate
       - name: Validate signing intent and exact descriptor bytes
         env:
           CANDIDATE_SHA: ${{ inputs.candidate_sha }}
           CONFIRMATION: ${{ inputs.windows_test_confirmation }}
-          DESCRIPTOR_SHA256: ${{ needs.windows-test-build.outputs.descriptor_sha256 }}
         run: |
           test "$GITHUB_REF" = "refs/heads/codex/win-002-test-channel"
           test "$GITHUB_SHA" = "$CANDIDATE_SHA"
           test "$CONFIRMATION" = "SIGN WINDOWS TEST $CANDIDATE_SHA"
           test "$(git rev-parse HEAD)" = "45f16ea2f63d4d60419dab65ede1f87b1471f80f"
-          printf '%s  %s\n' "$DESCRIPTOR_SHA256" candidate/helper/helper-release-descriptor.json | sha256sum -c -
           python3 - <<'PY'
-          import json, os
+          import hashlib, json, os
           from pathlib import Path
           candidate = json.loads(Path('candidate/candidate.json').read_text())
           descriptor = json.loads(Path('candidate/helper/helper-release-descriptor.json').read_text())
           assert candidate['candidateSHA'] == os.environ['CANDIDATE_SHA']
           assert candidate['channel'] == 'windows-test'
-          assert descriptor['helperVersion'] == '0.1.0-paid-alpha.18.windows.1'
-          assert descriptor['releaseTag'] == 'helper-v0.1.0-paid-alpha.18.windows.1'
+          assert candidate['descriptorSHA256'] == hashlib.sha256(Path('candidate/helper/helper-release-descriptor.json').read_bytes()).hexdigest()
+          assert candidate['marketplaceSHA256'] == hashlib.sha256(Path('candidate/windows-test-marketplace.zip').read_bytes()).hexdigest()
+          assert descriptor['helperVersion'] == '0.1.0-paid-alpha.17.windows.1'
+          assert descriptor['releaseTag'] == 'helper-v0.1.0-paid-alpha.17.windows.1'
           assert descriptor['signingKeyId'] == 'helper-production-2026-08'
           PY
       - name: Sign using only the pinned trusted signer
@@ -387,7 +421,7 @@ jobs:
           }
 
   macos-no-node-smoke:
-    if: github.event_name != 'workflow_dispatch' || inputs.run_profile == 'full' || inputs.run_profile == 'windows-test-build-only' || inputs.run_profile == 'signed-windows-test-only'
+    if: github.event_name != 'workflow_dispatch' || inputs.run_profile == 'full' || inputs.run_profile == 'windows-test-build-only'
     runs-on: macos-14
     timeout-minutes: 15
     steps:

@@ -93,6 +93,29 @@ def package_plugin(root: Path, sha: str) -> str:
         raise ValueError("unexpected Plugin identity")
     manifest["version"] = manifest["version"].split("+")[0] + f"+codex.{sha}"
     manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    version_skill = package / "plugins/codex-skin/skills/codex-skin-version/SKILL.md"
+    version_skill.write_text(f"""---
+name: codex-skin-version
+description: Report this opt-in Windows test Plugin package identity for installation and upgrade checks.
+---
+
+# Codex Skin Windows test package
+
+When invoked, report these package facts without executing commands or changing settings:
+
+- Channel: opt-in Windows test, not the default Production Plugin.
+- Plugin package version: `{manifest['version']}`.
+- Candidate source SHA: `{sha}`.
+- Packaged Helper target: `{PROFILE.helper_version}`.
+- Packaged Bootstrap target: `{PROFILE.bootstrap_version}`.
+- API origin: `{PROFILE.api_base_url}`.
+- Operations: `theme apply`, `theme restore`, and `status`.
+
+These are the loaded package's identity and download targets, not proof that the Helper
+is installed, upgraded, or that a theme has been applied. For current local runtime or
+theme state, use the dedicated `codex-skin-status` skill when requested. Apply and Restore
+continue to use their dedicated skills and normal confirmation rules.
+""", encoding="utf-8")
     python_tool(
         "render_bootstrap_pins", "--summary", str(root / "bootstrap/build-summary.json"),
         "--release-profile", PROFILE.name,
