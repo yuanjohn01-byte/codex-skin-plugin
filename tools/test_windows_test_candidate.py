@@ -120,6 +120,7 @@ class CandidateTests(unittest.TestCase):
             f"ref: {candidate.SIGNER_COMMIT}", "persist-credentials: false", "cache: false",
             "needs: windows-test-evidence",
             "artifact-ids: ${{ needs.windows-test-evidence.outputs.artifact_id }}",
+            "merge-multiple: true",
             "run-id: ${{ inputs.build_run_id }}",
             "environment: paid-alpha-production-release", 'SIGN WINDOWS TEST $CANDIDATE_SHA',
             candidate.PROFILE.helper_version, candidate.PROFILE.signing_key_id,
