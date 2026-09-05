@@ -239,6 +239,68 @@ func TestLiveSwitchTreatsAbsentAppearanceAsSystemAndRejectsMismatch(t *testing.T
 	}
 }
 
+func TestPinSwitchRestorePreservesImplicitSystemAndDefaultCodeTheme(t *testing.T) {
+	for _, platform := range []string{"darwin", "windows"} {
+		for _, newline := range []string{"\n", "\r\n"} {
+			name := platform + "/LF"
+			if newline == "\r\n" {
+				name = platform + "/CRLF"
+			}
+			t.Run(name, func(t *testing.T) {
+				root := t.TempDir()
+				config := filepath.Join(root, "config.toml")
+				backupPath := filepath.Join(root, "recovery", "appearance.json")
+				original := strings.ReplaceAll("model = \"fixture\"\n\n[desktop]\n# Keep implicit system appearance and default code themes.\nunrelated = true\n\n[features]\nfixture = false\n", "\n", newline)
+				if err := os.WriteFile(config, []byte(original), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				manager, err := New(config, backupPath, platform)
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, mode := range []string{"dark", "light", "dark"} {
+					if needed, err := manager.NeedsPin(mode); err != nil || !needed {
+						t.Fatalf("NeedsPin(%s) = %t, %v", mode, needed, err)
+					}
+					if _, err := manager.Pin(mode); err != nil {
+						t.Fatal(err)
+					}
+					before, err := os.ReadFile(config)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if got, err := appearanceMode(string(before)); err != nil || got != mode {
+						t.Fatalf("pinned mode = %s, %v", got, err)
+					}
+					if needed, err := manager.NeedsPin(mode); err != nil || needed {
+						t.Fatalf("same-mode switch requested reload: %t, %v", needed, err)
+					}
+					if changed, err := manager.Pin(mode); err != nil || changed {
+						t.Fatalf("same-mode switch rewrote config: %t, %v", changed, err)
+					}
+					stored, found, err := manager.readBackup()
+					if err != nil || !found || stored.Values["appearanceTheme"] != nil || stored.Values["appearanceDarkCodeThemeId"] != nil {
+						t.Fatalf("original absent settings were not preserved: %#v, %v", stored.Values, err)
+					}
+				}
+				if changed, err := manager.Restore(); err != nil || !changed {
+					t.Fatalf("Restore() = %t, %v", changed, err)
+				}
+				restored, err := os.ReadFile(config)
+				if err != nil || string(restored) != original {
+					t.Fatalf("Restore did not return exact implicit defaults: %q, %v", restored, err)
+				}
+				if mode, err := appearanceMode(string(restored)); err != nil || mode != "system" {
+					t.Fatalf("restored mode = %s, %v", mode, err)
+				}
+				if _, err := os.Stat(backupPath); !os.IsNotExist(err) {
+					t.Fatalf("consumed backup remains: %v", err)
+				}
+			})
+		}
+	}
+}
+
 func TestPinRejectsMissingDesktopTableWithoutCreatingBackup(t *testing.T) {
 	root := t.TempDir()
 	config := filepath.Join(root, "config.toml")
