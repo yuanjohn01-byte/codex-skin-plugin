@@ -131,6 +131,7 @@ class CandidateTests(unittest.TestCase):
             self.assertNotIn(forbidden, block)
         self.assertIn("github.ref == 'refs/heads/main'", job_block(workflow, "signed-production-candidate"))
         native = job_block(workflow, "windows-test-native").splitlines()
+        self.assertIn("go test -p 1 -count=1 -failfast", "\n".join(native))
         for index, line in enumerate(native):
             if line.strip().startswith(("go test ", "python tools/")):
                 self.assertEqual(native[index + 1].strip(), "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }")
