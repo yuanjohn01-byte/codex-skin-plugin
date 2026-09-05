@@ -6,7 +6,6 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 	"time"
@@ -16,26 +15,19 @@ func init() {
 	nativePowerShellJSONForTest = runPowerShellJSON
 }
 
-// These probes execute only a fixed synthetic JSON response, never app
-// discovery/activation. Log stage/timing only, not process paths or environment.
+// Exercise both shipped PowerShell transport entry points with fixed JSON only.
+// Raw -Command / uninitialized module-search comparisons were diagnosis probes,
+// not supported launch paths; keeping them here gates releases on unused behavior.
 func TestWindowsPowerShellStartupMatrix(t *testing.T) {
 	root := os.Getenv("SystemRoot")
 	directory := filepath.Join(root, "System32", "WindowsPowerShell", "v1.0")
 	executable := filepath.Join(directory, "powershell.exe")
-	minimal := []string{
-		"SystemRoot=" + root, "WINDIR=" + root,
-		"PATH=" + directory + ";" + filepath.Join(root, "System32"),
-		"TEMP=" + os.TempDir(), "TMP=" + os.TempDir(),
-	}
 	for _, test := range []struct {
-		name    string
-		encoded bool
-		minimal bool
+		name       string
+		production bool
 	}{
-		{name: "plain_inherited"},
-		{name: "plain_minimal", minimal: true},
-		{name: "transport_inherited", encoded: true},
-		{name: "transport_production", encoded: true, minimal: true},
+		{name: "transport_inherited"},
+		{name: "transport_production", production: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -44,25 +36,12 @@ func TestWindowsPowerShellStartupMatrix(t *testing.T) {
 			var result struct {
 				OK bool `json:"ok"`
 			}
-			environment := os.Environ()
-			if test.minimal {
-				environment = minimal
-			}
 			const script = `[Console]::Out.Write('{"ok":true}')`
 			var err error
-			if test.encoded && test.minimal {
+			if test.production {
 				err = runPowerShellJSON(ctx, script, nil, &result)
-			} else if test.encoded {
-				err = runPowerShellCommandJSON(ctx, executable, environment, script, nil, &result)
 			} else {
-				command := exec.CommandContext(ctx, executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
-				command.Env = environment
-				command.WaitDelay = time.Second
-				var output []byte
-				output, err = command.Output()
-				if err == nil {
-					err = json.Unmarshal(output, &result)
-				}
+				err = runPowerShellCommandJSON(ctx, executable, os.Environ(), script, nil, &result)
 			}
 			t.Logf("startup elapsed=%s deadline=%t command_error=%t", time.Since(started).Round(time.Millisecond), ctx.Err() != nil, err != nil)
 			if ctx.Err() != nil || err != nil || !result.OK {
