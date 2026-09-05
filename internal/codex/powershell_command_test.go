@@ -3,6 +3,8 @@ package codex
 import (
 	"context"
 	_ "embed"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"go/ast"
@@ -124,6 +126,42 @@ func TestWindowsPowerShellArgumentRoundTrip(t *testing.T) {
 			err := runTestPowerShellJSON(t, `[pscustomobject]@{ arguments = @($args) } | ConvertTo-Json -Compress`, args, &result)
 			if err != nil || !reflect.DeepEqual(result.Arguments, args) {
 				t.Fatalf("argument round trip = %#v, %v; want %#v", result.Arguments, err, args)
+			}
+		})
+	}
+}
+
+func TestWindowsPowerShellLegacyJSONArrayBinding(t *testing.T) {
+	// PS 5.1 emits a parsed array as one pipeline object. PS 7 enumerates
+	// it by default. Its official -NoEnumerate option reproduces the legacy
+	// behavior so portable tests cannot hide a Windows-only binding defect.
+	const legacyConversion = `
+function ConvertFrom-Json {
+  param([string]$InputObject)
+  if ($PSVersionTable.PSVersion.Major -ge 6) {
+    Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $InputObject -NoEnumerate
+  } else {
+    Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $InputObject
+  }
+}
+`
+	for index, args := range [][]string{{}, {"one"}, {"", "two", "中文", `C:\User's folder\`}} {
+		t.Run(strconv.Itoa(index), func(t *testing.T) {
+			payload, err := json.Marshal(args)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The outer test invocation has already consumed stdin. Feed the
+			// same base64 payload through a parameter at just that input seam;
+			// run the exact production decoding/binding expression unchanged.
+			binding := strings.ReplaceAll(powerShellArgumentBinding, "[Console]::In.ReadToEnd()", "$args[0]")
+			script := legacyConversion + binding + "\n" + `& { [pscustomobject]@{ arguments = @($args) } | ConvertTo-Json -Compress } @codexSkinArguments`
+			var result struct {
+				Arguments []string `json:"arguments"`
+			}
+			err = runTestPowerShellJSON(t, script, []string{base64.StdEncoding.EncodeToString(payload)}, &result)
+			if err != nil || !reflect.DeepEqual(result.Arguments, args) {
+				t.Fatalf("legacy array binding = %#v, %v; want %#v", result.Arguments, err, args)
 			}
 		})
 	}

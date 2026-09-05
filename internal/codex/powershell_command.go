@@ -13,6 +13,11 @@ import (
 	"unicode/utf16"
 )
 
+// The grouped expression is intentional: PS 5.1 emits the JSON array as one
+// pipeline object, while PS 7 enumerates it. Evaluate it before @() collects
+// its elements so both versions splat zero, one, or many string arguments.
+const powerShellArgumentBinding = `$codexSkinArguments = @((ConvertFrom-Json -InputObject ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd())))))`
+
 // Only the Windows identity adapter uses this runner in production. Keeping
 // the process boundary separate lets its actual scripts run in regression
 // tests without launching, stopping, or attaching to a desktop application.
@@ -30,7 +35,7 @@ func runPowerShellCommandJSON(ctx context.Context, executable string, environmen
 	}
 	invocation := `$ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-$codexSkinArguments = @(ConvertFrom-Json -InputObject ([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd()))))
+` + powerShellArgumentBinding + `
 & {
 ` + script + "\n} @codexSkinArguments\n"
 	encoded := utf16.Encode([]rune(invocation))
