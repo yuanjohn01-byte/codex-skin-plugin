@@ -577,7 +577,7 @@ func TestRealHelperInstallationAndFailedUpgrade(t *testing.T) {
 	switch version {
 	case "0.1.0-paid-alpha.16":
 		key.keyID = "helper-alpha-2026-08"
-	case "0.1.0-paid-alpha.17":
+	case "0.1.0-paid-alpha.17", "0.1.0-paid-alpha.18.windows.1":
 		key.keyID = "helper-production-2026-08"
 	}
 	tag := key.addRelease(t, source, version, payload)

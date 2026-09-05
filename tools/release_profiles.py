@@ -38,7 +38,14 @@ PRODUCTION = ReleaseProfile(
     api_base_url="https://codexskin.ai",
     signing_key_id="helper-production-2026-08",
 )
-PROFILES = {profile.name: profile for profile in (STAGING, PRODUCTION)}
+WINDOWS_TEST = ReleaseProfile(
+    name="windows-test",
+    helper_version="0.1.0-paid-alpha.18.windows.1",
+    bootstrap_version="0.1.0-paid-alpha.17.windows.1",
+    api_base_url=PRODUCTION.api_base_url,
+    signing_key_id=PRODUCTION.signing_key_id,
+)
+PROFILES = {profile.name: profile for profile in (STAGING, PRODUCTION, WINDOWS_TEST)}
 
 
 def profile_names() -> tuple[str, ...]:

@@ -44,8 +44,9 @@ var supportedPlatforms = []string{"macos-arm64", "macos-x64", "windows-x64"}
 // being used across release channels even while both public keys remain embedded
 // for channel-specific Bootstrap verification.
 var protectedHelperSigningKeys = map[string]string{
-	"0.1.0-paid-alpha.16": "helper-alpha-2026-08",
-	"0.1.0-paid-alpha.17": "helper-production-2026-08",
+	"0.1.0-paid-alpha.16":           "helper-alpha-2026-08",
+	"0.1.0-paid-alpha.17":           "helper-production-2026-08",
+	"0.1.0-paid-alpha.18.windows.1": "helper-production-2026-08",
 }
 
 type Artifact struct {

@@ -12,7 +12,7 @@ from pathlib import Path
 from build_bootstrap import bootstrap_targets
 from build_helper import helper_targets
 from create_release_descriptor import descriptor_from_summary
-from release_profiles import PRODUCTION, STAGING, ReleaseProfile
+from release_profiles import PRODUCTION, STAGING, WINDOWS_TEST, ReleaseProfile
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -90,7 +90,7 @@ def main() -> int:
     ):
         raise AssertionError("fixed release profile versions or origins drifted")
 
-    for profile in (STAGING, PRODUCTION):
+    for profile in (STAGING, PRODUCTION, WINDOWS_TEST):
         helper_names = [target.filename for target in helper_targets(profile.helper_version)]
         bootstrap_names = [target.filename for target in bootstrap_targets(profile.bootstrap_version)]
         if any(profile.helper_version not in name for name in helper_names):
@@ -132,6 +132,7 @@ def main() -> int:
     for profile, foreign_key_id in (
         (STAGING, PRODUCTION.signing_key_id),
         (PRODUCTION, STAGING.signing_key_id),
+        (WINDOWS_TEST, STAGING.signing_key_id),
     ):
         try:
             descriptor_from_summary(
@@ -147,7 +148,7 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory(prefix="codex-skin-release-profiles-") as directory:
         root = Path(directory)
-        for profile in (STAGING, PRODUCTION):
+        for profile in (STAGING, PRODUCTION, WINDOWS_TEST):
             helper_path = root / f"helper-{profile.name}.json"
             helper_path.write_text(json.dumps(helper_summary(profile)), encoding="utf-8")
             sbom_path = root / f"sbom-{profile.name}.json"
