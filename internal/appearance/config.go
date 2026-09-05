@@ -36,13 +36,15 @@ type LiveSwitch struct {
 }
 
 type backup struct {
-	SchemaVersion int                `json:"schemaVersion"`
-	Platform      string             `json:"platform"`
-	ConfigPath    string             `json:"configPath"`
-	Values        map[string]*string `json:"values"`
+	SchemaVersion int                  `json:"schemaVersion"`
+	Platform      string               `json:"platform"`
+	ConfigPath    string               `json:"configPath"`
+	Values        map[string]*string   `json:"values"`
+	AbsentDesktop *absentDesktopBackup `json:"absentDesktop,omitempty"`
 }
 
 type section struct {
+	start     int
 	bodyStart int
 	bodyEnd   int
 	body      string
@@ -137,13 +139,6 @@ func (manager *Manager) BeginLiveSwitch(expectedMode string) (*LiveSwitch, error
 	if err != nil {
 		return nil, err
 	}
-	section, err := desktopSection(content)
-	if err != nil {
-		return nil, err
-	}
-	if section == nil {
-		return nil, fmt.Errorf("Codex config has no desktop table")
-	}
 	currentMode, err := appearanceMode(content)
 	if err != nil {
 		return nil, err
@@ -208,16 +203,6 @@ func (manager *Manager) Pin(mode string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	// Pin is intentionally fail-closed when Codex has no desktop table. Adding
-	// one would make an exact Restore impossible without taking a broad snapshot
-	// of the user's complete configuration file.
-	section, err := desktopSection(content)
-	if err != nil {
-		return false, err
-	}
-	if section == nil {
-		return false, fmt.Errorf("Codex config has no desktop table")
-	}
 	backupCreated, err := manager.ensureBackup(content)
 	if err != nil {
 		return false, err
@@ -256,12 +241,24 @@ func (manager *Manager) ensureBackup(content string) (bool, error) {
 		}
 		values[key] = line
 	}
-	if err := manager.writeBackup(backup{
+	stored := backup{
 		SchemaVersion: backupSchemaVersion,
 		Platform:      manager.platform,
 		ConfigPath:    manager.configPath,
 		Values:        values,
-	}); err != nil {
+	}
+	section, err := desktopSection(content)
+	if err != nil {
+		return false, err
+	}
+	if section == nil {
+		if err := validateDesktopCreation(content); err != nil {
+			return false, err
+		}
+		stored.SchemaVersion = absentDesktopBackupVersion
+		stored.AbsentDesktop = newAbsentDesktopBackup(content)
+	}
+	if err := manager.writeBackup(stored); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -311,6 +308,12 @@ func (manager *Manager) Restore() (bool, error) {
 			return false, err
 		}
 	}
+	if stored.AbsentDesktop != nil {
+		updated, err = restoreAbsentDesktop(updated, stored.AbsentDesktop)
+		if err != nil {
+			return false, err
+		}
+	}
 	changed := updated != content
 	if changed {
 		if err := atomicReplace(manager.configPath, []byte(content), []byte(updated), info); err != nil {
@@ -339,8 +342,14 @@ func (manager *Manager) readConfig() (string, os.FileInfo, error) {
 	if strings.Contains(content, `"""`) || strings.Contains(content, `'''`) {
 		return "", nil, fmt.Errorf("multiline TOML strings are not rewritten")
 	}
-	if _, err := desktopSection(content); err != nil {
+	section, err := desktopSection(content)
+	if err != nil {
 		return "", nil, err
+	}
+	if section == nil {
+		if err := validateDesktopCreation(content); err != nil {
+			return "", nil, err
+		}
 	}
 	return content, info, nil
 }
@@ -358,7 +367,7 @@ func (manager *Manager) readBackup() (backup, bool, error) {
 	}
 	var stored backup
 	if json.Unmarshal(raw, &stored) != nil ||
-		stored.SchemaVersion != backupSchemaVersion ||
+		!validBackupStructure(stored) ||
 		stored.Platform != manager.platform ||
 		stored.ConfigPath != manager.configPath ||
 		len(stored.Values) != len(managedKeys) {
@@ -511,6 +520,12 @@ func settingLine(content, key string) (*string, error) {
 	for _, line := range splitLines(section.body) {
 		structure := strings.TrimSpace(stripComment(strings.TrimRight(line, "\r\n")))
 		name, _, ok := strings.Cut(structure, "=")
+		if ok {
+			first, rest, keyErr := firstTOMLKey(name)
+			if keyErr == nil && first == key && (rest != "" || strings.TrimSpace(name) != key) {
+				return nil, fmt.Errorf("quoted or dotted %s setting cannot be safely rewritten", key)
+			}
+		}
 		if !ok || strings.TrimSpace(name) != key {
 			continue
 		}
@@ -529,15 +544,22 @@ func replaceSetting(content, key string, line *string) (string, error) {
 		return "", err
 	}
 	if section == nil {
-		content = strings.TrimRight(content, "\r\n") + "\n\n[desktop]\n"
+		if line == nil {
+			return content, nil
+		}
+		if err := validateDesktopCreation(content); err != nil {
+			return "", err
+		}
+		layout := newAbsentDesktopBackup(content)
+		content += layout.Separator + "[desktop]" + layout.Newline
 		section, err = desktopSection(content)
 		if err != nil || section == nil {
 			return "", fmt.Errorf("could not create desktop table")
 		}
 	}
-	newline := "\n"
-	if strings.Contains(section.body, "\r\n") {
-		newline = "\r\n"
+	newline := configNewline(section.body)
+	if section.body == "" {
+		newline = configNewline(content[section.start:section.bodyStart])
 	}
 	lines := splitLines(section.body)
 	result := strings.Builder{}
@@ -590,7 +612,7 @@ func desktopSection(content string) (*section, error) {
 	if position+1 < len(headers) {
 		end = headers[position+1].index
 	}
-	return &section{bodyStart: item.bodyStart, bodyEnd: end, body: content[item.bodyStart:end]}, nil
+	return &section{start: item.index, bodyStart: item.bodyStart, bodyEnd: end, body: content[item.bodyStart:end]}, nil
 }
 
 func tableHeaders(content string) ([]header, error) {
@@ -600,8 +622,26 @@ func tableHeaders(content string) ([]header, error) {
 		structure := strings.TrimSpace(stripComment(strings.TrimRight(line, "\r\n")))
 		if depth == 0 && isTableHeader(structure) {
 			inside := strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(structure, "["), "]"))
+			first, rest, err := firstTOMLKey(inside)
+			if err != nil {
+				return nil, err
+			}
+			if rest != "" && !strings.HasPrefix(rest, ".") {
+				return nil, fmt.Errorf("unsupported TOML table key")
+			}
+			if first == "desktop" && rest != "" {
+				child, _, err := firstTOMLKey(strings.TrimSpace(strings.TrimPrefix(rest, ".")))
+				if err != nil {
+					return nil, err
+				}
+				for _, key := range managedKeys {
+					if child == key {
+						return nil, fmt.Errorf("desktop appearance setting is defined as a table")
+					}
+				}
+			}
 			result = append(result, header{
-				index: offset, bodyStart: offset + len(line), desktop: inside == "desktop",
+				index: offset, bodyStart: offset + len(line), desktop: first == "desktop" && rest == "",
 			})
 		} else {
 			expression := structure

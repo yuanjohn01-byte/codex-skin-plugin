@@ -301,11 +301,11 @@ func TestPinSwitchRestorePreservesImplicitSystemAndDefaultCodeTheme(t *testing.T
 	}
 }
 
-func TestPinRejectsMissingDesktopTableWithoutCreatingBackup(t *testing.T) {
+func TestPinRejectsAmbiguousDesktopTableWithoutCreatingBackup(t *testing.T) {
 	root := t.TempDir()
 	config := filepath.Join(root, "config.toml")
 	backupPath := filepath.Join(root, "state", "appearance.json")
-	original := "model = \"codex\"\n"
+	original := "model = \"codex\"\n[desktop]\n[\"desktop\"]\n"
 	if err := os.WriteFile(config, []byte(original), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -314,17 +314,17 @@ func TestPinRejectsMissingDesktopTableWithoutCreatingBackup(t *testing.T) {
 		t.Fatal(err)
 	}
 	if _, err := manager.Pin("dark"); err == nil {
-		t.Fatal("Pin(dark) unexpectedly created a desktop table")
+		t.Fatal("Pin(dark) accepted duplicate desktop tables")
 	}
 	current, err := os.ReadFile(config)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(current) != original {
-		t.Fatalf("Pin changed config without a desktop table: %q", current)
+		t.Fatalf("Pin changed ambiguous config: %q", current)
 	}
 	if _, err := os.Lstat(backupPath); !os.IsNotExist(err) {
-		t.Fatalf("Pin created a backup without a desktop table: %v", err)
+		t.Fatalf("Pin created a backup for ambiguous config: %v", err)
 	}
 }
 
