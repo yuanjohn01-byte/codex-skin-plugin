@@ -321,3 +321,87 @@ func readFirstUseFile(t *testing.T, path string) string {
 	}
 	return string(content)
 }
+
+func TestRestoreRejectsRewrittenManagedKeysWithoutLosingRecovery(t *testing.T) {
+	for _, original := range []string{"", "[desktop]\nappearanceTheme = \"system\"\n"} {
+		for _, key := range managedKeys {
+			for _, alias := range []string{`"` + key + `"`, `'` + key + `'`, key + ".nested"} {
+				t.Run(original+alias, func(t *testing.T) {
+					manager, config, recovery := firstUseManager(t, "windows", original)
+					if _, err := manager.Pin("dark"); err != nil {
+						t.Fatal(err)
+					}
+					pinned := readFirstUseFile(t, config)
+					altered := strings.Replace(pinned, key+" =", alias+" =", 1)
+					if altered == pinned {
+						altered += alias + " = \"fixture\"\n"
+					}
+					if err := os.WriteFile(config, []byte(altered), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					before := readFirstUseFile(t, recovery)
+					if _, err := manager.Restore(); err == nil {
+						t.Fatal("Restore accepted an unsupported managed key alias")
+					}
+					if readFirstUseFile(t, config) != altered || readFirstUseFile(t, recovery) != before {
+						t.Fatal("failed Restore changed config or recovery")
+					}
+					if err := os.WriteFile(config, []byte(pinned), 0o600); err != nil {
+						t.Fatal(err)
+					}
+					if _, err := manager.Restore(); err != nil {
+						t.Fatal(err)
+					}
+					if readFirstUseFile(t, config) != original {
+						t.Fatal("retry did not restore original configuration")
+					}
+				})
+			}
+		}
+	}
+}
+
+func TestUnterminatedDesktopHeaderFailsBeforeBackupOrMutation(t *testing.T) {
+	for _, header := range []string{"[desktop]", "['desktop']", `["desktop"]`, `["\u0064esktop"]`} {
+		for _, suffix := range []string{"", " # original comment"} {
+			t.Run(header+suffix, func(t *testing.T) {
+				original := "model = \"fixture\"\r\n" + header + suffix
+				manager, config, recovery := firstUseManager(t, "windows", original)
+				if _, err := manager.NeedsPin("dark"); err == nil {
+					t.Fatal("NeedsPin accepted an unterminated header")
+				}
+				if _, err := manager.Pin("dark"); err == nil {
+					t.Fatal("Pin accepted an unterminated header")
+				}
+				if transaction, err := manager.BeginLiveSwitch("system"); err == nil {
+					transaction.Close()
+					t.Fatal("live switch accepted an unterminated header")
+				}
+				if readFirstUseFile(t, config) != original {
+					t.Fatal("rejected header changed original configuration")
+				}
+				if _, err := os.Stat(recovery); !os.IsNotExist(err) {
+					t.Fatalf("rejected header created recovery: %v", err)
+				}
+				// If the header loses its newline after a successful Pin,
+				// Restore must retain the existing recovery for a later retry.
+				if err := os.WriteFile(config, []byte(original+"\r\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := manager.Pin("dark"); err != nil {
+					t.Fatal(err)
+				}
+				before := readFirstUseFile(t, recovery)
+				if err := os.WriteFile(config, []byte(original), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := manager.Restore(); err == nil {
+					t.Fatal("Restore accepted an unterminated header")
+				}
+				if readFirstUseFile(t, config) != original || readFirstUseFile(t, recovery) != before {
+					t.Fatal("failed Restore changed config or recovery")
+				}
+			})
+		}
+	}
+}

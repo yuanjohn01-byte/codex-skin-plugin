@@ -350,6 +350,20 @@ func (manager *Manager) readConfig() (string, os.FileInfo, error) {
 		if err := validateDesktopCreation(content); err != nil {
 			return "", nil, err
 		}
+	} else {
+		// Appending a setting to an EOF header would join it to the header
+		// or its comment. Refuse before backup/mutation rather than silently
+		// changing formatting that the existing backup cannot restore.
+		if !strings.HasSuffix(content[section.start:section.bodyStart], "\n") {
+			return "", nil, fmt.Errorf("desktop table header has no terminating newline")
+		}
+		// Direct rollback also enters Restore without NeedsRestore. Validate
+		// all managed keys before any path can write or consume recovery.
+		for _, key := range managedKeys {
+			if _, err := settingLine(content, key); err != nil {
+				return "", nil, err
+			}
+		}
 	}
 	return content, info, nil
 }
