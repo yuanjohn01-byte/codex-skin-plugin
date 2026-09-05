@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -28,14 +29,21 @@ func TestWindowsPowerShellStartupMatrix(t *testing.T) {
 		"TEMP=" + os.TempDir(), "TMP=" + os.TempDir(),
 	}
 	for _, test := range []struct {
-		name    string
-		encoded bool
-		minimal bool
+		name           string
+		encoded        bool
+		minimal        bool
+		builtinModules bool
+		prelude        string
+		stdin          bool
 	}{
-		{"plain_inherited", false, false},
-		{"plain_minimal", false, true},
-		{"transport_inherited", true, false},
-		{"transport_production", true, true},
+		{name: "plain_inherited"},
+		{name: "plain_minimal", minimal: true},
+		{name: "transport_inherited", encoded: true},
+		{name: "transport_production", encoded: true, minimal: true},
+		{name: "transport_builtin_modules", encoded: true, minimal: true, builtinModules: true},
+		{name: "minimal_encoding_constructor", minimal: true, prelude: `[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); `},
+		{name: "minimal_json_cmdlet", minimal: true, prelude: `$value = ConvertFrom-Json -InputObject '[]'; `},
+		{name: "minimal_stdin_decode", minimal: true, stdin: true, prelude: `$value = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String([Console]::In.ReadToEnd())); if ($value -ne '[]') { exit 1 }; `},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -48,16 +56,22 @@ func TestWindowsPowerShellStartupMatrix(t *testing.T) {
 			if test.minimal {
 				environment = minimal
 			}
+			if test.builtinModules {
+				environment = append(append([]string{}, minimal...), "PSModulePath="+filepath.Join(directory, "Modules"))
+			}
 			const script = `[Console]::Out.Write('{"ok":true}')`
 			var err error
-			if test.encoded && test.minimal {
+			if test.encoded && test.minimal && !test.builtinModules {
 				err = runPowerShellJSON(ctx, script, nil, &result)
 			} else if test.encoded {
 				err = runPowerShellCommandJSON(ctx, executable, environment, script, nil, &result)
 			} else {
-				command := exec.CommandContext(ctx, executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script)
+				command := exec.CommandContext(ctx, executable, "-NoLogo", "-NoProfile", "-NonInteractive", "-Command", "$ErrorActionPreference = 'Stop'; "+test.prelude+script)
 				command.Env = environment
 				command.WaitDelay = time.Second
+				if test.stdin {
+					command.Stdin = strings.NewReader("W10=")
+				}
 				var output []byte
 				output, err = command.Output()
 				if err == nil {
