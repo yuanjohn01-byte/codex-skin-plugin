@@ -216,7 +216,7 @@ jobs:
       - name: Check bounded Windows PowerShell startup paths
         shell: pwsh
         run: |
-          go test -count=1 -timeout=2m -v ./internal/codex -run '^TestWindowsPowerShell(StartupMatrix|EnvironmentReduction)$'
+          go test -count=1 -timeout=2m -v ./internal/codex -run '^TestWindowsPowerShell(StartupMatrix|IgnoresInheritedModuleSearch)$'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: Test Windows identity, theme transaction, offline restore, bootstrap, and credentials
         shell: pwsh

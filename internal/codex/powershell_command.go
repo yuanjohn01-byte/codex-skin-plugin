@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"runtime"
 	"strings"
 	"unicode/utf16"
 )
@@ -33,7 +34,14 @@ func runPowerShellCommandJSON(ctx context.Context, executable string, environmen
 	if err != nil {
 		return fmt.Errorf("%w: system identity arguments", ErrIdentityUntrusted)
 	}
-	invocation := `$ErrorActionPreference = 'Stop'
+	moduleSetup := ""
+	if runtime.GOOS == "windows" {
+		// Windows PowerShell reconstructs module search paths at startup. Set
+		// the system-only path inside the child before its first cmdlet lookup;
+		// the inherited or reconstructed search can otherwise stall discovery.
+		moduleSetup = "$env:PSModulePath = $PSHOME + '\\Modules'\n"
+	}
+	invocation := "$ErrorActionPreference = 'Stop'\n" + moduleSetup + `
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
 ` + powerShellArgumentBinding + `
 & {

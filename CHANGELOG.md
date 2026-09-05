@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Initialize Windows PowerShell module discovery inside the child process,
+  restricting it to the system PowerShell modules before the first command.
+  This avoids a reproduced startup-discovery stall without inheriting user
+  module paths, adding software requirements, or changing macOS behavior.
 - Propagate every Windows CI test exit code, exercise failure masking with
   native command fixtures, and reject probe timeouts as test failures rather
   than successful JSON rejection. Native installation fixtures follow the
