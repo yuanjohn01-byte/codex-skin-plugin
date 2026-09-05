@@ -3,12 +3,8 @@
 package codex
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -135,9 +131,9 @@ namespace CodexSkin {
 }
 '@
 }
-$pid = [CodexSkin.PackageLauncher]::Launch($args[0], $args[1])
-if ($pid -le 0) { throw 'activation did not return a process id' }
-[pscustomobject]@{ processId = [int]$pid } | ConvertTo-Json -Compress
+$launchedProcessId = [CodexSkin.PackageLauncher]::Launch($args[0], $args[1])
+if ($launchedProcessId -le 0) { throw 'activation did not return a process id' }
+[pscustomobject]@{ processId = [int]$launchedProcessId } | ConvertTo-Json -Compress
 `
 	argumentLine := strings.Join([]string{
 		"--remote-debugging-address=127.0.0.1",
@@ -187,9 +183,9 @@ namespace CodexSkin {
 }
 '@
 }
-$pid = [CodexSkin.OrdinaryPackageLauncher]::Launch($args[0])
-if ($pid -le 0) { throw 'activation did not return a process id' }
-[pscustomobject]@{ processId = [int]$pid } | ConvertTo-Json -Compress
+$launchedProcessId = [CodexSkin.OrdinaryPackageLauncher]::Launch($args[0])
+if ($launchedProcessId -le 0) { throw 'activation did not return a process id' }
+[pscustomobject]@{ processId = [int]$launchedProcessId } | ConvertTo-Json -Compress
 `
 	var result struct {
 		ProcessID int `json:"processId"`
@@ -453,24 +449,22 @@ func probeStableInstallation(ctx context.Context, expected Installation) (Instal
 }
 
 func runPowerShellJSON(ctx context.Context, script string, args []string, target any) error {
-	commandArgs := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "RemoteSigned", "-Command", script}
-	commandArgs = append(commandArgs, args...)
-	command := exec.CommandContext(ctx, "powershell.exe", commandArgs...)
-	command.Env = []string{
-		"SystemRoot=" + os.Getenv("SystemRoot"),
-		"WINDIR=" + os.Getenv("WINDIR"),
-		"PATH=" + filepath.Join(os.Getenv("SystemRoot"), "System32", "WindowsPowerShell", "v1.0") + ";" + filepath.Join(os.Getenv("SystemRoot"), "System32"),
+	root := os.Getenv("SystemRoot")
+	if !filepath.IsAbs(root) {
+		return ErrIdentityUntrusted
 	}
-	output, err := command.Output()
-	if err != nil || len(output) < 2 || len(output) > 128*1024 {
-		return fmt.Errorf("%w: system identity probe", ErrIdentityUntrusted)
+	system32 := filepath.Join(root, "System32")
+	powerShellDirectory := filepath.Join(system32, "WindowsPowerShell", "v1.0")
+	environment := []string{
+		"SystemRoot=" + root,
+		"WINDIR=" + root,
+		"PATH=" + powerShellDirectory + ";" + system32,
+		// Windows PowerShell 5.1's Add-Type compiler needs a writable temp
+		// directory. Do not make it fall back to the protected Windows folder.
+		"TEMP=" + os.TempDir(),
+		"TMP=" + os.TempDir(),
 	}
-	decoder := json.NewDecoder(bytes.NewReader(output))
-	decoder.DisallowUnknownFields()
-	if err := decoder.Decode(target); err != nil {
-		return fmt.Errorf("%w: system identity JSON", ErrIdentityUntrusted)
-	}
-	return nil
+	return runPowerShellCommandJSON(ctx, filepath.Join(powerShellDirectory, "powershell.exe"), environment, script, args, target)
 }
 
 func quoteWindowsArgument(value string) string {

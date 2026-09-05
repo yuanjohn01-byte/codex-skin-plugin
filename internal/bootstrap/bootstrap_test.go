@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -17,8 +18,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/buildinfo"
 	releasecontract "github.com/yuanjohn01-byte/codex-skin-plugin/internal/release"
 )
 
@@ -553,7 +554,33 @@ func TestRealHelperInstallationAndFailedUpgrade(t *testing.T) {
 	}
 	key := newSigningFixture(t)
 	source := &memorySource{}
-	tag := key.addRelease(t, source, buildinfo.Version, payload)
+	// The externally built Helper may have a release-profile version supplied
+	// by ldflags, unlike this test process. Use its validated version response.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	versionOutput, err := runSelfTestCommand(ctx, helperPath, "version")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var envelope selfTestResult
+	var versionData selfTestData
+	if json.Unmarshal(versionOutput, &envelope) != nil || json.Unmarshal(envelope.Data, &versionData) != nil || versionData.HelperVersion == "" {
+		t.Fatal("native Helper did not report a version")
+	}
+	version := versionData.HelperVersion
+	if err := validateSelfTest(versionOutput, "version", version, platform); err != nil {
+		t.Fatal(err)
+	}
+	// Only this temporary fixture trusts the generated test public key. Keep
+	// protected channel IDs consistent; never use a real signing private key
+	// or weaken the production descriptor/key validation to accommodate tests.
+	switch version {
+	case "0.1.0-paid-alpha.16":
+		key.keyID = "helper-alpha-2026-08"
+	case "0.1.0-paid-alpha.17":
+		key.keyID = "helper-production-2026-08"
+	}
+	tag := key.addRelease(t, source, version, payload)
 	temporary := t.TempDir()
 	root := filepath.Join(temporary, "application-data")
 	cache := filepath.Join(temporary, "plugin-cache")
@@ -574,7 +601,7 @@ func TestRealHelperInstallationAndFailedUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.HelperVersion != buildinfo.Version || !strings.Contains(filepath.ToSlash(result.Executable), "/bin/"+buildinfo.Version+"/") {
+	if result.HelperVersion != version || !strings.Contains(filepath.ToSlash(result.Executable), "/bin/"+version+"/") {
 		t.Fatalf("unexpected native install: %#v", result)
 	}
 	pointer, ok, err := readCurrent(filepath.Join(root, "bin"), platform)

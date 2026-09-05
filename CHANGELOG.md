@@ -1,5 +1,37 @@
 # Changelog
 
+## Unreleased
+
+- Initialize Windows PowerShell module discovery inside the child process,
+  restricting it to the system PowerShell modules before the first command.
+  This avoids a reproduced startup-discovery stall without inheriting user
+  module paths, adding software requirements, or changing macOS behavior.
+- Propagate every Windows CI test exit code, exercise failure masking with
+  native command fixtures, and reject probe timeouts as test failures rather
+  than successful JSON rejection. Native installation fixtures follow the
+  tested binary's actual version without weakening protected signing checks;
+  bounded startup probes distinguish shell, environment, and transport failures.
+- Support first-use appearance pinning when `config.toml` has no desktop table.
+  Save minimal, versioned absence metadata before appending only the required
+  settings; offline Restore removes an empty added table and returns an
+  unchanged original configuration byte-for-byte. Later user settings/comments
+  remain intact. Existing version-1 recovery points remain supported, while old
+  Helpers reject the new version-2 absence record instead of ignoring it.
+- Cover interrupted first use, recovery retries, LF/CRLF and missing final
+  newlines, native-UI backup preparation, quoted table aliases, and conflicting
+  inline/dotted definitions without touching real user configuration.
+- Fix Windows controlled and ordinary activation scripts assigning PowerShell's
+  read-only process ID variable. Pass probe arguments as separate encoded data,
+  preserving spaces, quotes, empty strings, and Unicode without treating values
+  as PowerShell commands. Use the system Windows PowerShell executable with a
+  restricted environment and a writable compiler temporary directory.
+- Execute the production activation scripts with a simulated COM boundary in
+  regression tests, require Windows PowerShell 5.1 on native Windows, and cover
+  malformed output, failed activation, cancellation, and exact Restore of absent
+  appearance/default code-theme settings. These checks do not replace real
+  Windows Desktop Apply/Switch/Restore acceptance. Published versions and pins
+  are unchanged.
+
 ## 0.1.0-paid-alpha - Production Paid Alpha
 
 - Publish the signed Production Paid Alpha Helper `.17` / Bootstrap `.16` release
