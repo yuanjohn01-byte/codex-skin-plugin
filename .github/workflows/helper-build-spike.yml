@@ -92,18 +92,20 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python tools/build_bootstrap.py --target windows-x64 --release-profile windows-test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $env:CODEX_SKIN_TEST_HELPER = (Resolve-Path 'dist/helper/codex-skin-helper_0.1.0-paid-alpha.17.windows.2_windows_x64.exe').Path
+          $env:CODEX_SKIN_TEST_HELPER = (Resolve-Path 'dist/helper/codex-skin-helper_0.1.0-paid-alpha.17.windows.3_windows_x64.exe').Path
           go test -count=1 -timeout=2m -v ./internal/codex -run '^TestWindowsPowerShell(StartupMatrix|SystemRunner|IgnoresInheritedModuleSearch)$'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          go test -count=1 -timeout=2m ./internal/restarttrace ./internal/restartflow ./internal/cli ./internal/adapter -run '^Test(Trace|Diagnostic|RestartWorkerDiagnostic|OrdinaryRecoveryTrace)'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           go test -p 1 -count=1 -failfast -timeout=4m ./internal/bootstrap ./internal/bootstrapcli ./internal/release ./internal/releasesigning ./internal/codex ./internal/appearance ./internal/engine ./internal/restartflow ./internal/userflow ./tools/windows_plugin_entry_test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $bootstrap = (Resolve-Path 'dist/bootstrap/codex-skin-bootstrap_0.1.0-paid-alpha.16.windows.2_windows_x64.exe').Path
+          $bootstrap = (Resolve-Path 'dist/bootstrap/codex-skin-bootstrap_0.1.0-paid-alpha.16.windows.3_windows_x64.exe').Path
           $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
           foreach ($tool in @('node', 'python', 'go')) { if (Get-Command $tool -ErrorAction SilentlyContinue) { throw 'Developer tool remained on PATH' } }
           $version = (& $env:CODEX_SKIN_TEST_HELPER version --json) | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or -not $version.ok -or $version.data.helperVersion -ne '0.1.0-paid-alpha.17.windows.2' -or $version.data.apiOrigin -ne 'https://codexskin.ai' -or $version.data.buildCommit -ne $env:CANDIDATE_SHA) { throw 'Candidate Helper identity mismatch' }
+          if ($LASTEXITCODE -ne 0 -or -not $version.ok -or $version.data.helperVersion -ne '0.1.0-paid-alpha.17.windows.3' -or $version.data.apiOrigin -ne 'https://codexskin.ai' -or $version.data.buildCommit -ne $env:CANDIDATE_SHA) { throw 'Candidate Helper identity mismatch' }
           $version = (& $bootstrap version --json) | ConvertFrom-Json
-          if ($LASTEXITCODE -ne 0 -or -not $version.ok -or $version.data.bootstrapVersion -ne '0.1.0-paid-alpha.16.windows.2' -or $version.data.releaseTag -ne 'helper-v0.1.0-paid-alpha.17.windows.2') { throw 'Candidate Bootstrap identity mismatch' }
+          if ($LASTEXITCODE -ne 0 -or -not $version.ok -or $version.data.bootstrapVersion -ne '0.1.0-paid-alpha.16.windows.3' -or $version.data.releaseTag -ne 'helper-v0.1.0-paid-alpha.17.windows.3') { throw 'Candidate Bootstrap identity mismatch' }
 
   windows-test-evidence:
     if: github.event_name == 'workflow_dispatch' && inputs.run_profile == 'signed-windows-test-only'
@@ -178,8 +180,8 @@ jobs:
           assert candidate['channel'] == 'windows-test'
           assert candidate['descriptorSHA256'] == hashlib.sha256(Path('candidate/helper/helper-release-descriptor.json').read_bytes()).hexdigest()
           assert candidate['marketplaceSHA256'] == hashlib.sha256(Path('candidate/windows-test-marketplace.zip').read_bytes()).hexdigest()
-          assert descriptor['helperVersion'] == '0.1.0-paid-alpha.17.windows.2'
-          assert descriptor['releaseTag'] == 'helper-v0.1.0-paid-alpha.17.windows.2'
+          assert descriptor['helperVersion'] == '0.1.0-paid-alpha.17.windows.3'
+          assert descriptor['releaseTag'] == 'helper-v0.1.0-paid-alpha.17.windows.3'
           assert descriptor['signingKeyId'] == 'helper-production-2026-08'
           PY
       - name: Sign using only the pinned trusted signer

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/restarttrace"
 )
 
 var packageIdentityPattern = regexp.MustCompile(`^OpenAI\.Codex_[A-Za-z0-9._-]{1,110}$`)
@@ -94,7 +96,9 @@ $valid[0] | ConvertTo-Json -Compress
 	}, nil
 }
 
-func LaunchControlled(ctx context.Context, installation Installation, profile string, port int) (int, error) {
+func LaunchControlled(ctx context.Context, installation Installation, profile string, port int) (pid int, returnErr error) {
+	finishTrace := restarttrace.Start(ctx, restarttrace.LaunchControlled)
+	defer func() { finishTrace(returnErr) }()
 	if err := verifyInstallationFresh(ctx, installation); err != nil {
 		return 0, err
 	}
@@ -150,7 +154,9 @@ if ($launchedProcessId -le 0) { throw 'activation did not return a process id' }
 	return result.ProcessID, nil
 }
 
-func LaunchOrdinary(ctx context.Context, installation Installation) error {
+func LaunchOrdinary(ctx context.Context, installation Installation) (returnErr error) {
+	finishTrace := restarttrace.Start(ctx, restarttrace.LaunchOrdinary)
+	defer func() { finishTrace(returnErr) }()
 	if err := verifyInstallationFresh(ctx, installation); err != nil {
 		return err
 	}
@@ -391,7 +397,9 @@ func StopCurrentInstance(
 	ctx context.Context,
 	installation Installation,
 	expected CurrentInstance,
-) error {
+) (returnErr error) {
+	finishTrace := restarttrace.Start(ctx, restarttrace.StopProcess)
+	defer func() { finishTrace(returnErr) }()
 	current, err := DiscoverCurrentInstance(ctx, installation)
 	if err != nil ||
 		current.Process.ProcessID != expected.Process.ProcessID ||

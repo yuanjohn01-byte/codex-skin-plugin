@@ -22,6 +22,7 @@ import (
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/flowstate"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/protocol"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/restartflow"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/restarttrace"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/runtimebudget"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/themeapi"
@@ -474,7 +475,7 @@ func runThemeContinue(command string, stdout, stderr io.Writer, jsonMode bool, e
 	return exitSuccess
 }
 
-func runRestartWorker(requestID string, environment Runtime) int {
+func runRestartWorker(requestID string, environment Runtime) (exitCode int) {
 	goos, _, _ := environment.values()
 	root, err := resolveRoot(goos, environment)
 	if err != nil {
@@ -506,6 +507,17 @@ func runRestartWorker(requestID string, environment Runtime) int {
 		defer cancel()
 	}
 	runtimeAdapter := environment.Adapter
+	if goos == "windows" {
+		ctx = restarttrace.WithRecorder(ctx, requestID, buildinfo.Version, buildinfo.Commit, restartStore.WriteDiagnostic)
+		finish := restarttrace.Start(ctx, restarttrace.Worker)
+		defer func() {
+			if exitCode == exitSuccess {
+				finish(nil)
+			} else {
+				finish(errors.New("restart failed"))
+			}
+		}()
+	}
 	if runtimeAdapter == nil {
 		runtimeAdapter, err = adapter.NewLive(adapter.Config{
 			Root: store.Root(), CurrentProfile: true, RestartApproved: true,

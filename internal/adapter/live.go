@@ -23,6 +23,7 @@ import (
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/codex"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/renderer"
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/restarttrace"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/runtimebudget"
 )
 
@@ -251,8 +252,12 @@ func (adapter *Live) openVerifiedSession(
 	ctx context.Context,
 	targetAppearance string,
 	restoreAppearance bool,
-) (engine.Session, error) {
+) (result engine.Session, returnErr error) {
+	finishTrace := restarttrace.Start(ctx, restarttrace.OpenSession)
+	defer func() { finishTrace(returnErr) }()
+	installationTrace := restarttrace.Start(ctx, restarttrace.Installation)
 	installation, err := codex.DiscoverInstallation(ctx)
+	installationTrace(err)
 	if err != nil {
 		return engine.Session{}, err
 	}
@@ -271,6 +276,7 @@ func (adapter *Live) openVerifiedSession(
 	var client *cdp.Client
 	targetID := ""
 	if adapter.currentProfile && adapter.appearance != nil {
+		appearanceTrace := restarttrace.Start(ctx, restarttrace.AppearanceCheck)
 		switch {
 		case restoreAppearance:
 			appearanceRestart, err = adapter.appearance.NeedsRestore()
@@ -287,13 +293,20 @@ func (adapter *Live) openVerifiedSession(
 			// install restore stale pre-theme state.
 			restoreAppearance = true
 		}
+		appearanceTrace(err)
 		if err != nil {
 			return engine.Session{}, errors.Join(engine.ErrStateUnsafe, err)
 		}
 	}
 
 	if adapter.currentProfile {
+		currentTrace := restarttrace.Start(ctx, restarttrace.CurrentProcess)
 		current, currentErr := codex.DiscoverCurrentInstance(ctx, installation)
+		if errors.Is(currentErr, codex.ErrCurrentMissing) {
+			currentTrace(nil)
+		} else {
+			currentTrace(currentErr)
+		}
 		switch {
 		case currentErr == nil:
 			profile = current.Profile
@@ -365,12 +378,14 @@ func (adapter *Live) openVerifiedSession(
 	// must be cleaned up if opening the verified session later fails.
 	if adapter.currentProfile && adapter.appearance != nil &&
 		!appearanceRestart && !appearancePrepared {
+		appearanceTrace := restarttrace.Start(ctx, restarttrace.Appearance)
 		switch {
 		case targetAppearance != "":
 			appearanceChanged, err = adapter.appearance.Pin(targetAppearance)
 		case restoreAppearance:
 			appearanceChanged, err = adapter.appearance.Restore()
 		}
+		appearanceTrace(err)
 		if err != nil {
 			return engine.Session{}, adapter.recoverOpenFailure(
 				ctx, installation, launchedPID, port, profile, process,
@@ -386,7 +401,9 @@ func (adapter *Live) openVerifiedSession(
 			// process is still open. Once that process has been stopped, never
 			// launch with the cached pre-stop identity: rediscover the complete
 			// signed installation and require it to settle first.
+			stableTrace := restarttrace.Start(ctx, restarttrace.StableInstallation)
 			installation, err = codex.DiscoverStableInstallation(ctx)
+			stableTrace(err)
 			if err != nil {
 				return engine.Session{}, adapter.recoverOpenFailure(
 					ctx, installation, launchedPID, port, profile, process, mutated, err,
@@ -405,11 +422,13 @@ func (adapter *Live) openVerifiedSession(
 			// happened to be the requested value, so every later launch failure
 			// restores the user's original native preference.
 			mutated = true
+			appearanceTrace := restarttrace.Start(ctx, restarttrace.Appearance)
 			if restoreAppearance {
 				appearanceChanged, err = adapter.appearance.Restore()
 			} else {
 				appearanceChanged, err = adapter.appearance.Pin(targetAppearance)
 			}
+			appearanceTrace(err)
 			if err != nil {
 				return engine.Session{}, adapter.recoverOpenFailure(
 					ctx, installation, launchedPID, port, profile, process,
@@ -435,10 +454,12 @@ func (adapter *Live) openVerifiedSession(
 		mutated = true
 	}
 	if client == nil {
+		listenerTrace := restarttrace.Start(ctx, restarttrace.WaitListener)
 		deadline := time.Now().Add(adapter.launchWait)
 		var targets []cdp.Target
 		for time.Now().Before(deadline) {
 			if ctx.Err() != nil {
+				listenerTrace(ctx.Err())
 				return engine.Session{}, adapter.recoverOpenFailure(
 					ctx, installation, launchedPID, port, profile, process, mutated, ctx.Err(),
 				)
@@ -462,36 +483,43 @@ func (adapter *Live) openVerifiedSession(
 			}
 			time.Sleep(250 * time.Millisecond)
 		}
+		listenerTrace(err)
 		if err != nil {
 			err = errors.Join(codex.ErrListenerUntrusted, err)
 			return engine.Session{}, adapter.recoverOpenFailure(
 				ctx, installation, launchedPID, port, profile, process, mutated, err,
 			)
 		}
+		pageTrace := restarttrace.Start(ctx, restarttrace.ConnectPage)
 		target, err := cdp.SelectPage(targets)
 		if err != nil {
+			pageTrace(err)
 			return engine.Session{}, adapter.recoverOpenFailure(
 				ctx, installation, launchedPID, port, profile, process, mutated, err,
 			)
 		}
 		client, err = cdp.Dial(ctx, target, port)
 		if err != nil {
+			pageTrace(err)
 			return engine.Session{}, adapter.recoverOpenFailure(
 				ctx, installation, launchedPID, port, profile, process, mutated, err,
 			)
 		}
 		if err := client.Call(ctx, "Runtime.enable", map[string]any{}, nil); err != nil {
+			pageTrace(err)
 			client.Close()
 			return engine.Session{}, adapter.recoverOpenFailure(
 				ctx, installation, launchedPID, port, profile, process, mutated, err,
 			)
 		}
 		if err := client.Call(ctx, "Page.enable", map[string]any{}, nil); err != nil {
+			pageTrace(err)
 			client.Close()
 			return engine.Session{}, adapter.recoverOpenFailure(
 				ctx, installation, launchedPID, port, profile, process, mutated, err,
 			)
 		}
+		pageTrace(nil)
 		targetID = target.ID
 	}
 	adapter.mu.Lock()
@@ -759,7 +787,7 @@ func reopenOrdinaryIfMissingWith(
 func ensureOrdinaryInstanceWith(
 	ctx context.Context,
 	operations codexRecoveryOperations,
-) (codex.CurrentInstance, error) {
+) (result codex.CurrentInstance, returnErr error) {
 	if ctx == nil ||
 		operations.discoverStableInstallation == nil ||
 		operations.discoverCurrentInstance == nil ||
@@ -767,6 +795,8 @@ func ensureOrdinaryInstanceWith(
 		operations.waitForCurrentInstance == nil {
 		return codex.CurrentInstance{}, codex.ErrIdentityUntrusted
 	}
+	finishTrace := restarttrace.Start(ctx, restarttrace.FailureRecovery)
+	defer func() { finishTrace(returnErr) }()
 	// Always reacquire the official installation here. The caller's identity
 	// may be the exact reason the controlled launch failed (for example, an
 	// in-place Codex update between user consent and relaunch).
@@ -787,7 +817,9 @@ func ensureOrdinaryInstanceWith(
 	if err := operations.launchOrdinary(ctx, fresh); err != nil {
 		return codex.CurrentInstance{}, err
 	}
+	waitTrace := restarttrace.Start(ctx, restarttrace.WaitOrdinary)
 	current, err = operations.waitForCurrentInstance(ctx, fresh)
+	waitTrace(err)
 	if err != nil {
 		return codex.CurrentInstance{}, err
 	}

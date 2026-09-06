@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"time"
 
+	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/restarttrace"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/runtimebudget"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/theme"
 )
@@ -42,6 +43,8 @@ func New(store *Store, adapter Adapter) (*Engine, error) {
 }
 
 func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified) (result ApplyResult, returnErr error) {
+	finishTrace := restarttrace.Start(ctx, restarttrace.Apply)
+	defer func() { finishTrace(returnErr) }()
 	if verified.Manifest.SchemaVersion != theme.SchemaVersion ||
 		verified.Descriptor.ThemePublicID != verified.Manifest.ThemePublicID ||
 		verified.Descriptor.ThemeVersion != verified.Manifest.ThemeVersion ||
@@ -234,6 +237,8 @@ func (engine *Engine) ApplyVerified(ctx context.Context, verified theme.Verified
 }
 
 func (engine *Engine) RestoreOfficial(ctx context.Context) (result RestoreResult, returnErr error) {
+	finishTrace := restarttrace.Start(ctx, restarttrace.Restore)
+	defer func() { finishTrace(returnErr) }()
 	unlock, err := acquireOperationLock(ctx, engine.store)
 	if err != nil {
 		return RestoreResult{}, err
@@ -346,7 +351,9 @@ func acquireOperationLock(ctx context.Context, store *Store) (func() error, erro
 	}
 }
 
-func (engine *Engine) recoverInterruptedLocked(ctx context.Context) error {
+func (engine *Engine) recoverInterruptedLocked(ctx context.Context) (returnErr error) {
+	finishTrace := restarttrace.Start(ctx, restarttrace.InterruptedRecovery)
+	defer func() { finishTrace(returnErr) }()
 	journals, err := engine.store.RunningJournals()
 	if err != nil {
 		return err

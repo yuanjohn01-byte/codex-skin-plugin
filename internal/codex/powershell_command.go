@@ -53,6 +53,7 @@ func runPowerShellCommandJSON(ctx context.Context, executable string, environmen
 	}
 	commandArgs := []string{"-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "RemoteSigned", "-EncodedCommand", base64.StdEncoding.EncodeToString(commandBytes)}
 	command := exec.CommandContext(ctx, executable, commandArgs...)
+	configurePowerShellProcess(command)
 	command.Env = environment
 	command.Stdin = strings.NewReader(base64.StdEncoding.EncodeToString(payload))
 	var output powerShellOutput
