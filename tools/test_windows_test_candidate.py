@@ -44,8 +44,8 @@ class CandidateTests(unittest.TestCase):
         from release_profiles import PRODUCTION, STAGING
         self.assertEqual(PRODUCTION.helper_version, "0.1.0-paid-alpha.17")
         self.assertEqual(STAGING.helper_version, "0.1.0-paid-alpha.16")
-        self.assertEqual(candidate.PROFILE.helper_version, "0.1.0-paid-alpha.17.windows.1")
-        self.assertEqual(candidate.PROFILE.bootstrap_version, "0.1.0-paid-alpha.16.windows.1")
+        self.assertEqual(candidate.PROFILE.helper_version, "0.1.0-paid-alpha.17.windows.2")
+        self.assertEqual(candidate.PROFILE.bootstrap_version, "0.1.0-paid-alpha.16.windows.2")
         self.assertEqual(candidate.PROFILE.signing_key_id, PRODUCTION.signing_key_id)
 
     def test_freeze_rejects_non_sha_dirty_tree_and_existing_tag(self):

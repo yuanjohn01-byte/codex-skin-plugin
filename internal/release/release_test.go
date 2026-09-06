@@ -140,6 +140,8 @@ func TestWindowsCandidateCanUpgradeToNextOfficialHelper(t *testing.T) {
 	for _, pair := range [][2]string{
 		{"0.1.0-paid-alpha.17", "0.1.0-paid-alpha.17.windows.1"},
 		{"0.1.0-paid-alpha.17.windows.1", "0.1.0-paid-alpha.18"},
+		{"0.1.0-paid-alpha.17.windows.1", "0.1.0-paid-alpha.17.windows.2"},
+		{"0.1.0-paid-alpha.17.windows.2", "0.1.0-paid-alpha.18"},
 	} {
 		relation, err := Relation(pair[0], pair[1])
 		if err != nil || relation != VersionUpgrade {
@@ -156,6 +158,7 @@ func TestProtectedHelperVersionsRejectCrossChannelSigningKeys(t *testing.T) {
 	}{
 		{name: "production version with staging key", helperVersion: "0.1.0-paid-alpha.17", signingKeyID: "helper-alpha-2026-08"},
 		{name: "windows test version with staging key", helperVersion: "0.1.0-paid-alpha.17.windows.1", signingKeyID: "helper-alpha-2026-08"},
+		{name: "windows test revision 2 with staging key", helperVersion: "0.1.0-paid-alpha.17.windows.2", signingKeyID: "helper-alpha-2026-08"},
 		{name: "staging version with production key", helperVersion: "0.1.0-paid-alpha.16", signingKeyID: "helper-production-2026-08"},
 	}
 	for _, test := range tests {

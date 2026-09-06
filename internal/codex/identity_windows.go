@@ -318,14 +318,16 @@ func DiscoverCurrentInstance(ctx context.Context, installation Installation) (Cu
 	const script = `
 $ErrorActionPreference = 'Stop'
 $expected = "$($args[0])"
-$matches = @()
+# -notmatch updates PowerShell's automatic $Matches variable when filtering
+# child processes. Keep the collected candidates in a separate variable.
+$codexProcessCandidates = @()
 foreach ($process in @(Get-CimInstance Win32_Process | Where-Object {
   "$($_.ExecutablePath)" -ieq $expected -and
   "$($_.CommandLine)" -notmatch '(?i)(?:^|\s)--type(?:=|\s)'
 })) {
   $native = Get-Process -Id ([int]$process.ProcessId)
   $signature = Get-AuthenticodeSignature -LiteralPath $native.Path
-  $matches += [pscustomobject]@{
+  $codexProcessCandidates += [pscustomobject]@{
     processId = [int]$process.ProcessId
     path = "$($native.Path)"
     commandLine = "$($process.CommandLine)"
@@ -333,7 +335,7 @@ foreach ($process in @(Get-CimInstance Win32_Process | Where-Object {
     signerStatus = "$($signature.Status)"
   }
 }
-ConvertTo-Json -InputObject @($matches) -Compress
+ConvertTo-Json -InputObject @($codexProcessCandidates) -Compress
 `
 	var processes []windowsProcess
 	if err := runPowerShellJSON(ctx, script, []string{installation.Executable}, &processes); err != nil {
