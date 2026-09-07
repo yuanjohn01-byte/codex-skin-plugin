@@ -8,13 +8,15 @@ import (
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
 )
 
-func TestAppearanceUIPlatformGateKeepsWindowsOnRestartFallback(t *testing.T) {
-	if !supportsInAppAppearance("darwin") {
-		t.Fatal("macOS in-app Appearance path is disabled")
+func TestAppearanceUIPlatformGateSupportsWindowsAndMac(t *testing.T) {
+	for _, platform := range []string{"darwin", "windows"} {
+		if !supportsInAppAppearance(platform) {
+			t.Fatalf("%q in-app Appearance path is disabled", platform)
+		}
 	}
-	for _, platform := range []string{"windows", "linux", ""} {
+	for _, platform := range []string{"linux", ""} {
 		if supportsInAppAppearance(platform) {
-			t.Fatalf("%q unexpectedly enabled the macOS Appearance path", platform)
+			t.Fatalf("%q unexpectedly enabled the Appearance path", platform)
 		}
 	}
 }

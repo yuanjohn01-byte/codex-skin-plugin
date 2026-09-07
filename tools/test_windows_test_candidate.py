@@ -44,8 +44,8 @@ class CandidateTests(unittest.TestCase):
         from release_profiles import PRODUCTION, STAGING
         self.assertEqual(PRODUCTION.helper_version, "0.1.0-paid-alpha.17")
         self.assertEqual(STAGING.helper_version, "0.1.0-paid-alpha.16")
-        self.assertEqual(candidate.PROFILE.helper_version, "0.1.0-paid-alpha.17.windows.3")
-        self.assertEqual(candidate.PROFILE.bootstrap_version, "0.1.0-paid-alpha.16.windows.3")
+        self.assertEqual(candidate.PROFILE.helper_version, "0.1.0-paid-alpha.17.windows.4")
+        self.assertEqual(candidate.PROFILE.bootstrap_version, "0.1.0-paid-alpha.16.windows.4")
         self.assertEqual(candidate.PROFILE.signing_key_id, PRODUCTION.signing_key_id)
 
     def test_freeze_rejects_non_sha_dirty_tree_and_existing_tag(self):
@@ -132,6 +132,12 @@ class CandidateTests(unittest.TestCase):
         self.assertIn("github.ref == 'refs/heads/main'", job_block(workflow, "signed-production-candidate"))
         native = job_block(workflow, "windows-test-native").splitlines()
         self.assertIn("go test -p 1 -count=1 -failfast", "\n".join(native))
+        # The diagnostic-only adapter filter must not be the only Windows run:
+        # in-place appearance/Restore coordinator regressions need native tests.
+        appearance_runs = [line for line in native if line.strip().startswith("go test ")
+                           and "./internal/adapter" in line and " -run " not in line]
+        self.assertEqual(len(appearance_runs), 1)
+        self.assertIn("./internal/appearance", appearance_runs[0])
         for index, line in enumerate(native):
             if line.strip().startswith(("go test ", "python tools/")):
                 self.assertEqual(native[index + 1].strip(), "if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }")

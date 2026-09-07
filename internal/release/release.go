@@ -49,6 +49,7 @@ var protectedHelperSigningKeys = map[string]string{
 	"0.1.0-paid-alpha.17.windows.1": "helper-production-2026-08",
 	"0.1.0-paid-alpha.17.windows.2": "helper-production-2026-08",
 	"0.1.0-paid-alpha.17.windows.3": "helper-production-2026-08",
+	"0.1.0-paid-alpha.17.windows.4": "helper-production-2026-08",
 }
 
 type Artifact struct {

@@ -40,8 +40,8 @@ PRODUCTION = ReleaseProfile(
 )
 WINDOWS_TEST = ReleaseProfile(
     name="windows-test",
-    helper_version="0.1.0-paid-alpha.17.windows.3",
-    bootstrap_version="0.1.0-paid-alpha.16.windows.3",
+    helper_version="0.1.0-paid-alpha.17.windows.4",
+    bootstrap_version="0.1.0-paid-alpha.16.windows.4",
     api_base_url=PRODUCTION.api_base_url,
     signing_key_id=PRODUCTION.signing_key_id,
 )

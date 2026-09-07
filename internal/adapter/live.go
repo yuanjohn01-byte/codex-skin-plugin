@@ -66,6 +66,7 @@ type liveSession struct {
 	profile        string
 	current        *engine.CompiledTheme
 	appearanceMode string
+	pendingRestore *pendingAppearanceRestore
 	targetID       string
 }
 
@@ -271,6 +272,12 @@ func (adapter *Live) openVerifiedSession(
 	appearanceChanged := false
 	appearanceRestart := false
 	appearancePrepared := false
+	var pendingRestore *pendingAppearanceRestore
+	defer func() {
+		if returnErr != nil && pendingRestore != nil {
+			pendingRestore.transaction.Close()
+		}
+	}()
 	mutated := false
 	var process codex.ProcessIdentity
 	var client *cdp.Client
@@ -313,8 +320,7 @@ func (adapter *Live) openVerifiedSession(
 			if current.ControlledPort > 0 {
 				port = current.ControlledPort
 				process = current.Process
-				if targetAppearance != "" && !restoreAppearance &&
-					supportsInAppAppearance(runtime.GOOS) {
+				if adapter.appearance != nil && canPrepareAppearanceInPlace(runtime.GOOS, targetAppearance, restoreAppearance) {
 					connectedProcess, target, connectedClient, connectErr := adapter.connectControlled(
 						ctx, installation, process.ProcessID, port, profile,
 					)
@@ -333,9 +339,21 @@ func (adapter *Live) openVerifiedSession(
 							targetID: target.ID,
 						}
 						var fastErr error
-						appearancePrepared, appearanceRestart, fastErr = adapter.reconcileCurrentAppearance(
-							ctx, fast, targetAppearance, appearanceRestart,
-						)
+						if restoreAppearance {
+							pendingRestore, fastErr = prepareAppearanceRestore(ctx, adapter.appearance, fast, adapter)
+							if appearanceRestartFallbackAllowed(fastErr) {
+								// A missing UI contract or unsupported legacy setting still
+								// requires the existing explicitly consented reload.
+								appearanceRestart = true
+								fastErr = nil
+							} else if fastErr == nil && pendingRestore != nil {
+								appearancePrepared, appearanceRestart = true, false
+							}
+						} else {
+							appearancePrepared, appearanceRestart, fastErr = adapter.reconcileCurrentAppearance(
+								ctx, fast, targetAppearance, appearanceRestart,
+							)
+						}
 						if fastErr == nil && !appearanceRestart {
 							process = fast.process
 							client = fast.client
@@ -525,7 +543,7 @@ func (adapter *Live) openVerifiedSession(
 	adapter.mu.Lock()
 	adapter.sessions[opaqueID] = &liveSession{
 		client: client, installation: installation, process: process, port: port, profile: profile,
-		appearanceMode: targetAppearance, targetID: targetID,
+		appearanceMode: targetAppearance, targetID: targetID, pendingRestore: pendingRestore,
 	}
 	adapter.mu.Unlock()
 	return engine.Session{
@@ -1341,6 +1359,12 @@ func (adapter *Live) VerifyOfficial(ctx context.Context, session engine.Session)
 	if !official {
 		return engine.ErrRestoreFailed
 	}
+	if live.pendingRestore != nil {
+		if err := live.pendingRestore.finish(ctx, live, adapter); err != nil {
+			return errors.Join(engine.ErrRestoreFailed, err)
+		}
+		live.pendingRestore = nil
+	}
 	return nil
 }
 
@@ -1386,6 +1410,9 @@ func (adapter *Live) Close(ctx context.Context, session engine.Session) error {
 	if live == nil {
 		return nil
 	}
+	if live.pendingRestore != nil {
+		live.pendingRestore.transaction.Close()
+	}
 	return live.client.Close()
 }
 
@@ -1401,6 +1428,9 @@ func (adapter *Live) FinalizeOfficialRollback(ctx context.Context, session engin
 	adapter.mu.Unlock()
 	if live == nil {
 		return codex.ErrListenerUntrusted
+	}
+	if live.pendingRestore != nil {
+		live.pendingRestore.transaction.Close()
 	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), openRollbackTimeout)
 	defer cancel()
@@ -1439,6 +1469,9 @@ func (adapter *Live) StopOwned(ctx context.Context, session engine.Session) erro
 	adapter.mu.Unlock()
 	if live == nil {
 		return codex.ErrListenerUntrusted
+	}
+	if live.pendingRestore != nil {
+		live.pendingRestore.transaction.Close()
 	}
 	// Close CDP before SIGTERM. Keeping the renderer socket open while waiting
 	// for process exit can hold an otherwise isolated Electron QA instance alive

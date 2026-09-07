@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Prefer verified in-app native dark/light switching on Windows when a trusted
+  controlled connection already exists. Reuse the existing fixed Appearance UI
+  contract, palette checks, original-route return, and rollback behavior.
+- Add Windows in-place official appearance Restore for saved system/light/dark
+  settings when other managed native settings already match. Keep the exact
+  recovery point until both official skin removal and live appearance are
+  verified; legacy code-theme changes retain the consented restart fallback.
+  Ordinary first attachment still requires a controlled launch; this does not
+  enable debugging in a running ordinary instance. macOS Restore routing and
+  released versions/pins are unchanged. Windows GUI acceptance remains pending.
 - Initialize Windows PowerShell module discovery inside the child process,
   restricting it to the system PowerShell modules before the first command.
   This avoids a reproduced startup-discovery stall without inheriting user

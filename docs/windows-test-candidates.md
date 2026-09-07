@@ -4,6 +4,29 @@ This developer channel tests changes before merging them into `main`. It does no
 change the default marketplace, installed Plugin, Production API, or released pins.
 It is not a claim that Windows GUI acceptance has passed.
 
+## In-place appearance candidate (unreleased)
+
+Windows now attempts the same verified native dark/light controls used on macOS
+when an existing controlled connection is available. It does not bypass process
+identity or listener ownership, enable debugging in an ordinary running instance,
+add a background service, or change first-connection consent.
+
+In-place Restore supports the original system/light/dark choice, including an
+implicitly absent setting. Codex changes its own live mode first; the Helper then
+restores the exact saved configuration and retains recovery until the official
+renderer and native mode are verified. Changed legacy code-theme settings or an
+unavailable UI contract require the existing consented restart path. Uncertain
+post-change results fail closed and retain recovery. macOS Restore is unchanged.
+
+Local coordinator tests use a simulated UI boundary and real temporary config/
+recovery files. They are not Windows GUI evidence. After a separately approved
+signed candidate is available, acceptance must cover both cross-mode directions,
+same-mode skin replacement, original system/light/dark Restore, exact settings
+and font preservation, and failure recovery. Verify process identity/start time
+and renderer continuity as well as the visible result; a window staying open
+alone does not prove the same renderer survived. If first connection requires a
+controlled launch, approve it separately and do not count it as an in-place test.
+
 ## Build and test
 
 Use the exact committed SHA on `codex/win-002-test-channel`. Ordinary branch pushes

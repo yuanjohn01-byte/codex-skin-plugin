@@ -6,7 +6,6 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/appearance"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/cdp"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/codex"
 	"github.com/yuanjohn01-byte/codex-skin-plugin/internal/engine"
@@ -22,6 +21,11 @@ const (
 )
 
 var errAppearanceUIUnavailable = errors.New("verified Codex Appearance UI is unavailable")
+
+type appearanceModeTransaction interface {
+	VerifyMode(string) error
+	Close()
+}
 
 type appearanceUIState struct {
 	TrustedOrigin     bool    `json:"trustedOrigin"`
@@ -307,6 +311,21 @@ func (adapter *Live) switchAppearanceInPlace(
 		(targetMode != "dark" && targetMode != "light") {
 		return errAppearanceUIUnavailable
 	}
+	return adapter.switchAppearanceWithTransaction(ctx, live, targetMode, nil)
+}
+
+// A supplied Restore transaction also permits system. Normal Apply/Switch keep
+// their original fixed dark/light contract and create their own LiveSwitch.
+func (adapter *Live) switchAppearanceWithTransaction(
+	ctx context.Context,
+	live *liveSession,
+	targetMode string,
+	transaction appearanceModeTransaction,
+) error {
+	if !supportsInAppAppearance(runtime.GOOS) || adapter.appearance == nil ||
+		!validAppearanceSetting(targetMode) || (targetMode == "system" && transaction == nil) {
+		return errAppearanceUIUnavailable
+	}
 	entryState, entryMode, err := adapter.readVerifiedAppearance(ctx, live)
 	if err != nil {
 		if errors.Is(err, codex.ErrListenerUntrusted) {
@@ -344,14 +363,21 @@ func (adapter *Live) switchAppearanceInPlace(
 		}
 		return errAppearanceUIUnavailable
 	}
-	transaction, err := adapter.appearance.BeginLiveSwitch(oldMode)
-	if err != nil {
+	if transaction == nil {
+		transaction, err = adapter.appearance.BeginLiveSwitch(oldMode)
+		if err != nil {
+			if openedSettings {
+				_ = adapter.returnFromAppearance(ctx, live, originalRoute)
+			}
+			return errors.Join(engine.ErrStateUnsafe, err)
+		}
+		defer transaction.Close()
+	} else if err := transaction.VerifyMode(oldMode); err != nil {
 		if openedSettings {
 			_ = adapter.returnFromAppearance(ctx, live, originalRoute)
 		}
 		return errors.Join(engine.ErrStateUnsafe, err)
 	}
-	defer transaction.Close()
 
 	selectionStarted, err := adapter.selectAppearanceMode(ctx, live, targetMode)
 	if err != nil {
@@ -369,12 +395,18 @@ func (adapter *Live) switchAppearanceInPlace(
 		)
 	}
 	targetEffective := targetMode
-	if _, err := adapter.waitForAppearanceMode(
+	settled, err := adapter.waitForAppearanceMode(
 		ctx, live, transaction, targetMode, targetEffective, baseline, false,
-	); err != nil {
+	)
+	if err != nil {
 		return adapter.rollbackAppearanceUI(
 			ctx, live, transaction, baseline, oldMode, originalRoute, openedSettings, err,
 		)
+	}
+	if targetMode == "system" {
+		// getSystemThemeVariant reflects the current effective native theme,
+		// not the OS preference while Codex was pinned to light or dark.
+		targetEffective = settled.SystemVariant
 	}
 	if openedSettings {
 		if err := adapter.returnFromAppearance(ctx, live, originalRoute); err != nil {
@@ -390,14 +422,14 @@ func (adapter *Live) switchAppearanceInPlace(
 			)
 		}
 	}
-	live.appearanceMode = targetMode
+	live.appearanceMode = targetEffective
 	return nil
 }
 
 func (adapter *Live) rollbackAppearanceUI(
 	ctx context.Context,
 	live *liveSession,
-	transaction *appearance.LiveSwitch,
+	transaction appearanceModeTransaction,
 	baseline appearanceUIState,
 	oldMode string,
 	originalRoute string,
@@ -553,7 +585,7 @@ func (adapter *Live) returnFromAppearance(
 func (adapter *Live) waitForAppearanceMode(
 	ctx context.Context,
 	live *liveSession,
-	transaction *appearance.LiveSwitch,
+	transaction appearanceModeTransaction,
 	settingMode string,
 	effectiveMode string,
 	baseline appearanceUIState,
@@ -566,8 +598,12 @@ func (adapter *Live) waitForAppearanceMode(
 		if err == nil {
 			last = state
 			diskOK := transaction.VerifyMode(settingMode) == nil
+			effective := effectiveMode
+			if settingMode == "system" && effectiveMode == "system" {
+				effective = state.SystemVariant
+			}
 			settled := diskOK && hostMode == settingMode &&
-				appearanceStateMatches(state, settingMode, effectiveMode, baseline)
+				appearanceStateMatches(state, settingMode, effective, baseline)
 			if settled && (!requireBaselinePalette || sameAppearancePalette(state, baseline)) {
 				return state, nil
 			}
@@ -600,7 +636,7 @@ func (adapter *Live) readVerifiedAppearance(
 func (adapter *Live) verifyReturnedAppearance(
 	ctx context.Context,
 	live *liveSession,
-	transaction *appearance.LiveSwitch,
+	transaction appearanceModeTransaction,
 	settingMode string,
 	effectiveMode string,
 	baseline appearanceUIState,
@@ -926,7 +962,7 @@ func validAppearanceSetting(mode string) bool {
 }
 
 func supportsInAppAppearance(platform string) bool {
-	return platform == "darwin"
+	return platform == "darwin" || platform == "windows"
 }
 
 func waitAppearanceUIPoll(ctx context.Context) error {

@@ -275,6 +275,23 @@ func (manager *Manager) Restore() (bool, error) {
 	if err != nil || !found {
 		return false, err
 	}
+	changed, err := manager.restoreConfig(stored)
+	if err != nil {
+		return false, err
+	}
+	// Preserve ordinary Restore's existing changed/error contract.
+	if err := rejectSymlink(manager.backupPath); err != nil {
+		return false, err
+	}
+	if err := os.Remove(manager.backupPath); err != nil {
+		return false, err
+	}
+	return changed, syncDirectory(filepath.Dir(manager.backupPath))
+}
+
+// restoreConfig restores exact saved settings without consuming the recovery
+// point. Live Restore keeps it until the renderer has also been verified.
+func (manager *Manager) restoreConfig(stored backup) (bool, error) {
 	content, info, err := manager.readConfig()
 	if err != nil {
 		return false, err
@@ -293,13 +310,7 @@ func (manager *Manager) Restore() (bool, error) {
 				return false, fmt.Errorf("Codex config lost desktop table during restore")
 			}
 		}
-		if err := rejectSymlink(manager.backupPath); err != nil {
-			return false, err
-		}
-		if err := os.Remove(manager.backupPath); err != nil {
-			return false, err
-		}
-		return false, syncDirectory(filepath.Dir(manager.backupPath))
+		return false, nil
 	}
 	updated := content
 	for _, key := range managedKeys {
@@ -320,13 +331,17 @@ func (manager *Manager) Restore() (bool, error) {
 			return false, err
 		}
 	}
+	return changed, nil
+}
+
+func (manager *Manager) consumeBackup() error {
 	if err := rejectSymlink(manager.backupPath); err != nil {
-		return false, err
+		return err
 	}
 	if err := os.Remove(manager.backupPath); err != nil {
-		return false, err
+		return err
 	}
-	return changed, syncDirectory(filepath.Dir(manager.backupPath))
+	return syncDirectory(filepath.Dir(manager.backupPath))
 }
 
 func (manager *Manager) readConfig() (string, os.FileInfo, error) {
