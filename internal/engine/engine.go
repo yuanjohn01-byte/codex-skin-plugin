@@ -259,6 +259,13 @@ func (engine *Engine) RestoreOfficial(ctx context.Context) (result RestoreResult
 		return RestoreResult{}, engine.failJournal(journal, "CS-CODEX-IDENTITY-001", err)
 	}
 	defer engine.adapter.Close(ctx, session)
+	defer func() {
+		if returnErr != nil {
+			if handler, ok := engine.adapter.(OfficialRestoreFailureHandler); ok {
+				returnErr = errors.Join(returnErr, handler.AbortOfficialRestore(ctx, session))
+			}
+		}
+	}()
 	probe, err := engine.probeCapabilities(ctx, session)
 	if err != nil {
 		return RestoreResult{}, engine.failJournal(journal, "CS-COMPAT-001", err)

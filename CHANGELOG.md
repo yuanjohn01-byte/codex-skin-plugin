@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Unwind Windows in-place Restore when a later capability check, journal write,
+  or pre-removal controller check fails. Restore the prior native mode while
+  the old skin remains; after removal may have begun, attempt bounded official
+  cleanup only on the same trusted renderer. Preserve the original failure and
+  recovery backup; never restart as part of this failure cleanup.
 - Prefer verified in-app native dark/light switching on Windows when a trusted
   controlled connection already exists. Reuse the existing fixed Appearance UI
   contract, palette checks, original-route return, and rollback behavior.

@@ -23,11 +23,15 @@ func canPrepareAppearanceInPlace(platform, target string, restore bool) bool {
 type appearanceRestoreUI interface {
 	readVerifiedAppearance(context.Context, *liveSession) (appearanceUIState, string, error)
 	switchAppearanceWithTransaction(context.Context, *liveSession, string, appearanceModeTransaction) error
+	restoreOfficialRenderer(context.Context, *liveSession) error
 }
 
 type pendingAppearanceRestore struct {
-	transaction *appearance.LiveRestore
-	baseline    appearanceUIState
+	transaction    *appearance.LiveRestore
+	baseline       appearanceUIState
+	originalMode   string
+	ui             appearanceRestoreUI
+	removalStarted bool
 }
 
 func prepareAppearanceRestore(
@@ -70,7 +74,9 @@ func prepareAppearanceRestore(
 		}
 		changedMode = true
 	}
-	pending := &pendingAppearanceRestore{transaction: transaction, baseline: baseline}
+	pending := &pendingAppearanceRestore{
+		transaction: transaction, baseline: baseline, originalMode: hostMode, ui: ui,
+	}
 	if err := pending.verifyLive(ctx, live, ui); err != nil {
 		// After a UI change no restart fallback may hide an uncertain result.
 		return nil, errors.Join(engine.ErrStateUnsafe, err)
@@ -110,23 +116,89 @@ func rollbackPreparedAppearanceRestore(
 ) error {
 	rollbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), appearanceUIRollbackWait)
 	defer cancel()
-	state, hostMode, err := ui.readVerifiedAppearance(rollbackCtx, live)
+	// Even a verified rollback is a failed Restore, not permission to restart.
+	return errors.Join(engine.ErrStateUnsafe, cause,
+		restorePriorAppearance(rollbackCtx, live, ui, transaction, baseline, oldMode))
+}
+
+func restorePriorAppearance(
+	ctx context.Context, live *liveSession, ui appearanceRestoreUI,
+	transaction *appearance.LiveRestore, baseline appearanceUIState, oldMode string,
+) error {
+	state, hostMode, err := ui.readVerifiedAppearance(ctx, live)
 	if err != nil || !state.TrustedOrigin || !state.BridgeAvailable ||
-		state.TimeOrigin != baseline.TimeOrigin || state.Route != baseline.Route {
-		return errors.Join(engine.ErrStateUnsafe, cause, err)
+		state.TimeOrigin != baseline.TimeOrigin || state.Route != baseline.Route ||
+		(hostMode != oldMode && hostMode != transaction.Mode()) {
+		return errors.Join(engine.ErrStateUnsafe, err)
 	}
 	if hostMode != oldMode {
-		if err := ui.switchAppearanceWithTransaction(rollbackCtx, live, oldMode, transaction); err != nil {
-			return errors.Join(engine.ErrStateUnsafe, cause, err)
+		if err := ui.switchAppearanceWithTransaction(ctx, live, oldMode, transaction); err != nil {
+			return errors.Join(engine.ErrStateUnsafe, err)
 		}
 	}
-	state, hostMode, err = ui.readVerifiedAppearance(rollbackCtx, live)
+	state, hostMode, err = ui.readVerifiedAppearance(ctx, live)
 	if err != nil || !restoreAppearanceStateMatches(state, hostMode, oldMode, baseline) ||
 		transaction.VerifyMode(oldMode) != nil {
-		return errors.Join(engine.ErrStateUnsafe, cause, err)
+		return errors.Join(engine.ErrStateUnsafe, err)
 	}
-	// Even a verified rollback is a failed Restore, not permission to restart.
-	return errors.Join(engine.ErrStateUnsafe, cause)
+	return nil
+}
+
+// AbortOfficialRestore runs before the engine closes a failed Restore session.
+// A pending transaction exists only for Windows in-place Restore; macOS and
+// already verified/committed sessions are untouched. Recovery never restarts.
+func (adapter *Live) AbortOfficialRestore(ctx context.Context, session engine.Session) error {
+	adapter.mu.Lock()
+	live := adapter.sessions[session.OpaqueID]
+	adapter.mu.Unlock()
+	if live == nil || live.pendingRestore == nil {
+		return nil
+	}
+	pending := live.pendingRestore
+	defer pending.transaction.Close()
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), appearanceUIRollbackWait)
+	defer cancel()
+	if !pending.removalStarted {
+		// The adapter has not attempted to remove the previous skin. Undo only
+		// the native mode, leaving both that skin and first-Apply backup intact.
+		return restorePriorAppearance(cleanupCtx, live, pending.ui,
+			pending.transaction, pending.baseline, pending.originalMode)
+	}
+	// An interrupted removal may already have removed some/all of the skin.
+	// Do not pin the old mode blindly. Complete bounded official cleanup only
+	// on the same trusted renderer with the restored native preference intact.
+	// The original operation still fails and keeps its backup, even if cleanup
+	// succeeds; only the normal VerifyOfficial path may consume that backup.
+	if err := pending.verifyLive(cleanupCtx, live, pending.ui); err != nil {
+		return errors.Join(engine.ErrStateUnsafe, err)
+	}
+	if err := pending.ui.restoreOfficialRenderer(cleanupCtx, live); err != nil {
+		return errors.Join(engine.ErrStateUnsafe, err)
+	}
+	if err := pending.verifyLive(cleanupCtx, live, pending.ui); err != nil {
+		return errors.Join(engine.ErrStateUnsafe, err)
+	}
+	if err := pending.transaction.VerifyRestored(); err != nil {
+		return errors.Join(engine.ErrStateUnsafe, err)
+	}
+	return nil
+}
+
+func (adapter *Live) restoreOfficialRenderer(ctx context.Context, live *liveSession) error {
+	if err := verifyAppearanceUIProcess(ctx, live); err != nil {
+		return err
+	}
+	if err := adapter.removeThemeRenderer(ctx, live); err != nil {
+		return err
+	}
+	var official bool
+	if err := callFunction(ctx, live.client, officialFunction, nil, &official); err != nil {
+		return err
+	}
+	if !official {
+		return engine.ErrRestoreFailed
+	}
+	return nil
 }
 
 // Called only after the official renderer (no skin/controller) was verified.

@@ -62,6 +62,9 @@ func (adapter *Live) removeControllerBootstrap(ctx context.Context, live *liveSe
 		return err
 	}
 	if record.TargetID == live.targetID {
+		if live.pendingRestore != nil {
+			live.pendingRestore.removalStarted = true
+		}
 		// A retired Page identifier means the old bootstrap is no longer
 		// addressable through this CDP session. We still remove its current
 		// document style below; a new on-demand transaction must never install a

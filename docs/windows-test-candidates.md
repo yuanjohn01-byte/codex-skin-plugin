@@ -18,6 +18,13 @@ renderer and native mode are verified. Changed legacy code-theme settings or an
 unavailable UI contract require the existing consented restart path. Uncertain
 post-change results fail closed and retain recovery. macOS Restore is unchanged.
 
+If Restore preparation succeeds but a later step fails, cleanup runs before
+disconnecting. Before any skin removal, it restores the prior native mode on
+the same trusted renderer. Once removal may have started, it attempts bounded
+official cleanup instead of blindly re-pinning the old mode. Lost identity or
+renderer continuity blocks further writes. The operation still reports failure
+and retains the original recovery backup; this cleanup never restarts Codex.
+
 Local coordinator tests use a simulated UI boundary and real temporary config/
 recovery files. They are not Windows GUI evidence. After a separately approved
 signed candidate is available, acceptance must cover both cross-mode directions,

@@ -16,19 +16,37 @@ import (
 // This exercises the real restore coordinator and real disk transaction with
 // only the verified UI boundary replaced. It never launches or controls Codex.
 type restoreUITestDriver struct {
-	config          string
-	state           appearanceUIState
-	host            string
-	osMode          string
-	switches        int
-	readErr         error
-	switchErr       error
-	wrongMode       bool
-	reload          bool
-	changeCodeTheme bool
+	config           string
+	state            appearanceUIState
+	host             string
+	osMode           string
+	switches         int
+	readErr          error
+	switchErr        error
+	wrongMode        bool
+	reload           bool
+	changeCodeTheme  bool
+	cleanupCalls     int
+	cleanupErr       error
+	rendererOfficial bool
 }
 
-func (ui *restoreUITestDriver) readVerifiedAppearance(context.Context, *liveSession) (appearanceUIState, string, error) {
+func (ui *restoreUITestDriver) restoreOfficialRenderer(ctx context.Context, _ *liveSession) error {
+	ui.cleanupCalls++
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if ui.cleanupErr != nil {
+		return ui.cleanupErr
+	}
+	ui.rendererOfficial = true
+	return nil
+}
+
+func (ui *restoreUITestDriver) readVerifiedAppearance(ctx context.Context, _ *liveSession) (appearanceUIState, string, error) {
+	if err := ctx.Err(); err != nil {
+		return appearanceUIState{}, "", err
+	}
 	return ui.state, ui.host, ui.readErr
 }
 

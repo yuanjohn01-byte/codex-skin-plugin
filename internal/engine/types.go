@@ -153,6 +153,14 @@ type OfficialSessionOpener interface {
 	OpenVerifiedOfficialSession(context.Context) (Session, error)
 }
 
+// OfficialRestoreFailureHandler unwinds native appearance changes made while
+// opening a Restore session. The adapter tracks whether renderer removal has
+// actually started; a failed call alone cannot prove the old skin is intact.
+// Other adapters keep their existing Restore behavior.
+type OfficialRestoreFailureHandler interface {
+	AbortOfficialRestore(context.Context, Session) error
+}
+
 // OfficialRollbackFinalizer completes a failed first-theme transaction after
 // the verified renderer has been restored to the official interface. The live
 // adapter uses it to stop only the exact controlled process and reopen an

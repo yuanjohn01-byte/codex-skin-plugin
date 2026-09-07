@@ -1333,8 +1333,15 @@ func (adapter *Live) RestoreOfficial(ctx context.Context, session engine.Session
 	if err != nil {
 		return err
 	}
+	return adapter.removeThemeRenderer(ctx, live)
+}
+
+func (adapter *Live) removeThemeRenderer(ctx context.Context, live *liveSession) error {
 	if err := adapter.removeControllerBootstrap(ctx, live); err != nil {
 		return err
+	}
+	if live.pendingRestore != nil {
+		live.pendingRestore.removalStarted = true
 	}
 	var restored bool
 	if err := callFunction(ctx, live.client, restoreFunction, nil, &restored); err != nil {
